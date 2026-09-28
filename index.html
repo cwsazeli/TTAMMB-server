@@ -640,10 +640,15 @@ function collect(){
 function aifOpen(r){ return /^OPEN/i.test(String(r.status||'')); }
 function aifOverdue(r){ return aifOpen(r) && /OVERDUE/i.test(String(r.status||'')); }
 function aifDaysLate(r){ const d = dayN(r.due); return d === null ? 0 : Math.max(0, dayN(todayISO()) - d); }
+/* One WOP = series (TTAM / TTAMM) + year + batch (the "/3/" in 2026/3/0001) + running no. + letter in brackets.
+   WOP/TTAM/B/ZNESB/2026/0001(B), WOP/TTAM/B/ZNESB/2026/0001(E) and WOP/TTAMM/B/ZNESB/2026/001(E) are three
+   different WOPs. Only the way it is written may differ: "/" or "-", leading zeros, spaces. */
 function wopKeys(s){
-  const out = [], re = /(20\d{2})\s*[\/\-_.]\s*0*(\d{1,4})/g; let m; const str = String(s || '').toUpperCase();
-  while((m = re.exec(str))) out.push(m[1] + '-' + (+m[2]));
-  return out;
+  const t = String(s || '').toUpperCase().replace(/\s+/g, '').replace(/[-_.\\]/g, '/');
+  const m = /(20\d{2})\/(?:(\d{1,2})\/)?0*(\d{1,4})(?:\/([A-Z])(?=\(|\/|$))?(?:\(([A-Z]{1,2})\))?/.exec(t);
+  if(!m) return [];
+  const series = /(^|\/)TTAMM(\/|$)/.test(t) ? 'TTAMM' : /(^|\/)TTAM(\/|$)/.test(t) ? 'TTAM' : '?';
+  return [[series, m[1], m[2] ? +m[2] : '', (+m[3]) + (m[4] ? '-' + m[4] : ''), m[5] || '?'].join('|')];
 }
 function wopStatusColor(s){ s = String(s||'').toUpperCase(); if(s === 'COMPLETED') return 'var(--ok)'; if(s === 'ONGOING') return 'var(--info)'; if(s === 'HOLD') return 'var(--bad)'; return 'var(--text-faint)'; }
 /* Areas are the WOP "Location" values (OSC, TGAST, PMA, OGT, TCOT …). AIF sheets and material packages are
@@ -846,7 +851,7 @@ let LINK_SHOW_ALL = false; const LINK_OPEN = new Set();
 function renderLinks(){
   const el = $('#lk');
   const W = DATA.wop ? DATA.wop.records : null, A = DATA.aif ? DATA.aif.records : null;
-  const head = `<div class="head"><div><h2>Links between modules</h2><p>AIF findings are matched to WOPs through the “WOP Submission” column. Numbers written differently (for example <span class="mono">WOP/TTAM/B/ZNESB/2026/0003(B)</span> and <span class="mono">WOP-TTAM-B-ZNESB-2026-0003(B)</span>) are treated as the same WOP.</p></div></div>`;
+  const head = `<div class="head"><div><h2>Links between modules</h2><p>AIF findings are matched to WOPs through the “WOP Submission” column. A finding is linked only when the whole WOP number matches: series (TTAM / TTAMM), year, batch, running number and the letter in brackets — so <span class="mono">…/2026/0001(B)</span>, <span class="mono">…/2026/0001(E)</span> and <span class="mono">…/2026/3/0001(D)</span> are different WOPs. Only the writing may differ (<span class="mono">/</span> or <span class="mono">-</span>, leading zeros).</p></div></div>`;
   if(!A){ el.innerHTML = head + `<div class="box"><div class="note">Loading AIF data…</div></div>`; return; }
   // AIF grouped by WOP key
   const byKey = {}, rawOf = {};
@@ -889,7 +894,7 @@ function renderLinks(){
   }
 
   html += `<div class="box"><div class="box-h"><div><h3>${W && W.length ? 'WOP numbers in AIF not found in the WOP register' : 'AIF findings grouped by WOP number'}</h3>
-      <p>${W && W.length ? 'Usually a typo or a WOP that has not been registered yet. Fix it in whichever module is wrong.' : 'Grouping uses the year and running number of the WOP.'}</p></div></div>
+      <p>${W && W.length ? 'Usually a typo or a WOP that has not been registered yet. Fix it in whichever module is wrong.' : 'Grouped by full WOP number.'}</p></div></div>
     ${unmatched.length ? `<div class="tw"><table class="grid"><thead><tr><th>WOP no. as written in AIF</th><th class="n">Findings</th><th class="n">Open</th><th class="n">Overdue</th></tr></thead><tbody>
       ${unmatched.map(u => `<tr class="xrow" data-urow="${esc(u.k)}"><td class="mono">${LINK_OPEN.has('u:' + u.k) ? '▾ ' : '▸ '}${u.raws.map(esc).join('<br>')}</td><td class="n">${u.s.t}</td><td class="n">${u.s.o}</td><td class="n" style="${u.s.od ? 'color:var(--bad);font-weight:600' : ''}">${u.s.od}</td></tr>
         ${LINK_OPEN.has('u:' + u.k) ? `<tr class="detail"><td colspan="4">${findingList(byKey[u.k])}</td></tr>` : ''}`).join('')}
