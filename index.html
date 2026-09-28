@@ -875,7 +875,10 @@ function renderLinks(){
   // AIF grouped by WOP key
   const byKey = {}, rawOf = {};
   A.forEach(r => { const ks = blank(r.wop) ? [] : wopKeys(r.wop); if(!ks.length) return; ks.forEach(k => { (byKey[k] = byKey[k] || []).push(r); (rawOf[k] = rawOf[k] || new Set()).add(clean(r.wop)); }); });
-  const noWop = A.filter(r => aifOpen(r) && (blank(r.wop) || !wopKeys(r.wop).length)).length;
+  // "NIL" = no WOP will ever be issued (work done / transferred) — not the same as still waiting for one
+  const isNilWop = r => /^\s*(NIL|N\/?A|NONE)\s*$/i.test(String(r.wop || ''));
+  const noWop = A.filter(r => aifOpen(r) && !isNilWop(r) && (blank(r.wop) || !wopKeys(r.wop).length)).length;
+  const nilWop = A.filter(r => aifOpen(r) && isNilWop(r)).length;
   const stats = list => ({t:list.length, o:list.filter(aifOpen).length, od:list.filter(aifOverdue).length, mr:list.filter(r => r.materialReady === true).length});
   let rows = [], unmatched = [];
   if(W && W.length){
@@ -918,7 +921,8 @@ function renderLinks(){
       ${unmatched.map(u => `<tr class="xrow" data-urow="${esc(u.k)}"><td class="mono">${LINK_OPEN.has('u:' + u.k) ? '▾ ' : '▸ '}${u.raws.map(esc).join('<br>')}</td><td class="n">${u.s.t}</td><td class="n">${u.s.o}</td><td class="n" style="${u.s.od ? 'color:var(--bad);font-weight:600' : ''}">${u.s.od}</td></tr>
         ${LINK_OPEN.has('u:' + u.k) ? `<tr class="detail"><td colspan="4">${findingList(byKey[u.k])}</td></tr>` : ''}`).join('')}
       </tbody></table></div>` : `<div class="note">${W && W.length ? 'Every WOP number used in AIF exists in the WOP register.' : 'No AIF finding has a WOP number yet.'}</div>`}
-    ${noWop ? `<div class="more">${noWop} open AIF finding${noWop === 1 ? ' has' : 's have'} no WOP number yet (blank, “Pending” or “NIL”).</div>` : ''}</div><div class="gap"></div>` + matLinkBox();
+    ${noWop ? `<div class="more">${noWop} open AIF finding${noWop === 1 ? ' is' : 's are'} still waiting for a WOP number (blank or “Pending”).</div>` : ''}
+    ${nilWop ? `<div class="more">${nilWop} open AIF finding${nilWop === 1 ? ' is' : 's are'} marked “NIL” — no WOP will be issued (work done / transferred).</div>` : ''}</div><div class="gap"></div>` + matLinkBox();
   el.innerHTML = html;
   el.querySelectorAll('[data-mpkg]').forEach(b => b.addEventListener('click', async () => { go('mat'); try{ (await whenReady('mat')).openPkg(b.dataset.mpkg); }catch(e){ toast(e.message); } }));
 
