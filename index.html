@@ -202,6 +202,17 @@ tr.detail td{background:var(--panel2);padding:0;}
 #freshBar #freshX{padding:5px 8px;}
 @media (max-width:600px){#freshBar{top:auto;bottom:12px;flex-wrap:wrap;font-size:12.5px;}}
 .cache-note{color:var(--warn);font-weight:600;}
+.drill{background:none;border:0;padding:2px 4px;margin:-2px -4px;border-radius:3px;font:inherit;color:inherit;cursor:pointer;}
+.drill:hover{background:var(--hover);text-decoration:underline;text-underline-offset:3px;}
+.drill:disabled{cursor:default;background:none;text-decoration:none;}
+.dr-list{display:flex;flex-direction:column;}
+.dr-row{display:grid;grid-template-columns:minmax(0,190px) minmax(0,1fr) auto;gap:10px;align-items:baseline;text-align:left;background:none;border:0;border-bottom:1px dashed var(--border-soft);padding:8px 2px;color:var(--text);font:inherit;font-size:12.5px;cursor:pointer;}
+.dr-row:hover{color:var(--accent);}
+.dr-row .ref{font-family:var(--mono);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dr-row .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dr-row .sub{display:block;color:var(--text-faint);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.dr-row .st{font-size:11.5px;font-weight:600;white-space:nowrap;}
+@media (max-width:600px){.dr-row{grid-template-columns:minmax(0,1fr) auto}.dr-row .ref{grid-column:1/-1}}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:4px;font-size:13px;font-weight:600;z-index:99;display:none;max-width:90vw;}
 .toast.on{display:block;}
 
@@ -420,6 +431,11 @@ dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;borde
     <div id="attBody"></div>
   </div>
   <div class="df"><button class="btn" id="attOpenRec">Open the record</button><button class="btn" id="attClose">Close</button></div>
+</dialog>
+<dialog id="dlgDrill" class="wide">
+  <div class="dh"><h3 id="drTitle"></h3><p id="drSub" style="margin:4px 0 0;font-size:12px;color:var(--text-faint)"></p></div>
+  <div class="db" id="drBody" style="max-height:62vh;overflow:auto;padding-top:6px"></div>
+  <div class="df"><button class="btn" id="drClose">Close</button></div>
 </dialog>
 <div id="printArea"></div>
 <div class="toast" id="toast" role="status"></div>
@@ -854,16 +870,50 @@ function areaBox(){
   if(DATA.aif) DATA.aif.records.forEach(r => { const a = areaOf(r.view); if(aifOpen(r)) row[a].aifOpen++; if(aifOverdue(r)) row[a].aifOd++; });
   if(DATA.mat) DATA.mat.items.forEach(x => { const a = areaOf(x.area); const r = row[a]; r.matLines++; r.matQ += num(x.qty); r.matC += Math.min(num(x.received), num(x.qty)); if(x.overdue) r.matOd++; });
   const used = areas.filter(a => { const r = row[a]; return r.wop || r.aifOpen || r.aifOd || r.matLines || a === 'OSC' || a === 'TGAST'; });
-  return `<div class="box-h"><div><h3>By area</h3><p>WOP count (ongoing), AIF open (overdue), material receiving and late lines.</p></div></div>
+  return `<div class="box-h"><div><h3>By area</h3><p>WOP count (ongoing), AIF open (overdue), material receiving and late lines. Click a number to list the items.</p></div></div>
     <div class="tw"><table class="grid"><thead><tr><th>Area</th><th class="n" title="WOPs (ongoing)">WOP</th><th class="n" title="Open findings (overdue)">AIF open</th><th class="n" title="Materials received by quantity">Recv.</th><th class="n" title="Material lines overdue">Late</th></tr></thead><tbody>
-    ${used.map(a => { const r = row[a]; return `<tr><td><b>${a}</b></td>
-      <td class="n">${DATA.wop ? `${r.wop} <span class="faint">(${r.wopOn})</span>` : '…'}</td>
-      <td class="n">${DATA.aif ? `${r.aifOpen} <span class="${r.aifOd ? '' : 'faint'}" style="${r.aifOd ? 'color:var(--bad)' : ''}">(${r.aifOd})</span>` : '…'}</td>
-      <td class="n">${DATA.mat ? (r.matQ ? pct(r.matC / r.matQ * 100) : '—') : '…'}</td>
-      <td class="n" style="${r.matOd ? 'color:var(--bad)' : ''}">${DATA.mat ? r.matOd : '…'}</td></tr>`; }).join('')}
+    ${used.map(a => { const r = row[a], d = (k, n, html) => `<button class="drill" data-drill="${esc(a)}|${k}" ${n ? '' : 'disabled'}>${html}</button>`; return `<tr><td><b>${a}</b></td>
+      <td class="n">${DATA.wop ? `${d('wop', r.wop, r.wop)} ${d('wopOn', r.wopOn, `<span class="faint">(${r.wopOn})</span>`)}` : '…'}</td>
+      <td class="n">${DATA.aif ? `${d('aifOpen', r.aifOpen, r.aifOpen)} ${d('aifOd', r.aifOd, `<span class="${r.aifOd ? '' : 'faint'}" style="${r.aifOd ? 'color:var(--bad)' : ''}">(${r.aifOd})</span>`)}` : '…'}</td>
+      <td class="n">${DATA.mat ? (r.matQ ? d('matOut', r.matLines, pct(r.matC / r.matQ * 100)) : '—') : '…'}</td>
+      <td class="n" style="${r.matOd ? 'color:var(--bad)' : ''}">${DATA.mat ? d('matLate', r.matOd, r.matOd) : '…'}</td></tr>`; }).join('')}
     </tbody></table></div>
     <div class="note faint" style="padding-top:4px">Areas are the WOP “Location” values. AIF findings are placed by their sheet (OSC / TGAST) and material lines by their package name; a package that names no area (e.g. “AU PACKAGE”) shows as Unassigned.</div>`;
 }
+
+/* ---------- click a number in "By area" → list of those items → open the record ---------- */
+function openDrill(area, kind){
+  const T = dayN(todayISO()), rows = [];
+  const W = DATA.wop ? DATA.wop.records.filter(r => areaOf(r.location) === area) : [];
+  const A = DATA.aif ? DATA.aif.records.filter(r => areaOf(r.view) === area) : [];
+  const M = DATA.mat ? DATA.mat.items.filter(x => areaOf(x.area) === area) : [];
+  let title = '', sub = '';
+  if(kind === 'wop' || kind === 'wopOn'){
+    const L = kind === 'wop' ? W : W.filter(r => String(r.projectStatus || '').toUpperCase() === 'ONGOING');
+    title = `${area} · ${kind === 'wop' ? 'all WOPs' : 'ongoing WOPs'}`; sub = 'From the WOP register (Location). Click a row to open the WOP.';
+    L.slice().sort((a, b) => num(a.progressStatus) - num(b.progressStatus)).forEach(r => { const f = dayN(r.finishDate), late = f !== null && f < T && String(r.projectStatus || '').toUpperCase() !== 'COMPLETED';
+      rows.push({mod:'wop', open:[r.id], ref: r.wopNo || r.chargeCode || '—', t: clean(r.wopTitle), s: [r.workGroup, r.finishDate ? 'finish ' + fmtD(r.finishDate) : ''].filter(x => !blank(x)).join(' · '),
+        st: `${esc(r.projectStatus || '—')} · ${Math.round(num(r.progressStatus))}%`, c: late ? 'var(--bad)' : wopStatusColor(r.projectStatus)}); });
+  } else if(kind === 'aifOpen' || kind === 'aifOd'){
+    const L = A.filter(kind === 'aifOpen' ? aifOpen : aifOverdue);
+    title = `${area} · AIF ${kind === 'aifOpen' ? 'open' : 'overdue'} findings`; sub = 'Most late first. Click a row to open the finding.';
+    L.slice().sort((a, b) => aifDaysLate(b) - aifDaysLate(a) || num(a.priority) - num(b.priority)).forEach(r => { const late = aifDaysLate(r);
+      rows.push({mod:'aif', open:[r.cat, r.view, r.uid], ref: r.notif || r.report || '—', t: clean(r.finding || r.desc), s: [r.cat, 'P' + (r.priority || '?'), r.party, r.due ? 'due ' + fmtD(r.due) : ''].filter(x => !blank(x)).join(' · '),
+        st: aifOverdue(r) ? (late ? late + 'd late' : 'Overdue') : esc(r.status || 'OPEN'), c: aifOverdue(r) ? 'var(--bad)' : 'var(--info)'}); });
+  } else {
+    const L = kind === 'matLate' ? M.filter(x => x.overdue) : M.filter(x => num(x.received) < num(x.qty));
+    title = `${area} · ${kind === 'matLate' ? 'late material lines' : 'material lines not fully received'}`;
+    sub = kind === 'matLate' ? 'Past the target date and not fully received.' : `${M.length - L.length} of ${M.length} lines fully received. Click a row to open the line.`;
+    L.slice().sort((a, b) => num(b.daysLate) - num(a.daysLate)).forEach(x => rows.push({mod:'mat', open:[x.id], ref: x.poNo || x.pkg, t: clean(x.desc), s: [x.pkg, x.supplier, x.target ? 'target ' + fmtD(x.target) : ''].filter(Boolean).join(' · '),
+      st: `${num(x.received)} / ${num(x.qty)} ${esc(x.unit || '')}${x.overdue ? ' · ' + num(x.daysLate) + 'd late' : ''}`, c: x.overdue ? 'var(--bad)' : 'var(--warn)'}));
+  }
+  $('#drTitle').textContent = `${title} (${rows.length})`; $('#drSub').textContent = sub;
+  $('#drBody').innerHTML = rows.length ? `<div class="dr-list">${rows.map((x, i) => `<button class="dr-row" data-i="${i}"><span class="ref" title="${esc(x.ref)}">${esc(x.ref)}</span><span class="t" title="${esc(x.t)}">${esc(x.t) || '—'}<span class="sub">${esc(x.s)}</span></span><span class="st" style="color:${x.c}">${x.st}</span></button>`).join('')}</div>` : '<div class="note">Nothing to list.</div>';
+  $('#drBody').querySelectorAll('.dr-row').forEach(b => b.onclick = () => { const x = rows[+b.dataset.i]; $('#dlgDrill').close(); openRecord(x.mod, ...x.open); });
+  const d = $('#dlgDrill'); if(!d.open) d.showModal();
+}
+$('#drClose').onclick = () => $('#dlgDrill').close();
+document.addEventListener('click', e => { const b = e.target.closest('[data-drill]'); if(!b || b.disabled) return; e.stopPropagation(); const [a, k] = b.dataset.drill.split('|'); openDrill(a, k); });
 
 /* ---------- WOP ↔ AIF links ---------- */
 let LINK_SHOW_ALL = false; const LINK_OPEN = new Set();
