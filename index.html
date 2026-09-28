@@ -186,10 +186,11 @@ tr.xrow{cursor:pointer;}
 tr.xrow:hover td{background:var(--hover);}
 tr.detail td{background:var(--panel2);padding:0;}
 .sub-list{padding:6px 12px 10px 34px;}
-.sub-list button{display:grid;grid-template-columns:96px 120px minmax(0,1fr) 130px;white-space:nowrap;gap:10px;width:100%;background:none;border:0;border-bottom:1px dashed var(--border-soft);color:var(--text);text-align:left;padding:7px 0;font-size:12.5px;}
+.sub-list button{display:grid;grid-template-columns:96px 110px minmax(0,1fr) 170px 120px;white-space:nowrap;gap:10px;width:100%;background:none;border:0;border-bottom:1px dashed var(--border-soft);color:var(--text);text-align:left;padding:7px 0;font-size:12.5px;}
 .sub-list button:hover{color:var(--accent);}
 .sub-list button>span{min-width:0;overflow:hidden;text-overflow:ellipsis;}
-@media (max-width:700px){.sub-list{padding-left:12px}.sub-list button{grid-template-columns:84px minmax(0,1fr) 96px}.sub-list button>span:nth-child(2){display:none}}
+.sub-list .mr{font-size:11.5px;font-weight:600;}.sub-list .mr.ok{color:var(--ok);}.sub-list .mr.warn{color:var(--warn);}.sub-list .mr.info{color:var(--info);}.sub-list .mr.faint{color:var(--text-faint);font-weight:500;}
+@media (max-width:700px){.sub-list{padding-left:12px}.sub-list button{grid-template-columns:78px minmax(0,1fr) 92px 84px;font-size:12px}.sub-list button>span:nth-child(2){display:none}}
 .note{font-size:12.5px;color:var(--text-dim);padding:14px 16px;line-height:1.55;}
 .note.warn{border-left:3px solid var(--warn);background:var(--panel2);}
 .gap{height:14px;}
@@ -652,6 +653,16 @@ function wopKeys(s){
   const series = /(^|\/)TTAMM(\/|$)/.test(t) ? 'TTAMM' : /(^|\/)TTAM(\/|$)/.test(t) ? 'TTAM' : '?';
   return [[series, m[1], m[2] ? +m[2] : '', (+m[3]) + (m[4] ? '-' + m[4] : ''), m[5] || '?'].join('|')];
 }
+function aifByWopKey(){ const m = {}; (DATA.aif ? DATA.aif.records : []).forEach(r => wopKeys(r.wop).forEach(k => (m[k] = m[k] || []).push(r))); return m; }
+function openAifOfWop(r, m){ const k = wopKeys(r.wopNo)[0]; return k && m[k] ? m[k].filter(aifOpen) : []; }
+/* Material readiness of one AIF finding, as a short remark */
+function matRemark(f){
+  const eta = clean(f.eta);
+  if(f.materialReady === true) return {cls:'ok', t:'✓ Material ready'};
+  if(f.materialReady === false) return {cls:'warn', t:'⏳ Not onboard' + (eta ? ' · ' + eta : '')};
+  if(/RECEIVED/i.test(eta)) return {cls:'info', t:'📦 Received', tip:'ETA says Received, but “Material Onboard (Y/N)” is not marked in AIF'};
+  return eta ? {cls:'warn', t:'⏳ ' + eta} : {cls:'faint', t:'– No material info'};
+}
 function wopStatusColor(s){ s = String(s||'').toUpperCase(); if(s === 'COMPLETED') return 'var(--ok)'; if(s === 'ONGOING') return 'var(--info)'; if(s === 'HOLD') return 'var(--bad)'; return 'var(--text-faint)'; }
 /* Areas are the WOP "Location" values (OSC, TGAST, PMA, OGT, TCOT …). AIF sheets and material packages are
    matched to them by name; anything that names no known area (e.g. "AU PACKAGE") is "Unassigned". */
@@ -802,9 +813,15 @@ function buildQueue(){
     out.push({mod:'mat', score:x.risk, id: x.poNo || x.pkg, title: clean(x.desc), sub: [x.pkg, x.supplier].filter(Boolean).join(' · '),
       why: x.reason || 'At risk', tone: x.overdue ? 'bad' : 'warn', open:[x.id]});
   });
-  if(DATA.wop){ const T = dayN(todayISO()); DATA.wop.records.forEach(r => {
+  if(DATA.wop){ const T = dayN(todayISO()), AM = aifByWopKey(); DATA.wop.records.forEach(r => {
     const st = String(r.projectStatus||'').toUpperCase(), fin = dayN(r.finishDate);
-    if(st === 'COMPLETED') return;
+    if(st === 'COMPLETED'){
+      const op = openAifOfWop(r, AM); if(!op.length) return;
+      const od = op.filter(aifOverdue).length;
+      out.push({mod:'wop', score: Math.min(90, 56 + od * 2 + op.length), id: r.wopNo || r.chargeCode, title: clean(r.wopTitle), sub: [r.location, `${op.length} AIF finding${op.length === 1 ? '' : 's'} still open${od ? ' (' + od + ' overdue)' : ''}`].filter(x => !blank(x)).join(' · '),
+        why: 'Completed · AIF open', tone:'warn', open:[r.id]});
+      return;
+    }
     if(fin !== null && fin < T && num(r.progressStatus) < 100){
       const late = T - fin;
       out.push({mod:'wop', score: Math.min(100, 62 + late / 4), id: r.wopNo || r.chargeCode, title: clean(r.wopTitle), sub: [r.location, r.workGroup, (num(r.progressStatus)) + '% progress'].filter(x => !blank(x)).join(' · '),
@@ -873,7 +890,7 @@ function renderLinks(){
   const linked = rows.filter(x => x.s.t);
   const shown = LINK_SHOW_ALL ? rows : linked;
   const findingList = list => `<div class="sub-list">${list.slice().sort((a, b) => aifOpen(b) - aifOpen(a) || aifDaysLate(b) - aifDaysLate(a)).map(f =>
-    `<button data-aif='${esc(JSON.stringify([f.cat, f.view, f.uid]))}'><span class="mono">${esc(f.notif || f.report || '—')}</span><span title="${esc(f.view)}">${esc(f.cat)} · ${esc(areaOf(f.view) === 'Unassigned' ? f.view : areaOf(f.view))}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(clean(f.finding || f.desc))}</span><span style="color:${aifOverdue(f) ? 'var(--bad)' : aifOpen(f) ? 'var(--info)' : 'var(--ok)'}">${esc(f.status)}</span></button>`).join('')}</div>`;
+    `<button data-aif='${esc(JSON.stringify([f.cat, f.view, f.uid]))}'><span class="mono">${esc(f.notif || f.report || '—')}</span><span title="${esc(f.view)}">${esc(f.cat)} · ${esc(areaOf(f.view) === 'Unassigned' ? f.view : areaOf(f.view))}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(clean(f.finding || f.desc))}</span>${(m => `<span class="mr ${m.cls}" title="${esc(m.tip || m.t)}">${esc(m.t)}</span>`)(matRemark(f))}<span style="color:${aifOverdue(f) ? 'var(--bad)' : aifOpen(f) ? 'var(--info)' : 'var(--ok)'}">${esc(f.status)}</span></button>`).join('')}</div>`;
 
   let html = head;
   if(!W) html += `<div class="note warn" style="margin-bottom:14px">WOP register is still loading. Findings are grouped by WOP number below; titles and progress appear once it loads.</div>`;
@@ -1525,12 +1542,14 @@ function dataCheck(){
   // WOP
   let W = []; try{ W = ready('wop') ? (bridge('wop').raw().records || []) : []; }catch(e){}
   if(W.length){
+    const AM = aifByWopKey();
     const seen = {}; W.forEach(r => { const k = clean(r.wopNo).toUpperCase(); if(k) (seen[k] = seen[k] || []).push(r); });
     Object.keys(seen).forEach(k => { if(seen[k].length > 1) seen[k].forEach(r => add('wop', 'bad', 'Same WOP No. used more than once', r.wopNo, `${seen[k].length} records share this number`, [r.id])); });
     W.forEach(r => {
       const ref = r.wopNo || r.chargeCode || ('#' + (r.no || '?')), st = String(r.projectStatus || '').toUpperCase(), pg = num(r.progressStatus), s = dayN(r.startDate), f = dayN(r.finishDate);
       if(blank(r.wopNo)) add('wop', 'warn', 'WOP No. missing', ref, clean(r.wopTitle).slice(0, 80), [r.id]);
       if(blank(r.wopTitle)) add('wop', 'warn', 'Title missing', ref, '', [r.id]);
+      if(st === 'COMPLETED'){ const op = openAifOfWop(r, AM); if(op.length){ const od = op.filter(aifOverdue).length; add('wop', 'warn', 'WOP completed but AIF findings still open', ref, `${op.length} open${od ? ' (' + od + ' overdue)' : ''} — close them in AIF, or check the WOP status`, [r.id]); } }
       if(s !== null && f !== null && f < s) add('wop', 'bad', 'Finish date before start date', ref, `${fmtD(r.startDate)} → ${fmtD(r.finishDate)}`, [r.id]);
       if(st === 'COMPLETED' && pg < 100) add('wop', 'warn', 'Completed but progress under 100%', ref, pg + '%', [r.id]);
       if(st !== 'COMPLETED' && pg >= 100) add('wop', 'info', 'Progress 100% but not marked Completed', ref, st || 'no status', [r.id]);
