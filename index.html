@@ -186,8 +186,10 @@ tr.xrow{cursor:pointer;}
 tr.xrow:hover td{background:var(--hover);}
 tr.detail td{background:var(--panel2);padding:0;}
 .sub-list{padding:6px 12px 10px 34px;}
-.sub-list button{display:grid;grid-template-columns:100px 100px minmax(0,1fr) 130px;white-space:nowrap;gap:10px;width:100%;background:none;border:0;border-bottom:1px dashed var(--border-soft);color:var(--text);text-align:left;padding:7px 0;font-size:12.5px;}
+.sub-list button{display:grid;grid-template-columns:96px 120px minmax(0,1fr) 130px;white-space:nowrap;gap:10px;width:100%;background:none;border:0;border-bottom:1px dashed var(--border-soft);color:var(--text);text-align:left;padding:7px 0;font-size:12.5px;}
 .sub-list button:hover{color:var(--accent);}
+.sub-list button>span{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+@media (max-width:700px){.sub-list{padding-left:12px}.sub-list button{grid-template-columns:84px minmax(0,1fr) 96px}.sub-list button>span:nth-child(2){display:none}}
 .note{font-size:12.5px;color:var(--text-dim);padding:14px 16px;line-height:1.55;}
 .note.warn{border-left:3px solid var(--warn);background:var(--panel2);}
 .gap{height:14px;}
@@ -871,7 +873,7 @@ function renderLinks(){
   const linked = rows.filter(x => x.s.t);
   const shown = LINK_SHOW_ALL ? rows : linked;
   const findingList = list => `<div class="sub-list">${list.slice().sort((a, b) => aifOpen(b) - aifOpen(a) || aifDaysLate(b) - aifDaysLate(a)).map(f =>
-    `<button data-aif='${esc(JSON.stringify([f.cat, f.view, f.uid]))}'><span class="mono">${esc(f.notif || f.report || '—')}</span><span>${esc(f.cat)} · ${esc(f.view)}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(clean(f.finding || f.desc))}</span><span style="color:${aifOverdue(f) ? 'var(--bad)' : aifOpen(f) ? 'var(--info)' : 'var(--ok)'}">${esc(f.status)}</span></button>`).join('')}</div>`;
+    `<button data-aif='${esc(JSON.stringify([f.cat, f.view, f.uid]))}'><span class="mono">${esc(f.notif || f.report || '—')}</span><span title="${esc(f.view)}">${esc(f.cat)} · ${esc(areaOf(f.view) === 'Unassigned' ? f.view : areaOf(f.view))}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(clean(f.finding || f.desc))}</span><span style="color:${aifOverdue(f) ? 'var(--bad)' : aifOpen(f) ? 'var(--info)' : 'var(--ok)'}">${esc(f.status)}</span></button>`).join('')}</div>`;
 
   let html = head;
   if(!W) html += `<div class="note warn" style="margin-bottom:14px">WOP register is still loading. Findings are grouped by WOP number below; titles and progress appear once it loads.</div>`;
