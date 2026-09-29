@@ -1145,8 +1145,10 @@ function renderLinks(){
   } else {
     Object.keys(byKey).forEach(k => unmatched.push({k, raws:[...rawOf[k]], s: stats(byKey[k])}));
   }
-  rows.sort((a, b) => b.s.o - a.s.o || b.s.t - a.s.t || String(a.r.wopNo||'').localeCompare(String(b.r.wopNo||'')));
-  unmatched.sort((a, b) => b.s.o - a.s.o);
+  // tidy order: series (TTAM before TTAMM), then year, batch, running number and bracket letter — numbers compared as numbers
+  const natCmp = (x, y) => String(x || '').localeCompare(String(y || ''), undefined, {numeric: true, sensitivity: 'base'});
+  rows.sort((a, b) => (!a.k - !b.k) || natCmp(a.k, b.k) || natCmp(a.r.wopNo, b.r.wopNo));
+  unmatched.sort((a, b) => natCmp(a.k, b.k));
   const linked = rows.filter(x => x.s.t);
   const shown = LINK_SHOW_ALL ? rows : linked;
   const findingList = list => `<div class="sub-list">${list.slice().sort((a, b) => aifOpen(b) - aifOpen(a) || aifDaysLate(b) - aifDaysLate(a)).map(f =>
