@@ -194,6 +194,7 @@ tr.detail td{background:var(--panel2);padding:0;}
 .note{font-size:12.5px;color:var(--text-dim);padding:14px 16px;line-height:1.55;}
 .note.warn{border-left:3px solid var(--warn);background:var(--panel2);}
 .gap{height:14px;}
+.rd-area{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-6px 0 14px;font-size:12.5px;} .rd-area .chip b{margin-left:3px;}
 .nav.locked{opacity:.55;} .nav.locked::after{content:"🔒";font-size:11px;margin-left:auto;padding-left:6px;}
 .client-view .staff-only,.ro-view .ops-only{display:none!important;} html:not(.client-view) .client-only{display:none!important;}
 .fresh-strip{display:block;width:100%;text-align:left;margin:0 0 14px;padding:9px 14px;border-radius:4px;border:1px solid var(--warn);border-left-width:4px;background:var(--panel);color:var(--text);font:inherit;font-size:13px;cursor:pointer;}
@@ -1846,21 +1847,27 @@ function readinessRows(){
 const prioN = p => { const n = parseInt(String(p || '').replace(/\D/g, ''), 10); return isFinite(n) ? n : 9; };
 
 /* ---- page: Work Readiness ---- */
-let RD_TAB = 'ready', RD_F = 'all', RD_OPEN = new Set(), OC_F = 'all';
+let RD_TAB = 'ready', RD_F = 'all', RD_OPEN = new Set(), OC_F = 'all', RD_AREA = 'all';
 function renderReadiness(){
   const el = $('#rdy'); if(!el) return;
   const tabs = `<div class="subtabs" role="tablist" aria-label="Work readiness">${[['ready', 'Material Readiness', 'open findings · MTO · deliveries'], ['overdue', 'Overdue Analysis', 'why overdue findings are still open']].map(([k, a, b]) =>
     `<button class="subtab" role="tab" data-rdt="${k}" aria-selected="${RD_TAB === k}">${a} <span>${b}</span></button>`).join('')}</div>`;
-  const rows = readinessRows();
+  let rows = readinessRows();
   if(!rows){ el.innerHTML = tabs + `<div class="box"><div class="note">Loading AIF data…</div></div>`; rdWire(el); return; }
   if(!MTO_LOADED) mtoLoad();
+  // location filter (OSC / TGAST / …) — from the AIF sheet the finding sits in
+  const inTab = x => RD_TAB === 'ready' ? !x.r.executionDone : !!x.cause;
+  const areasP = [...new Set(rows.map(x => areaOf(x.r.view)))].sort((a, b) => (['OSC', 'TGAST'].indexOf(a) + 1 || 9) - (['OSC', 'TGAST'].indexOf(b) + 1 || 9) || a.localeCompare(b));
+  if(RD_AREA !== 'all' && !areasP.includes(RD_AREA)) RD_AREA = 'all';
+  const areaChips = `<div class="rd-area"><span class="faint">Location</span><div class="chips">${['all', ...areasP].map(a => `<button class="chip" data-rda="${esc(a)}" aria-pressed="${RD_AREA === a}">${a === 'all' ? 'All' : esc(a)} <b>${rows.filter(x => inTab(x) && (a === 'all' || areaOf(x.r.view) === a)).length}</b></button>`).join('')}</div></div>`;
+  if(RD_AREA !== 'all') rows = rows.filter(x => areaOf(x.r.view) === RD_AREA);
   const noMto = !MTO ? `<div class="note warn" style="margin-bottom:14px">No survey MTO loaded — readiness falls back to the AIF ETA column. Import the MTO under <b>Data Integrity → Material Reconciliation</b> for item-by-item readiness.</div>` : '';
   const aifBtn = r => `<button class="linkish mono" data-aif='${esc(JSON.stringify([r.cat, r.view, r.uid]))}'>${esc(r.notif || r.report || '—')}</button>`;
   const due = r => { const d = dayN(r.due), t = dayN(todayISO()); if(d === null) return '<span class="faint">—</span>'; const late = t - d; return `<span${late > 0 ? ' style="color:var(--bad);font-weight:600"' : ''}>${fmtD(r.due)}${late > 0 ? ` · ${late}d late` : ''}</span>`; };
   const LO = {missing: 0, surplus: 1, ordered: 2, received: 3};
   const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc((STAFF ? {received: 'Received', ordered: 'Ordered', surplus: 'From surplus', missing: 'Not bought / short'} : {received: 'Received', ordered: 'On order', surplus: 'Being arranged', missing: 'Not yet available'})[m.st])}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)} <span class="faint">(${esc(m.sheet)}${STAFF && m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span></div>`).join('')}</div>`
     : `<div class="rd-lines faint">${x.rd.src === 'ETA' ? 'From AIF ETA: ' + esc(clean(x.r.eta) || '—') : 'No MTO line and no ETA for this notification.'}</div>`;
-  let html = tabs;
+  let html = tabs + areaChips;
   if(RD_TAB === 'ready'){
     const K = ['ready', 'surplus', 'waiting', 'blocked', 'eta_ok', 'eta_no', 'none', 'unknown'], cnt = {}; K.forEach(k => cnt[k] = rows.filter(x => x.rd.k === k).length);
     const notDone = rows.filter(x => !x.r.executionDone);
@@ -1868,7 +1875,7 @@ function renderReadiness(){
       .sort((a, b) => prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 1e9) - (dayN(b.r.due) ?? 1e9));
     const goN = notDone.filter(x => ['ready', 'eta_ok', 'none'].includes(x.rd.k)).length;
     const tile = (k, n, lbl, cls, sub) => `<button class="rd-tile ${cls}${RD_F === k ? ' on' : ''}" data-rdf="${k}"><b>${n}</b><span>${lbl}</span>${sub ? `<em>${sub}</em>` : ''}</button>`;
-    html += `<div class="head"><div><h2>Material Readiness</h2><p>Every open AIF finding that is not executed yet, checked against the survey MTO (items listed for its notification number) and what Materials says was received. Use it to pick next week's work: <b>ready to execute</b> first, then chase the rest.</p></div></div>${noMto}
+    html += `<div class="head"><div><h2>Material Readiness${RD_AREA !== 'all' ? ' — ' + esc(RD_AREA) : ''}</h2><p>Every open AIF finding that is not executed yet, checked against the survey MTO (items listed for its notification number) and what Materials says was received. Use it to pick next week's work: <b>ready to execute</b> first, then chase the rest.</p></div></div>${noMto}
       <div class="rd-tiles">${tile('go', goN, 'Ready to execute', 'ok', 'material in hand or not needed')}${tile('waiting', notDone.filter(x => x.rd.k === 'waiting').length, 'Waiting delivery', 'info', 'ordered, not all arrived')}${tile('surplus', notDone.filter(x => x.rd.k === 'surplus').length, STAFF ? 'Surplus to issue' : 'Material being arranged', 'acc', STAFF ? 'no PO — take from surplus' : 'from existing stock')}${tile('blocked', notDone.filter(x => x.rd.k === 'blocked').length, STAFF ? 'Blocked' : 'Material not ready', 'bad', STAFF ? 'MTO item not bought / short' : 'still being procured')}${tile('eta_no', notDone.filter(x => x.rd.k === 'eta_no').length, 'ETA not ready', 'warn', 'no MTO — going by ETA')}${tile('unknown', notDone.filter(x => x.rd.k === 'unknown').length, 'Unknown', 'faint', 'no MTO, no ETA')}${tile('all', notDone.length, 'All open', '', 'not executed yet')}</div>
       <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th><th class="n">MTO lines received</th></tr></thead><tbody>
       ${list.map(x => { const r = x.r, open = RD_OPEN.has(r.uid), R = RDL()[x.rd.k]; return `<tr class="xrow" data-rdo="${esc(r.uid)}"><td style="white-space:nowrap">${open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div></td>
@@ -1884,12 +1891,14 @@ function renderReadiness(){
     const byP = {}; od.forEach(x => { const p = 'P' + (prioN(x.r.priority) < 9 ? prioN(x.r.priority) : '?'); (byP[p] = byP[p] || {}); byP[p][x.cause] = (byP[p][x.cause] || 0) + 1; });
     const list = od.filter(x => OC_F === 'all' || x.cause === OC_F).sort((a, b) => keys.indexOf(a.cause) - keys.indexOf(b.cause) || prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 0) - (dayN(b.r.due) ?? 0));
     const max = Math.max(1, ...keys.map(k => cnt[k]));
-    html += `<div class="head"><div><h2>Overdue Analysis</h2><p>${od.length} open AIF finding${od.length === 1 ? ' is' : 's are'} overdue. Each is put in one group by what is holding it — material, fabrication, or the work itself — so the follow-up goes to the right people.</p></div></div>${noMto}
+    html += `<div class="head"><div><h2>Overdue Analysis${RD_AREA !== 'all' ? ' — ' + esc(RD_AREA) : ''}</h2><p>${od.length} open AIF finding${od.length === 1 ? ' is' : 's are'} overdue. Each is put in one group by what is holding it — material, fabrication, or the work itself — so the follow-up goes to the right people.</p></div></div>${noMto}
       <div class="box"><div class="oc-bars">${keys.filter(k => cnt[k]).map(k => `<button class="oc-bar${OC_F === k ? ' on' : ''}" data-ocf="${k}" title="${esc(OCL()[k][2])}"><span class="oc-l">${OCL()[k][0]}</span><span class="oc-t"><span class="oc-f ${OCL()[k][1]}" style="width:${cnt[k] / max * 100}%"></span></span><b>${cnt[k]}</b></button>`).join('')}
         <button class="oc-bar${OC_F === 'all' ? ' on' : ''}" data-ocf="all"><span class="oc-l"><b>All overdue</b></span><span class="oc-t"></span><b>${od.length}</b></button></div>
         <div class="tw"><table class="grid"><thead><tr><th>Priority</th>${keys.filter(k => cnt[k]).map(k => `<th class="n" title="${esc(OCL()[k][0])}">${esc(OCL()[k][0].split(' — ')[0].replace('Material ready', 'Ready, not executed'))}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
         ${Object.keys(byP).sort().map(p => `<tr><td><b>${p}</b></td>${keys.filter(k => cnt[k]).map(k => `<td class="n">${byP[p][k] || '<span class="faint">0</span>'}</td>`).join('')}<td class="n"><b>${Object.values(byP[p]).reduce((a, b) => a + b, 0)}</b></td></tr>`).join('')}
-        </tbody></table></div></div><div class="gap"></div>
+        </tbody></table></div>${RD_AREA === 'all' && areasP.length > 1 ? (() => { const byL = {}; od.forEach(x => { const a = areaOf(x.r.view); (byL[a] = byL[a] || {}); byL[a][x.cause] = (byL[a][x.cause] || 0) + 1; });
+        return `<div class="tw" style="border-top:1px solid var(--border)"><table class="grid"><thead><tr><th>Location</th>${keys.filter(k => cnt[k]).map(k => `<th class="n" title="${esc(OCL()[k][0])}">${esc(OCL()[k][0].split(' — ')[0].replace('Material ready', 'Ready, not executed'))}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
+        ${areasP.filter(a => byL[a]).map(a => `<tr><td><button class="linkish" data-rda="${esc(a)}"><b>${esc(a)}</b></button></td>${keys.filter(k => cnt[k]).map(k => `<td class="n">${byL[a][k] || '<span class="faint">0</span>'}</td>`).join('')}<td class="n"><b>${Object.values(byL[a]).reduce((q, n) => q + n, 0)}</b></td></tr>`).join('')}</tbody></table></div>`; })() : ''}</div><div class="gap"></div>
       <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Why</th><th>Notification</th><th>Finding</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th></tr></thead><tbody>
       ${list.map(x => { const r = x.r, open = RD_OPEN.has(r.uid), R = RDL()[x.rd.k], C = OCL()[x.cause]; return `<tr class="xrow" data-rdo="${esc(r.uid)}"><td style="white-space:nowrap"><span class="mto-st ${C[1]}" title="${esc(C[2])}">${C[0]}</span></td><td style="white-space:nowrap">${open ? '▾ ' : '▸ '}${aifBtn(r)}</td>
         <td style="min-width:240px">${esc(clean(r.finding || r.desc).slice(0, 150))}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div></td><td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
@@ -1901,6 +1910,7 @@ function renderReadiness(){
 }
 function rdWire(el){
   el.querySelectorAll('[data-rdt]').forEach(b => b.onclick = () => { RD_TAB = b.dataset.rdt; renderReadiness(); });
+  el.querySelectorAll('[data-rda]').forEach(b => b.onclick = () => { RD_AREA = b.dataset.rda; renderReadiness(); });
   el.querySelectorAll('[data-rdf]').forEach(b => b.onclick = () => { RD_F = b.dataset.rdf; renderReadiness(); });
   el.querySelectorAll('[data-ocf]').forEach(b => b.onclick = () => { OC_F = b.dataset.ocf; renderReadiness(); });
   el.querySelectorAll('tr[data-rdo]').forEach(tr => tr.onclick = () => { const k = tr.dataset.rdo; RD_OPEN.has(k) ? RD_OPEN.delete(k) : RD_OPEN.add(k); renderReadiness(); });
