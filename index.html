@@ -447,9 +447,9 @@ dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;borde
     <button class="nav" data-view="files"><span class="glyph">📎</span>Photos &amp; files</button>
     <div class="sec">Project Controls</div>
     <button class="nav" data-view="rdy" title="Which open findings can be executed now, and why overdue ones are still open"><span class="glyph">▶</span>Work Readiness</button>
-    <button class="nav" data-view="proc" title="Supplier performance, receiving documents and the surplus ledger"><span class="glyph">⛟</span>Procurement</button>
+    <button class="nav" data-view="proc" title="Supplier performance, material reconciliation (MTO), receiving documents and the surplus ledger"><span class="glyph">⛟</span>Procurement</button>
     <button class="nav" data-view="clm" title="Which WOPs can be claimed now, and what blocks the rest"><span class="glyph">＄</span>Claim Readiness</button>
-    <button class="nav" data-view="recon" title="Work traceability, material reconciliation and data quality"><span class="glyph">⇄</span>Data Integrity</button>
+    <button class="nav" data-view="recon" title="Work traceability and data quality"><span class="glyph">⇄</span>Data Integrity</button>
     <div class="sec">Modules</div>
     <button class="nav" data-view="wop" style="--nav-c:var(--c-wop)"><span class="sw"></span>WOP Summary<span class="st" data-st="wop">…</span></button>
     <button class="nav" data-view="aif" style="--nav-c:var(--c-aif)"><span class="sw"></span>AIF TBR / TBP<span class="st" data-st="aif">…</span></button>
@@ -464,14 +464,14 @@ dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;borde
   <main class="stage" id="stage">
     <section class="panel" id="p-overview" aria-label="Overview"><div class="inner" id="ov"></div></section>
     <section class="panel" id="p-w360" aria-label="WOP 360 and exceptions"><div class="inner" id="w360"></div></section>
-    <section class="panel" id="p-links" aria-label="Data Integrity — work traceability"><div class="inner"><div class="subtabs" role="tablist" aria-label="Data Integrity"><button class="subtab" role="tab" data-sub="links" aria-selected="true">Work Traceability <span>WOP · AIF · Materials</span></button><button class="subtab" role="tab" data-sub="mto" aria-selected="false">Material Reconciliation <span>survey MTO · purchased · surplus</span></button><button class="subtab" role="tab" data-sub="quality" aria-selected="false">Data Quality <span>duplicates · dates · names</span></button></div><div id="lk"></div></div></section>
+    <section class="panel" id="p-links" aria-label="Data Integrity — work traceability"><div class="inner"><div class="subtabs" role="tablist" aria-label="Data Integrity"><button class="subtab" role="tab" data-sub="links" aria-selected="true">Work Traceability <span>WOP · AIF · Materials</span></button><button class="subtab" role="tab" data-sub="quality" aria-selected="false">Data Quality <span>duplicates · dates · names</span></button></div><div id="lk"></div></div></section>
     <section class="panel" id="p-rdy" aria-label="Work readiness"><div class="inner" id="rdy"></div></section>
     <section class="panel" id="p-proc" aria-label="Procurement"><div class="inner" id="proc"></div></section>
     <section class="panel" id="p-clm" aria-label="Claim readiness"><div class="inner" id="clm"></div></section>
     <section class="panel" id="p-weekly" aria-label="Weekly report"><div class="inner" id="wk"></div></section>
-    <section class="panel" id="p-mto" aria-label="Data Integrity — material reconciliation"><div class="inner"><div class="subtabs" role="tablist" aria-label="Data Integrity"><button class="subtab" role="tab" data-sub="links" aria-selected="false">Work Traceability <span>WOP · AIF · Materials</span></button><button class="subtab" role="tab" data-sub="mto" aria-selected="true">Material Reconciliation <span>survey MTO · purchased · surplus</span></button><button class="subtab" role="tab" data-sub="quality" aria-selected="false">Data Quality <span>duplicates · dates · names</span></button></div><div id="mto"></div></div></section>
+    <section class="panel" id="p-mto" aria-label="Procurement — material reconciliation"><div class="inner"><div id="mtoTabs"></div><div id="mto"></div></div></section>
     <section class="panel" id="p-trends" aria-label="Trends"><div class="inner" id="trd"></div></section>
-    <section class="panel" id="p-quality" aria-label="Data Integrity — data quality"><div class="inner"><div class="subtabs" role="tablist" aria-label="Data Integrity"><button class="subtab" role="tab" data-sub="links" aria-selected="false">Work Traceability <span>WOP · AIF · Materials</span></button><button class="subtab" role="tab" data-sub="mto" aria-selected="false">Material Reconciliation <span>survey MTO · purchased · surplus</span></button><button class="subtab" role="tab" data-sub="quality" aria-selected="true">Data Quality <span>duplicates · dates · names</span></button></div><div id="dq"></div></div></section>
+    <section class="panel" id="p-quality" aria-label="Data Integrity — data quality"><div class="inner"><div class="subtabs" role="tablist" aria-label="Data Integrity"><button class="subtab" role="tab" data-sub="links" aria-selected="false">Work Traceability <span>WOP · AIF · Materials</span></button><button class="subtab" role="tab" data-sub="quality" aria-selected="true">Data Quality <span>duplicates · dates · names</span></button></div><div id="dq"></div></div></section>
     <section class="panel" id="p-files" aria-label="Photos and files"><div class="inner" id="fil"></div></section>
     <section class="panel" id="p-activity" aria-label="Activity log"><div class="inner" id="act"></div></section>
     <section class="panel" id="p-admin" aria-label="Health and backups"><div class="inner" id="adm"></div></section>
@@ -912,13 +912,13 @@ function areaList(){ const cnt = {}; if(DATA.wop) DATA.wop.records.forEach(r => 
 
 /* ---------- navigation ---------- */
 let VIEW = 'overview', RECON_SUB = 'links';
-try{ const r = localStorage.getItem('ttammhub_recon'); if(r === 'mto' || r === 'links' || r === 'quality') RECON_SUB = r; }catch(e){}
+try{ const r = localStorage.getItem('ttammhub_recon'); if(r === 'links' || r === 'quality') RECON_SUB = r; }catch(e){}
 function go(v){
   if(v === 'recon') v = RECON_SUB;
   if(!viewAllowed(v)){ staffLogin(OPS_VIEWS.includes(v) ? 'ops' : 'staff').then(ok => { if(ok && viewAllowed(v)) go(v); }); return; }
   if(!['overview','w360','links','mto','rdy','proc','clm','weekly','trends','quality','files','activity','admin','wop','aif','mat'].includes(v)) v = 'overview';
-  VIEW = v; if(v === 'links' || v === 'mto' || v === 'quality'){ RECON_SUB = v; try{ localStorage.setItem('ttammhub_recon', v); }catch(e){} }
-  const navV = v === 'links' || v === 'mto' || v === 'quality' ? 'recon' : v;
+  VIEW = v; if(v === 'links' || v === 'quality'){ RECON_SUB = v; try{ localStorage.setItem('ttammhub_recon', v); }catch(e){} }
+  const navV = v === 'links' || v === 'quality' ? 'recon' : v === 'mto' ? 'proc' : v;
   $$('.nav').forEach(b => b.dataset.view === navV ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
   $('#p-overview').classList.toggle('on', v === 'overview');
   $('#p-links').classList.toggle('on', v === 'links');
@@ -927,7 +927,7 @@ function go(v){
   $('#p-proc').classList.toggle('on', v === 'proc'); if(v === 'proc'){ collect(); renderProcurement(); }
   $('#p-clm').classList.toggle('on', v === 'clm'); if(v === 'clm'){ collect(); renderClaims(); }
   $('#p-weekly').classList.toggle('on', v === 'weekly'); if(v === 'weekly'){ collect(); renderWeekly(); }
-  if(v === 'mto'){ collect(); renderMto(); }
+  if(v === 'mto'){ collect(); const t = $('#mtoTabs'); if(t){ t.innerHTML = procTabs('mto'); prWire(t); } renderMto(); }
   $('#p-w360').classList.toggle('on', v === 'w360');
   if(v === 'w360'){ collect(); renderW360(); }
   $('#p-activity').classList.toggle('on', v === 'activity');
@@ -1410,11 +1410,13 @@ function mtoAutoPkg(mtoName, pkgs){
   return hit.length === 1 ? hit[0].id : '';
 }
 /* Compare one MTO sheet with one Materials package. over: {mtoRowIdx: matItemId | '-'} manual choices */
+/* MTO line whose Remarks say the material is re-used (existing material) — not bought, not counted in readiness */
+function mtoIsReuse(x){ return !!x && /\bRE[\s-]?US(E|ED|ING)\b|GUNA\s*SEMULA|\bREUTILI[SZ]/i.test(String(x.remarks || '')); }
 function mtoFromSurplus(it){ return !!it && /SURPLUS/i.test(String(it.remarks || '')) && !String(it.poNo || '').trim(); }
 function mtoCompare(sheet, items, over){
   over = over || {};
   const mf = items.map(it => ({it, f: mtoFeat(it.desc)}));
-  const rows = sheet.items.map((x, i) => {
+  const rows = sheet.items.filter(x => !mtoIsReuse(x)).map((x, i) => {
     const f = mtoFeat(x.desc); let best = null, bs = 0, auto = true;
     const o = over[x.key];
     if(o !== undefined && (o === '-' || mf.some(m => mtoNorm(m.it.desc) === o))){ auto = false; best = o === '-' ? null : mf.find(m => mtoNorm(m.it.desc) === o); bs = best ? 1 : 0; }
@@ -1447,6 +1449,7 @@ function mtoCompare(sheet, items, over){
     lines.push({kind: 'match', rows: rs, it, need, needBuy, bought, recv, unit, note, st, note2, fromSurplus: fs, diff: fs ? (recv || 0) - needBuy : bought == null ? -needBuy : bought - needBuy, weak: rs.some(r => r.auto && r.score < 0.72 && !(r.f.len && f.len))});
   });
   rows.filter(r => !r.m).forEach(r => lines.push({kind: 'nobuy', rows: [r], it: null, need: +r.x.sum || 0, needBuy: +r.x.sum || 0, bought: 0, recv: null, unit: r.x.unit, note: '', st: (+r.x.sum || 0) > 0 ? 'nobuy' : 'zero', diff: -(+r.x.sum || 0)}));
+  sheet.items.filter(mtoIsReuse).forEach(x => lines.push({kind: 'reuse', rows: [{x, f: mtoFeat(x.desc), m: null, auto: true, score: 0}], it: null, need: +x.sum || 0, needBuy: 0, bought: null, recv: null, unit: x.unit, note: '', note2: 'Remark: ' + String(x.remarks).trim() + ' — re-use, no purchase needed', st: 'reuse', diff: 0}));
   items.filter(it => !byItem.has(it.id)).forEach(it => { const fs = mtoFromSurplus(it) && (+it.received || 0) < (+it.qty || 0);
     lines.push({kind: 'extra', rows: [], it, need: 0, needBuy: 0, bought: it.qty == null ? null : +it.qty, recv: it.received, unit: it.unit, note: '', note2: fs ? 'No PO — planned from surplus (remark: ' + String(it.remarks).trim() + '). Not in the MTO.' : '', st: fs ? 'surplus' : 'extra', fromSurplus: mtoFromSurplus(it), diff: +it.qty || 0}); });
   return lines;
@@ -1462,8 +1465,9 @@ function mtoParseBook(X, wb, file){
     const dc = ic + 1, uc = ic + 2;
     let sr = -1, sc = -1, upd = '';
     for(let i = 0; i < hi; i++) (rows[i] || []).forEach((v, j) => { const t = mtoNorm(v); if(t === 'SUM' && sc < 0){ sr = i; sc = j; } const m = /UPDATE ON\s*:?\s*(.+)/.exec(t); if(m) upd = m[1].trim(); });
+    let rc = -1; [rows[hi] || [], sr >= 0 ? rows[sr] || [] : []].forEach(rw => { if(rc < 0) rw.forEach((v, j) => { if(rc < 0 && j > uc && /^REMARK/.test(mtoNorm(v))) rc = j; }); });
     const notifCols = [];
-    if(sr >= 0) for(let j = uc + 1; j < sc; j++){ const v = rows[sr][j]; if(v !== null && String(v).trim() !== '') notifCols.push({j, label: String(v).trim()}); }
+    if(sr >= 0) for(let j = uc + 1; j < sc; j++){ if(j === rc) continue; const v = rows[sr][j]; if(v !== null && String(v).trim() !== '') notifCols.push({j, label: String(v).trim()}); }
     const items = [], seen = {}; let sec = '';
     for(let i = hi + 1; i < rows.length; i++){
       const r = rows[i] || [], d = r[dc];
@@ -1474,7 +1478,7 @@ function mtoParseBook(X, wb, file){
       let sum = sc >= 0 ? Number(r[sc]) : NaN;
       if(!isFinite(sum)) sum = Object.values(per).reduce((a, b) => a + b, 0) || Number(r[uc + 1]) || 0;
       const k0 = mtoNorm(desc); seen[k0] = (seen[k0] || 0) + 1;
-      items.push({key: k0 + '#' + seen[k0], sec, no: r[ic] == null ? '' : String(r[ic]), desc, unit, sum: Math.round(sum * 1000) / 1000, per});
+      items.push({key: k0 + '#' + seen[k0], sec, no: r[ic] == null ? '' : String(r[ic]), desc, unit, sum: Math.round(sum * 1000) / 1000, per, remarks: rc >= 0 && r[rc] != null ? String(r[rc]).replace(/\s+/g, ' ').trim() : ''});
     }
     sheets.push({name, updateOn: upd, notifs: notifCols.map(c => c.label), items});
   });
@@ -1527,8 +1531,8 @@ function mtoLinesFor(sh){
   return {p, items, lines: mtoCompare(sh, items, (MTO.over || {})[sh.name] || {})};
 }
 const MTO_ST = {ok: ['OK', 'ok', 'Bought what the MTO needs'], over: ['Over-bought', 'warn', 'Ordered more than the MTO needs'], short: ['Short', 'bad', 'Ordered less than the MTO needs'],
-  nobuy: ['Not bought', 'bad', 'In the MTO but no matching purchase line'], extra: ['Not in MTO', 'info', 'Bought, but no MTO line asks for it'], unit: ['Check unit', 'warn', 'Pipe ordered as “6 LG” — probably 6 m (one length). Check the unit.'], zero: ['0 in MTO', 'faint', 'MTO quantity is 0'], surplus: ['From surplus', 'acc', 'No PO — the remark says it will be taken from surplus stock. See the Surplus box below for stock that matches.']};
-function mtoCounts(lines){ const c = {ok: 0, over: 0, short: 0, nobuy: 0, extra: 0, unit: 0, zero: 0, weak: 0, cross: 0, surplus: 0}; lines.forEach(l => { c[l.st]++; if(l.weak) c.weak++; if(l.crossHit) c.cross++; }); return c; }
+  nobuy: ['Not bought', 'bad', 'In the MTO but no matching purchase line'], extra: ['Not in MTO', 'info', 'Bought, but no MTO line asks for it'], unit: ['Check unit', 'warn', 'Pipe ordered as “6 LG” — probably 6 m (one length). Check the unit.'], zero: ['0 in MTO', 'faint', 'MTO quantity is 0'], surplus: ['From surplus', 'acc', 'No PO — the remark says it will be taken from surplus stock. See the Surplus box below for stock that matches.'], reuse: ['Re-use', 'faint', 'MTO remark says the material is re-used — no purchase needed, not counted in Material Readiness']};
+function mtoCounts(lines){ const c = {ok: 0, over: 0, short: 0, nobuy: 0, extra: 0, unit: 0, zero: 0, weak: 0, cross: 0, surplus: 0, reuse: 0}; lines.forEach(l => { c[l.st]++; if(l.weak) c.weak++; if(l.crossHit) c.cross++; }); return c; }
 /* Cross-package check: an item short / not bought here may have been bought under another package,
    and a purchase with no MTO here may be what another package's MTO asks for. */
 function mtoCross(all){
@@ -1538,7 +1542,7 @@ function mtoCross(all){
   const spare = {};                                   // what each purchase line has left after its own package's MTO
   all.forEach(a => a.lines.forEach(l => { if(l.it) spare[l.it.id] = l.st === 'extra' ? (+l.bought || 0) : l.st === 'over' ? l.diff : 0; }));
   const lineOf = {}, mrows = [];
-  all.forEach(a => { if(!a.p) return; a.lines.forEach(l => l.rows.forEach(r => { lineOf[a.sh.name + '|' + r.x.key] = l; if(+r.x.sum) mrows.push({sheet: a.sh.name, r}); })); });
+  all.forEach(a => { if(!a.p) return; a.lines.forEach(l => l.rows.forEach(r => { lineOf[a.sh.name + '|' + r.x.key] = l; if(+r.x.sum && l.st !== 'reuse') mrows.push({sheet: a.sh.name, r}); })); });
   all.forEach(a => { if(!a.p) return; a.lines.forEach(l => {
     l.cross = []; l.crossHit = false;
     if((l.st === 'nobuy' || l.st === 'short') && l.rows[0]){
@@ -1680,13 +1684,13 @@ function renderMto(){
             : all.find(a => a.sh.name === MTO_SHEET);
   if(cur && cur.p){
     const c = mtoCounts(cur.lines);
-    const F = {issues: l => l.st !== 'ok' && l.st !== 'zero' || l.weak, all: () => true, short: l => l.st === 'short', nobuy: l => l.st === 'nobuy', over: l => l.st === 'over', extra: l => l.st === 'extra', check: l => l.st === 'unit' || l.weak, ok: l => l.st === 'ok', cross: l => l.crossHit, surplus: l => l.st === 'surplus'};
-    const order = {short: 0, nobuy: 1, surplus: 2, unit: 3, over: 4, extra: 5, ok: 6, zero: 7};
+    const F = {issues: l => l.st !== 'ok' && l.st !== 'zero' && l.st !== 'reuse' || l.weak, reuse: l => l.st === 'reuse', all: () => true, short: l => l.st === 'short', nobuy: l => l.st === 'nobuy', over: l => l.st === 'over', extra: l => l.st === 'extra', check: l => l.st === 'unit' || l.weak, ok: l => l.st === 'ok', cross: l => l.crossHit, surplus: l => l.st === 'surplus'};
+    const order = {short: 0, nobuy: 1, surplus: 2, unit: 3, over: 4, extra: 5, ok: 6, reuse: 7, zero: 8};
     const lines = cur.lines.filter(F[MTO_FILTER] || F.issues).sort((a, b) => (order[a.st] - order[b.st]) || ((b.weak ? 1 : 0) - (a.weak ? 1 : 0)));
     const chip = (k, lbl, n) => `<button class="chip" data-mf="${k}" aria-pressed="${MTO_FILTER === k}">${lbl} ${n}</button>`;
     const opts = (sel, items) => `<option value="">Auto match</option><option value="-"${sel === '-' ? ' selected' : ''}>— not bought —</option>${items.map(it => { const k = mtoNorm(it.desc); return `<option value="${esc(k)}"${sel === k ? ' selected' : ''}>${esc(it.desc)} · ${mtoQ(it.qty)} ${esc(it.unit || '')}</option>`; }).join('')}`;
     html += `<div class="box"><div class="box-h"><div><h3>${cur.all ? 'All packages' : esc(cur.sh.name) + ' ↔ ' + esc(cur.p.name)}</h3><p>${cur.sh.items.length} MTO lines · ${cur.items.length} purchase lines · ${cur.sh.notifs.length} notifications in the MTO</p></div>
-      <div class="chips">${chip('issues', 'Needs attention', cur.lines.filter(F.issues).length)}${chip('short', 'Short', c.short)}${chip('nobuy', 'Not bought', c.nobuy)}${c.surplus ? chip('surplus', 'From surplus', c.surplus) : ''}${chip('over', 'Over-bought', c.over)}${chip('extra', 'Not in MTO', c.extra)}${chip('cross', '↔ Other package', c.cross)}${chip('check', 'Check', c.unit + c.weak)}${chip('ok', 'OK', c.ok)}${chip('all', 'All', cur.lines.length)}</div></div>
+      <div class="chips">${chip('issues', 'Needs attention', cur.lines.filter(F.issues).length)}${chip('short', 'Short', c.short)}${chip('nobuy', 'Not bought', c.nobuy)}${c.surplus ? chip('surplus', 'From surplus', c.surplus) : ''}${chip('over', 'Over-bought', c.over)}${chip('extra', 'Not in MTO', c.extra)}${chip('cross', '↔ Other package', c.cross)}${chip('check', 'Check', c.unit + c.weak)}${chip('ok', 'OK', c.ok)}${c.reuse ? chip('reuse', '♻ Re-use', c.reuse) : ''}${chip('all', 'All', cur.lines.length)}</div></div>
       <div class="tw"><table class="grid mto-t"><thead><tr>${cur.all ? '<th>Package</th>' : ''}<th>Status</th><th>MTO item (survey)</th><th>Bought as (Materials)</th><th class="n">MTO qty</th><th class="n">Need to buy</th><th class="n">Ordered</th><th class="n">Received</th><th class="n">Diff</th><th>Notifications</th></tr></thead><tbody>
       ${lines.map(l => { const s = MTO_ST[l.st], r0 = l.rows[0], editKey = r0 ? l.shName + '\u0001' + r0.x.key : '', sel = r0 && ((MTO.over || {})[l.shName] || {})[r0.x.key];
         const per = {}; l.rows.forEach(r => Object.entries(r.x.per || {}).forEach(([n, q]) => per[n] = (per[n] || 0) + q));
@@ -1697,8 +1701,8 @@ function renderMto(){
           <td style="min-width:220px">${l.it ? esc(l.it.desc) : '<span class="faint">—</span>'}${l.note ? `<div class="faint" style="font-size:11.5px">${esc(l.note)}</div>` : ''}${l.note2 ? `<div style="font-size:11.5px;color:var(--warn)">${esc(l.note2)}</div>` : ''}${mtoCrossHtml(l)}
             ${r0 ? (MTO_EDIT === editKey ? `<div><select class="mto-sel" data-mover="${esc(editKey)}" style="max-width:340px;margin-top:4px">${opts(sel, l.items)}</select></div>` : `<button class="mto-chg" data-medit="${esc(editKey)}">${sel !== undefined ? '✎ manual match · change' : '✎ change match'}</button>`) : ''}</td>
           <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.need) + ' <span class="faint">' + esc(l.rows[0] ? l.rows[0].x.unit : '') + '</span>'}</td>
-          <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.needBuy) + ' <span class="faint">' + esc(l.unit || '') + '</span>'}</td>
-          <td class="n">${l.kind === 'nobuy' ? '<span class="faint">0</span>' : l.fromSurplus ? '<span class="faint" title="Listed ' + mtoQ(l.bought) + ' — no PO, from surplus">no PO</span>' : mtoQ(l.bought)}</td><td class="n">${mtoQ(l.recv)}</td>
+          <td class="n" style="white-space:nowrap">${l.kind === 'extra' || l.kind === 'reuse' ? '<span class="faint">—</span>' : mtoQ(l.needBuy) + ' <span class="faint">' + esc(l.unit || '') + '</span>'}</td>
+          <td class="n">${l.kind === 'reuse' ? '<span class="faint">re-use</span>' : l.kind === 'nobuy' ? '<span class="faint">0</span>' : l.fromSurplus ? '<span class="faint" title="Listed ' + mtoQ(l.bought) + ' — no PO, from surplus">no PO</span>' : mtoQ(l.bought)}</td><td class="n">${mtoQ(l.recv)}</td>
           <td class="n" style="font-weight:700;color:var(--${l.st === 'short' || l.st === 'nobuy' ? 'bad' : l.st === 'surplus' ? 'accent' : l.st === 'over' || l.st === 'extra' ? 'warn' : 'text-dim'})">${l.st === 'unit' ? '?' : diff}</td>
           <td><div class="mto-ns">${notifs || '<span class="faint">—</span>'}</div></td></tr>`; }).join('')}
       </tbody></table></div>${!lines.length ? '<div class="note">Nothing in this view.</div>' : ''}
@@ -1779,6 +1783,7 @@ function mtoAll(){
 /* received / ordered (not arrived) / surplus (to be issued) / missing (not bought or short) / na (0 in MTO) */
 function mtoLineState(l){
   if(l.st === 'zero') return 'na';
+  if(l.st === 'reuse') return 'reuse';
   if(!l.it || l.st === 'nobuy') return 'missing';
   const recv = +l.recv || 0, got = recv + mtoIssuedTo(l.shName, l.rows.length ? l.rows.map(r => r.x.desc).join(' + ') : l.it.desc);
   if(got >= l.needBuy - 1e-9) return 'received';
@@ -1804,10 +1809,11 @@ const RD = {
   unknown: ['No MTO and no ETA', 'faint']
 };
 function findingReadiness(r, map){
-  const lines = (map[String(r.notif || '').trim()] || []).filter(x => x.st !== 'na');
+  const all = (map[String(r.notif || '').trim()] || []).filter(x => x.st !== 'na'), lines = all.filter(x => x.st !== 'reuse'), reuse = all.filter(x => x.st === 'reuse');
+  if(!lines.length && reuse.length) return {k: 'none', lines: reuse, rec: 0, tot: 0, reuse: reuse.length, src: 'MTO'};
   if(lines.length){
     const c = k => lines.filter(x => x.st === k).length;
-    return {k: c('missing') ? 'blocked' : c('ordered') ? 'waiting' : c('surplus') ? 'surplus' : 'ready', lines, rec: c('received'), tot: lines.length, src: 'MTO'};
+    return {k: c('missing') ? 'blocked' : c('ordered') ? 'waiting' : c('surplus') ? 'surplus' : 'ready', lines: lines.concat(reuse), rec: c('received'), tot: lines.length, reuse: reuse.length, src: 'MTO'};
   }
   const eta = clean(r.eta);
   if(/^(N\/?A|NIL|NONE|-)$/i.test(eta)) return {k: 'none', lines: [], src: 'ETA'};
@@ -1877,11 +1883,11 @@ function renderReadiness(){
     <div class="rd-f"><div class="chips">${areasP.map(a => `<button class="chip" data-rda="${esc(a)}" aria-pressed="${RD_AREA === a}">${esc(a)}</button>`).join('')}${areasP.length > 1 ? `<button class="chip" data-rda="all" aria-pressed="${RD_AREA === 'all'}">${esc(areasP.join(' + '))}</button>` : ''}</div></div>
     ${batches.length > 1 ? `<div class="rd-f"><span class="rd-fl">📅 Batch (plan year):</span><div class="chips"><button class="chip" data-rdb="ALL" aria-pressed="${RD_BATCH === 'ALL'}">All</button>${batches.map((b, i) => `<button class="chip" data-rdb="${esc(b)}" aria-pressed="${RD_BATCH === b}">Batch ${i + 1} (${esc(b)})</button>`).join('')}</div></div>` : ''}`;
   const scope = [RD_CAT, RD_AREA !== 'all' ? RD_AREA : areasP.join(' + '), RD_BATCH !== 'ALL' ? 'Batch ' + (batches.indexOf(RD_BATCH) + 1) : ''].filter(Boolean).join(' · ');
-  const noMto = !MTO && OPS ? `<div class="note warn" style="margin-bottom:14px">No survey MTO loaded — readiness falls back to the AIF ETA column. Import the MTO under <b>Data Integrity → Material Reconciliation</b> for item-by-item readiness.</div>` : '';
+  const noMto = !MTO && OPS ? `<div class="note warn" style="margin-bottom:14px">No survey MTO loaded — readiness falls back to the AIF ETA column. Import the MTO under <b>Procurement → Material Reconciliation</b> for item-by-item readiness.</div>` : '';
   const aifBtn = r => `<button class="linkish mono" data-aif='${esc(JSON.stringify([r.cat, r.view, r.uid]))}'>${esc(r.notif || r.report || '—')}</button>`;
   const due = r => { const d = dayN(r.due), t = dayN(todayISO()); if(d === null) return '<span class="faint">—</span>'; const late = t - d; return `<span${late > 0 ? ' style="color:var(--bad);font-weight:600"' : ''}>${fmtD(r.due)}${late > 0 ? ` · ${late}d late` : ''}</span>`; };
-  const LO = {missing: 0, surplus: 1, ordered: 2, received: 3};
-  const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc((STAFF ? {received: 'Received', ordered: 'Ordered', surplus: 'From surplus', missing: 'Not bought / short'} : {received: 'Received', ordered: 'On order', surplus: 'Being arranged', missing: 'Not yet available'})[m.st])}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)} <span class="faint">(${esc(m.sheet)}${STAFF && m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span></div>`).join('')}</div>`
+  const LO = {missing: 0, surplus: 1, ordered: 2, received: 3, reuse: 4};
+  const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc((STAFF ? {received: 'Received', ordered: 'Ordered', surplus: 'From surplus', missing: 'Not bought / short', reuse: 'Re-use (not counted)'} : {received: 'Received', ordered: 'On order', surplus: 'Being arranged', missing: 'Not yet available', reuse: 'Re-use existing material'})[m.st])}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)} <span class="faint">(${esc(m.sheet)}${STAFF && m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span></div>`).join('')}</div>`
     : `<div class="rd-lines faint">${x.rd.src === 'ETA' ? 'From AIF ETA: ' + esc(clean(x.r.eta) || '—') : 'No MTO line and no ETA for this notification.'}</div>`;
   let html = tabs + areaChips;
   if(RD_TAB === 'ready'){
@@ -1967,10 +1973,13 @@ function docGaps(){
   }).filter(g => g.miss.length);
 }
 let PR_TAB = 'sup', PR_OPEN = new Set(), PR_PKG = 'all';
+function procTabs(cur){
+  return `<div class="subtabs" role="tablist" aria-label="Procurement">${[['sup', 'Supplier Performance', 'on-time delivery · delays'], ['mto', 'Material Reconciliation', 'survey MTO · purchased · surplus'], ['docs', 'Receiving Documents', 'DO · MRIR · MCI'], ['ledger', 'Surplus Ledger', 'surplus issued between packages']].map(([k, a, b]) =>
+    `<button class="subtab" role="tab" data-prt="${k}" aria-selected="${cur === k}">${a}${!OPS && k !== 'sup' ? ' 🔒' : ''} <span>${b}</span></button>`).join('')}</div>`;
+}
 function renderProcurement(){
   const el = $('#proc'); if(!el) return;
-  const tabs = `<div class="subtabs" role="tablist" aria-label="Procurement">${[['sup', 'Supplier Performance', 'on-time delivery · delays'], ['docs', 'Receiving Documents', 'DO · MRIR · MCI'], ['ledger', 'Surplus Ledger', 'surplus issued between packages']].map(([k, a, b]) =>
-    `<button class="subtab" role="tab" data-prt="${k}" aria-selected="${PR_TAB === k}">${a}${!OPS && k !== 'sup' ? ' 🔒' : ''} <span>${b}</span></button>`).join('')}</div>`;
+  const tabs = procTabs(PR_TAB);
   if(!DATA.mat){ el.innerHTML = tabs + `<div class="box"><div class="note">Loading Materials data…</div></div>`; prWire(el); return; }
   if(!OPS && PR_TAB !== 'sup'){ el.innerHTML = tabs + `<div class="box"><div class="note">🔒 This tab is for the operation team. <button class="btn sm" id="prOps">Log in with the operation password</button></div></div>`; prWire(el);
     const b = el.querySelector('#prOps'); if(b) b.onclick = () => staffLogin('ops').then(ok => { if(ok) renderProcurement(); }); return; }
@@ -1999,17 +2008,17 @@ function renderProcurement(){
       </tbody></table></div>${!list.length ? '<div class="note">Every received line has its DO, MRIR, MCI and received date. ✓</div>' : ''}<div class="more">Click an item to open it in Materials and fill in the missing fields.</div></div>`;
   } else {
     const L = (MTO && MTO.issues) || [];
-    html += `<div class="head"><div><h2>Surplus Ledger</h2><p>Surplus stock issued from one package to another. Each issue reduces the leftover in the Surplus box (Data Integrity → Material Reconciliation) and counts as received for the package that got it, so the same stock is not offered twice. Record an issue with the <b>Issue</b> button next to a match in the Surplus box.</p></div>
+    html += `<div class="head"><div><h2>Surplus Ledger</h2><p>Surplus stock issued from one package to another. Each issue reduces the leftover in the Surplus box (Procurement → Material Reconciliation) and counts as received for the package that got it, so the same stock is not offered twice. Record an issue with the <b>Issue</b> button next to a match in the Surplus box.</p></div>
       <div class="row-btns">${MTO && MTO_DIRTY ? '<button class="btn primary" id="ledSave">Save to Sheet</button>' : ''}<button class="btn" id="ledGo">Open Surplus box</button></div></div>
       <div class="box"><div class="tw"><table class="grid"><thead><tr><th>Date</th><th>From</th><th>To</th><th class="n">Qty</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>
       ${L.slice().reverse().map(i => `<tr><td style="white-space:nowrap">${esc(String(i.at || '').slice(0, 10))}</td><td style="min-width:200px"><b>${esc(i.fromSheet)}</b> · ${esc(i.fromDesc)}</td><td style="min-width:200px"><b>${esc(i.toSheet)}</b> · ${esc(i.toDesc)}</td>
         <td class="n" style="white-space:nowrap"><b>${mtoQ(i.qty)}</b> ${esc(i.unit || '')}</td><td>${esc(i.by || '')}</td><td>${esc(i.note || '')}</td><td><button class="btn sm" data-ledel="${esc(i.id)}" title="Remove this entry (e.g. recorded by mistake)">Remove</button></td></tr>`).join('')}
-      </tbody></table></div>${!L.length ? `<div class="note">${MTO ? 'No surplus issued yet.' : 'Import the survey MTO first (Data Integrity → Material Reconciliation) — the ledger is kept with it.'}</div>` : ''}</div>`;
+      </tbody></table></div>${!L.length ? `<div class="note">${MTO ? 'No surplus issued yet.' : 'Import the survey MTO first (Procurement → Material Reconciliation) — the ledger is kept with it.'}</div>` : ''}</div>`;
   }
   el.innerHTML = html; prWire(el);
 }
 function prWire(el){
-  el.querySelectorAll('[data-prt]').forEach(b => b.onclick = () => { PR_TAB = b.dataset.prt; renderProcurement(); });
+  el.querySelectorAll('[data-prt]').forEach(b => b.onclick = () => { if(b.dataset.prt === 'mto'){ go('mto'); return; } PR_TAB = b.dataset.prt; if(VIEW !== 'proc') go('proc'); else renderProcurement(); });
   el.querySelectorAll('[data-prp]').forEach(b => b.onclick = () => { PR_PKG = b.dataset.prp; renderProcurement(); });
   el.querySelectorAll('tr[data-pro]').forEach(tr => tr.onclick = () => { const k = tr.dataset.pro; PR_OPEN.has(k) ? PR_OPEN.delete(k) : PR_OPEN.add(k); renderProcurement(); });
   el.querySelectorAll('[data-mline]').forEach(b => b.onclick = () => openRecord('mat', b.dataset.mline));
@@ -2220,7 +2229,7 @@ function shareHtml(){
     <div class="tw"><table class="grid"><thead><tr><th>Who</th><th>Password</th><th>Sees</th></tr></thead><tbody>
       <tr><td><b>PCSB</b></td><td>none — just the link</td><td>Overview, WOP 360° (progress &amp; schedule), Work Readiness, AIF TBR/TBP (view), WOP Summary (Client View), Photos &amp; files, Trends. The Sheet never sends internal cost, suppliers, receiving documents, surplus ledger or the activity log.</td></tr>
       <tr><td><b>ZNESB management</b></td><td>STAFF_PASSWORD</td><td>+ Weekly Report, Claim Readiness, Procurement → Supplier Performance, WOP &amp; Materials modules (view only), WOP 360° money &amp; materials, full Weekly Report.</td></tr>
-      <tr><td><b>Operation team</b></td><td>ACCESS_PASSWORD</td><td>Everything: Data Integrity, Receiving Documents, Surplus Ledger, import / edit, Activity log, Health &amp; backups.</td></tr>
+      <tr><td><b>Operation team</b></td><td>ACCESS_PASSWORD</td><td>Everything: Data Integrity, Material Reconciliation, Receiving Documents, Surplus Ledger, import / edit, Activity log, Health &amp; backups.</td></tr>
     </tbody></table></div>${STAFF_NEEDED ? '' : '<div class="note warn">Set STAFF_PASSWORD in Code.gs (then Deploy → New version) before giving the link to PCSB.</div>'}</div>`;
 }
 function bindShare(el){}
