@@ -195,6 +195,7 @@ tr.detail td{background:var(--panel2);padding:0;}
 .note.warn{border-left:3px solid var(--warn);background:var(--panel2);}
 .gap{height:14px;}
 tr.mto-on td{background:var(--panel2);}
+tr.mto-all td{border-top:2px solid var(--border);}
 .mto-sel{font:inherit;font-size:12.5px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:var(--text);max-width:220px;}
 .mto-st{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:3px;border:1px solid currentColor;}
 .mto-st.ok{color:var(--ok);} .mto-st.bad{color:var(--bad);} .mto-st.warn{color:var(--warn);} .mto-st.info{color:var(--info);} .mto-st.faint{color:var(--text-faint);}
@@ -1283,6 +1284,7 @@ function mtoCompare(sheet, items, over){
     const bu = mtoNorm(it.unit), mu = mtoNorm(rs[0].x.unit);
     let needBuy = need, note = '', note2 = '', bought = it.qty == null ? null : +it.qty, recv = it.received == null ? null : +it.received, unit = it.unit || rs[0].x.unit;
     if(len && /^(LG|LENGTH)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu)){ needBuy = Math.ceil(need / 6 - 1e-9); note = `${+need.toFixed(2)} m → ${needBuy} LG (6 m/LG)`; }
+    else if(len && /^(M|MTR|METER|METRE)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu) && need > 0){ const n6 = Math.ceil(need / 6 - 1e-9); needBuy = n6 * 6; note = `${+need.toFixed(2)} m → ${n6} length${n6 > 1 ? 's' : ''} = ${needBuy} m (6 m/LG)`; }
     let st;
     if(bought == null || bought === 0) st = need > 0 ? 'nobuy' : 'ok';
     else if(bought < needBuy - 1e-9) st = 'short';
@@ -1356,7 +1358,7 @@ async function mtoImport(file){
     if(!nx.sheets.length){ toast('No MTO sheet found — each sheet needs an “Item | Descriptions | Units” header.', 7000); return; }
     if(MTO){ nx.map = MTO.map || {}; nx.over = MTO.over || {}; }          // keep the package links and manual matches made before
     MTO = nx; MTO_DIRTY = true; mtoCache();
-    if(!nx.sheets.some(s => s.name === MTO_SHEET)) MTO_SHEET = nx.sheets[0].name;
+    if(MTO_SHEET !== '*' && !nx.sheets.some(s => s.name === MTO_SHEET)) MTO_SHEET = '*';
     toast(`MTO read: ${nx.sheets.length} sheets, ${nx.sheets.reduce((a, s) => a + s.items.length, 0)} lines. Press “Save to Sheet” to share it.`, 6000);
     renderMto();
     if(hubUrl()) mtoSave();
@@ -1392,7 +1394,10 @@ function renderMto(){
   if(!DATA.mat){ el.innerHTML = head + `<div class="box"><div class="note">Loading Materials data…</div></div>`; mtoWire(el); return; }
   const pk = DATA.mat.packages;
   const all = MTO.sheets.map(sh => Object.assign({sh}, mtoLinesFor(sh)));
-  if(!MTO_SHEET || !MTO.sheets.some(s => s.name === MTO_SHEET)) MTO_SHEET = (all.find(a => a.p) || all[0]).sh.name;
+  if(!MTO_SHEET || (MTO_SHEET !== '*' && !MTO.sheets.some(s => s.name === MTO_SHEET))) MTO_SHEET = '*';
+  const linkedAll = all.filter(a => a.p);
+  all.forEach(a => a.lines.forEach(l => { l.shName = a.sh.name; l.pkgName = a.p ? a.p.name : ''; l.items = a.items; }));
+  const tot = mtoCounts([].concat(...linkedAll.map(a => a.lines)));
   const src = `MTO file: <b>${esc(MTO.file || '—')}</b>${MTO.by ? ' · imported by ' + esc(MTO.by) : ''}${MTO.at ? ' · ' + esc(String(MTO.at).slice(0, 10)) : ''}${MTO_DIRTY ? ' · <span class="cache-note">not saved to the Sheet yet</span>' : ''}`;
   const cell = (n, cls) => `<td class="n"${n && cls ? ` style="color:var(--${cls});font-weight:700"` : ''}>${n || '<span class="faint">0</span>'}</td>`;
   let html = head + (MTO_ERR ? `<div class="note warn" style="margin-bottom:14px">${esc(MTO_ERR)}</div>` : '') + `<div class="box"><div class="box-h"><div><h3>Packages</h3><p>${src}</p></div></div>
@@ -1400,27 +1405,29 @@ function renderMto(){
     ${all.map(a => { const c = mtoCounts(a.lines), on = a.sh.name === MTO_SHEET; return `<tr class="xrow${on ? ' mto-on' : ''}" data-msh="${esc(a.sh.name)}"><td style="white-space:nowrap"><b>${on ? '▸ ' : ''}${esc(a.sh.name)}</b>${a.sh.updateOn ? `<div class="faint" style="font-size:11.5px">update ${esc(a.sh.updateOn)}</div>` : ''}</td>
       <td><select class="mto-sel" data-mmap="${esc(a.sh.name)}" onclick="event.stopPropagation()"><option value="-"${!a.p ? ' selected' : ''}>— not linked —</option>${pk.map(p => `<option value="${esc(p.name)}"${a.p && a.p.id === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
       <td class="n">${a.sh.items.length}</td>${a.p ? cell(c.ok, 'ok') + cell(c.short, 'bad') + cell(c.nobuy, 'bad') + cell(c.over, 'warn') + cell(c.extra, 'info') + cell(c.unit + c.weak, 'warn') : '<td colspan="6" class="faint">Pick the Materials package this MTO sheet belongs to.</td>'}</tr>`; }).join('')}
+    <tr class="xrow mto-all${MTO_SHEET === '*' ? ' mto-on' : ''}" data-msh="*"><td><b>${MTO_SHEET === '*' ? '▸ ' : ''}ALL PACKAGES</b><div class="faint" style="font-size:11.5px">one list for every linked package</div></td><td class="faint">${linkedAll.length} linked</td><td class="n"><b>${linkedAll.reduce((n, a) => n + a.sh.items.length, 0)}</b></td>${cell(tot.ok, 'ok') + cell(tot.short, 'bad') + cell(tot.nobuy, 'bad') + cell(tot.over, 'warn') + cell(tot.extra, 'info') + cell(tot.unit + tot.weak, 'warn')}</tr>
     </tbody></table></div></div><div class="gap"></div>`;
 
-  const cur = all.find(a => a.sh.name === MTO_SHEET);
+  const cur = MTO_SHEET === '*' ? {all: true, sh: {name: 'ALL PACKAGES', items: [].concat(...linkedAll.map(a => a.sh.items)), notifs: [].concat(...linkedAll.map(a => a.sh.notifs))}, p: {name: linkedAll.length + ' packages'}, items: [].concat(...linkedAll.map(a => a.items)), lines: [].concat(...linkedAll.map(a => a.lines))}
+            : all.find(a => a.sh.name === MTO_SHEET);
   if(cur && cur.p){
     const c = mtoCounts(cur.lines);
     const F = {issues: l => l.st !== 'ok' && l.st !== 'zero' || l.weak, all: () => true, short: l => l.st === 'short', nobuy: l => l.st === 'nobuy', over: l => l.st === 'over', extra: l => l.st === 'extra', check: l => l.st === 'unit' || l.weak, ok: l => l.st === 'ok'};
     const order = {short: 0, nobuy: 1, unit: 2, over: 3, extra: 4, ok: 5, zero: 6};
     const lines = cur.lines.filter(F[MTO_FILTER] || F.issues).sort((a, b) => (order[a.st] - order[b.st]) || ((b.weak ? 1 : 0) - (a.weak ? 1 : 0)));
     const chip = (k, lbl, n) => `<button class="chip" data-mf="${k}" aria-pressed="${MTO_FILTER === k}">${lbl} ${n}</button>`;
-    const opts = (sel) => `<option value="">Auto match</option><option value="-"${sel === '-' ? ' selected' : ''}>— not bought —</option>${cur.items.map(it => { const k = mtoNorm(it.desc); return `<option value="${esc(k)}"${sel === k ? ' selected' : ''}>${esc(it.desc)} · ${mtoQ(it.qty)} ${esc(it.unit || '')}</option>`; }).join('')}`;
-    html += `<div class="box"><div class="box-h"><div><h3>${esc(cur.sh.name)} ↔ ${esc(cur.p.name)}</h3><p>${cur.sh.items.length} MTO lines · ${cur.items.length} purchase lines · ${cur.sh.notifs.length} notifications in the MTO</p></div>
+    const opts = (sel, items) => `<option value="">Auto match</option><option value="-"${sel === '-' ? ' selected' : ''}>— not bought —</option>${items.map(it => { const k = mtoNorm(it.desc); return `<option value="${esc(k)}"${sel === k ? ' selected' : ''}>${esc(it.desc)} · ${mtoQ(it.qty)} ${esc(it.unit || '')}</option>`; }).join('')}`;
+    html += `<div class="box"><div class="box-h"><div><h3>${cur.all ? 'All packages' : esc(cur.sh.name) + ' ↔ ' + esc(cur.p.name)}</h3><p>${cur.sh.items.length} MTO lines · ${cur.items.length} purchase lines · ${cur.sh.notifs.length} notifications in the MTO</p></div>
       <div class="chips">${chip('issues', 'Needs attention', cur.lines.filter(F.issues).length)}${chip('short', 'Short', c.short)}${chip('nobuy', 'Not bought', c.nobuy)}${chip('over', 'Over-bought', c.over)}${chip('extra', 'Not in MTO', c.extra)}${chip('check', 'Check', c.unit + c.weak)}${chip('ok', 'OK', c.ok)}${chip('all', 'All', cur.lines.length)}</div></div>
-      <div class="tw"><table class="grid mto-t"><thead><tr><th>Status</th><th>MTO item (survey)</th><th>Bought as (Materials)</th><th class="n">MTO qty</th><th class="n">Need to buy</th><th class="n">Ordered</th><th class="n">Received</th><th class="n">Diff</th><th>Notifications</th></tr></thead><tbody>
-      ${lines.map(l => { const s = MTO_ST[l.st], r0 = l.rows[0], editKey = r0 ? r0.x.key : '', sel = r0 && ((MTO.over || {})[cur.sh.name] || {})[editKey];
+      <div class="tw"><table class="grid mto-t"><thead><tr>${cur.all ? '<th>Package</th>' : ''}<th>Status</th><th>MTO item (survey)</th><th>Bought as (Materials)</th><th class="n">MTO qty</th><th class="n">Need to buy</th><th class="n">Ordered</th><th class="n">Received</th><th class="n">Diff</th><th>Notifications</th></tr></thead><tbody>
+      ${lines.map(l => { const s = MTO_ST[l.st], r0 = l.rows[0], editKey = r0 ? l.shName + '\u0001' + r0.x.key : '', sel = r0 && ((MTO.over || {})[l.shName] || {})[r0.x.key];
         const per = {}; l.rows.forEach(r => Object.entries(r.x.per || {}).forEach(([n, q]) => per[n] = (per[n] || 0) + q));
         const notifs = Object.entries(per).map(([n, q]) => { const f = mtoAifByNotif(n)[0]; return f ? `<button class="mto-n" data-aif='${esc(JSON.stringify([f.cat, f.view, f.uid]))}' title="${esc(clean(f.finding || f.desc))} · ${esc(f.status)}">${esc(n)} <b>${mtoQ(q)}</b></button>` : `<span class="mto-n off" title="Not found in AIF">${esc(n)} <b>${mtoQ(q)}</b></span>`; }).join('');
         const diff = l.st === 'extra' ? '+' + mtoQ(l.bought) : l.diff > 0 ? '+' + mtoQ(l.diff) : l.diff < 0 ? '−' + mtoQ(-l.diff) : '0';
-        return `<tr class="mto-${s[1]}"><td style="white-space:nowrap"><span class="mto-st ${s[1]}" title="${esc(s[2])}">${s[0]}</span>${l.weak ? `<div class="mto-weak" title="The descriptions only partly agree — check that this is the same item">? check match</div>` : ''}</td>
+        return `<tr class="mto-${s[1]}">${cur.all ? `<td style="white-space:nowrap"><button class="linkish" data-msh2="${esc(l.shName)}" title="Open this package">${esc(l.shName)}</button></td>` : ''}<td style="white-space:nowrap"><span class="mto-st ${s[1]}" title="${esc(s[2])}">${s[0]}</span>${l.weak ? `<div class="mto-weak" title="The descriptions only partly agree — check that this is the same item">? check match</div>` : ''}</td>
           <td style="min-width:220px">${l.rows.length ? l.rows.map(r => `<div>${esc(r.x.desc)}</div>`).join('') : '<span class="faint">—</span>'}</td>
           <td style="min-width:220px">${l.it ? esc(l.it.desc) : '<span class="faint">—</span>'}${l.note ? `<div class="faint" style="font-size:11.5px">${esc(l.note)}</div>` : ''}${l.note2 ? `<div style="font-size:11.5px;color:var(--warn)">${esc(l.note2)}</div>` : ''}
-            ${r0 ? (MTO_EDIT === editKey ? `<div><select class="mto-sel" data-mover="${esc(editKey)}" style="max-width:340px;margin-top:4px">${opts(sel)}</select></div>` : `<button class="mto-chg" data-medit="${esc(editKey)}">${sel !== undefined ? '✎ manual match · change' : '✎ change match'}</button>`) : ''}</td>
+            ${r0 ? (MTO_EDIT === editKey ? `<div><select class="mto-sel" data-mover="${esc(editKey)}" style="max-width:340px;margin-top:4px">${opts(sel, l.items)}</select></div>` : `<button class="mto-chg" data-medit="${esc(editKey)}">${sel !== undefined ? '✎ manual match · change' : '✎ change match'}</button>`) : ''}</td>
           <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.need) + ' <span class="faint">' + esc(l.rows[0] ? l.rows[0].x.unit : '') + '</span>'}</td>
           <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.needBuy) + ' <span class="faint">' + esc(l.unit || '') + '</span>'}</td>
           <td class="n">${l.kind === 'nobuy' ? '<span class="faint">0</span>' : mtoQ(l.bought)}</td><td class="n">${mtoQ(l.recv)}</td>
@@ -1439,11 +1446,13 @@ function mtoWire(el){
   const x = el.querySelector('#mtoXls'); if(x) x.onclick = mtoExport;
   el.querySelectorAll('tr[data-msh]').forEach(tr => tr.onclick = () => { MTO_SHEET = tr.dataset.msh; MTO_EDIT = null; renderMto(); });
   el.querySelectorAll('[data-mmap]').forEach(sel => sel.onchange = () => { MTO.map = MTO.map || {}; MTO.map[sel.dataset.mmap] = sel.value; MTO_DIRTY = true; mtoCache(); MTO_SHEET = sel.dataset.mmap; renderMto(); });
+  el.querySelectorAll('[data-msh2]').forEach(b => b.onclick = () => { MTO_SHEET = b.dataset.msh2; MTO_EDIT = null; renderMto(); window.scrollTo(0, 0); });
   el.querySelectorAll('[data-mf]').forEach(b => b.onclick = () => { MTO_FILTER = b.dataset.mf; renderMto(); });
   el.querySelectorAll('[data-medit]').forEach(b => b.onclick = () => { MTO_EDIT = b.dataset.medit; renderMto(); const s2 = el.querySelector('[data-mover]'); if(s2) s2.focus(); });
   el.querySelectorAll('[data-mover]').forEach(sel => sel.onchange = () => {
-    MTO.over = MTO.over || {}; const o = MTO.over[MTO_SHEET] = MTO.over[MTO_SHEET] || {};
-    if(sel.value === '') delete o[sel.dataset.mover]; else o[sel.dataset.mover] = sel.value;
+    const [shn, key] = sel.dataset.mover.split('\u0001');
+    MTO.over = MTO.over || {}; const o = MTO.over[shn] = MTO.over[shn] || {};
+    if(sel.value === '') delete o[key]; else o[key] = sel.value;
     MTO_EDIT = null; MTO_DIRTY = true; mtoCache(); renderMto();
   });
   el.querySelectorAll('[data-aif]').forEach(b => b.onclick = e => { e.stopPropagation(); openRecord('aif', ...JSON.parse(b.dataset.aif)); });
