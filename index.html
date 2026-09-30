@@ -207,6 +207,7 @@ table.mto-t tr.mto-bad td:first-child{box-shadow:inset 3px 0 0 var(--bad);} tabl
 .mto-n{font:inherit;font-size:11.5px;font-family:var(--mono,monospace);border:1px solid var(--border);background:var(--panel2);color:var(--text);border-radius:3px;padding:1px 6px;cursor:pointer;white-space:nowrap;}
 .mto-n:hover{border-color:var(--accent);color:var(--accent);}
 .mto-n.off{cursor:default;opacity:.6;}
+.mto-x{margin-top:5px;padding:4px 7px;border-left:3px solid var(--accent);background:var(--panel2);font-size:11.5px;line-height:1.45;}
 
 #freshBar{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:98;display:flex;align-items:center;gap:10px;max-width:min(680px,calc(100vw - 24px));padding:9px 10px 9px 14px;border-radius:6px;font-size:13px;line-height:1.4;background:var(--panel);color:var(--text);border:1px solid var(--info);box-shadow:0 6px 24px rgba(0,0,0,.35);}
 #freshBar.bad{border-color:var(--bad);}
@@ -1236,6 +1237,8 @@ function mtoFeat(desc){
   const mm = /\bM(\d{1,2})\b/.exec(s); if(mm && (f.type === 'MBOLT' || f.type === 'BOLT')) f.sizes = 'M' + mm[1];
   const th = /(\d+(?:\.\d+)?)\s*MM\s*THK/.exec(s); f.thk = th ? th[1] : '';
   f.face = /\bRTJ\b/.test(s) ? 'RTJ' : /\bRF\b/.test(s) ? 'RF' : '';
+  f.sub = f.type === 'GASKET' ? (/INSULAT/.test(s) ? 'INS' : /SPIRAL|\bSPW\b/.test(s) ? 'SPW' : /OVAL|OCTAGON|RING JOINT|\bR-?\d{2}\b/.test(s) ? 'RING' : '')
+        : (f.type === 'BOLT' ? (/A320|\bL7M?\b|-L7/.test(s) ? 'LT' : /A193|\bB7M?\b/.test(s) ? 'B7' : '') : '');
   s = s.replace(/\(6M\/LG\)|\(SUPPORT\)|\(6 ?M\)/g, ' ').replace(/A-?234\s*-?\s*WP-?B/g, 'A234WPB').replace(/A\s*-?\s*105\s*N?/g, m => /N/.test(m) ? 'A105N' : 'A105')
        .replace(/SCH\.?\s*/g, 'SCH').replace(/GR\.?\s*/g, 'GR').replace(/ASTM|ASME|B16\.\d+|B36\.10M?|C\/W|\bDEG\b|\bWITH\b|\bAND\b|\bTHK\.?|\bLG\b/g, ' ');
   f.tok = new Set(s.split(/[^A-Z0-9#\/.]+/).filter(x => x && x !== 'X' && x.length > 0));
@@ -1249,6 +1252,7 @@ function mtoScore(a, b){
   if(a.len && b.len && a.len !== b.len) return 0;
   if(a.thk && b.thk && a.thk !== b.thk) return 0;
   if(a.face && b.face && a.face !== b.face) return 0;
+  if(a.sub && b.sub && a.sub !== b.sub) return 0;
   let inter = 0; a.tok.forEach(t => { if(b.tok.has(t)) inter++; });
   const jac = inter / Math.max(1, a.tok.size + b.tok.size - inter);
   return 0.5 + jac / 2;           // passed every hard check → at least 0.5
@@ -1378,7 +1382,51 @@ function mtoLinesFor(sh){
 }
 const MTO_ST = {ok: ['OK', 'ok', 'Bought what the MTO needs'], over: ['Over-bought', 'warn', 'Ordered more than the MTO needs'], short: ['Short', 'bad', 'Ordered less than the MTO needs'],
   nobuy: ['Not bought', 'bad', 'In the MTO but no matching purchase line'], extra: ['Not in MTO', 'info', 'Bought, but no MTO line asks for it'], unit: ['Check unit', 'warn', 'Pipe ordered as “6 LG” — probably 6 m (one length). Check the unit.'], zero: ['0 in MTO', 'faint', 'MTO quantity is 0']};
-function mtoCounts(lines){ const c = {ok: 0, over: 0, short: 0, nobuy: 0, extra: 0, unit: 0, zero: 0, weak: 0}; lines.forEach(l => { c[l.st]++; if(l.weak) c.weak++; }); return c; }
+function mtoCounts(lines){ const c = {ok: 0, over: 0, short: 0, nobuy: 0, extra: 0, unit: 0, zero: 0, weak: 0, cross: 0}; lines.forEach(l => { c[l.st]++; if(l.weak) c.weak++; if(l.crossHit) c.cross++; }); return c; }
+/* Cross-package check: an item short / not bought here may have been bought under another package,
+   and a purchase with no MTO here may be what another package's MTO asks for. */
+function mtoCross(all){
+  const pk = DATA.mat.packages, feats = new Map();
+  DATA.mat.items.forEach(it => feats.set(it.id, mtoFeat(it.desc)));
+  const pkgName = id => (pk.find(p => p.id === id) || {}).name || '';
+  const spare = {};                                   // what each purchase line has left after its own package's MTO
+  all.forEach(a => a.lines.forEach(l => { if(l.it) spare[l.it.id] = l.st === 'extra' ? (+l.bought || 0) : l.st === 'over' ? l.diff : 0; }));
+  const lineOf = {}, mrows = [];
+  all.forEach(a => { if(!a.p) return; a.lines.forEach(l => l.rows.forEach(r => { lineOf[a.sh.name + '|' + r.x.key] = l; if(+r.x.sum) mrows.push({sheet: a.sh.name, r}); })); });
+  all.forEach(a => { if(!a.p) return; a.lines.forEach(l => {
+    l.cross = []; l.crossHit = false;
+    if((l.st === 'nobuy' || l.st === 'short') && l.rows[0]){
+      const f = l.rows[0].f;
+      DATA.mat.items.forEach(it => { if(it.pkgId === a.p.id || !(+it.qty) || mtoScore(f, feats.get(it.id)) < 0.5) return;
+        const sp = it.id in spare ? spare[it.id] : null;
+        l.cross.push({kind: 'bought', where: pkgName(it.pkgId), desc: it.desc, qty: +it.qty, unit: it.unit || '', spare: sp}); });
+    }
+    if((l.st === 'extra' || l.st === 'over') && l.it){
+      const f = feats.get(l.it.id) || mtoFeat(l.it.desc);
+      mrows.forEach(m => { if(m.sheet === a.sh.name || mtoScore(m.r.f, f) < 0.5) return;
+        const ol = lineOf[m.sheet + '|' + m.r.x.key];
+        if(l.st === 'over' && ol && ol.st !== 'nobuy' && ol.st !== 'short') return;          // only interesting if that package is still short
+        l.cross.push({kind: 'needed', where: m.sheet, desc: m.r.x.desc, qty: m.r.x.sum, unit: m.r.x.unit, st: ol ? ol.st : ''}); });
+    }
+    const need = c => c.st === 'nobuy' || c.st === 'short';
+    l.cross.sort((x, y) => (need(y) - need(x)) || ((y.spare === null || y.spare > 0) - (x.spare === null || x.spare > 0)));
+    l.crossHit = l.cross.some(c => (c.kind === 'needed' && need(c)) || (c.kind === 'bought' && (c.spare === null || c.spare > 0)));
+  }); });
+}
+function mtoCrossHtml(l){
+  if(!l.cross || !l.cross.length) return '';
+  return `<div class="mto-x">${l.cross.slice(0, 4).map(c => c.kind === 'bought'
+    ? `<div${c.spare === 0 ? ' class="faint"' : ''}>↔ Bought under <b>${esc(c.where)}</b>: ${mtoQ(c.qty)} ${esc(c.unit)}${c.spare === null ? ' <span class="faint">(no MTO for that package)</span>' : c.spare > 0 ? ` — <b>${mtoQ(c.spare)} more than its own MTO needs</b>` : ' <span class="faint">(all used by its own MTO)</span>'}</div>`
+    : `<div${c.st === 'nobuy' || c.st === 'short' ? '' : ' class="faint"'}>↔ Needed by MTO <b>${esc(c.where)}</b>: ${mtoQ(c.qty)} ${esc(c.unit)}${c.st === 'nobuy' ? ' — <b>not bought there</b>' : c.st === 'short' ? ' — <b>short there</b>' : ' (bought there already)'}</div>`).join('')}${l.cross.length > 4 ? `<div class="faint">+${l.cross.length - 4} more</div>` : ''}</div>`;
+}
+function mtoCrossTxt(l){ return (l.cross || []).map(c => c.kind === 'bought' ? `Bought under ${c.where}: ${c.qty} ${c.unit}` + (c.spare === null ? ' (no MTO there)' : c.spare > 0 ? ` (${c.spare} spare there)` : ' (used there)') : `Needed by MTO ${c.where}: ${c.qty} ${c.unit}` + (c.st === 'nobuy' ? ' (not bought there)' : c.st === 'short' ? ' (short there)' : '')).join(' | '); }
+/* the same AIF notification written in more than one MTO sheet = possible double MTO / double purchase */
+function mtoDupNotifs(){
+  const m = {};
+  MTO.sheets.forEach(sh => sh.items.forEach(x => Object.entries(x.per || {}).forEach(([lab, q]) => String(lab).split(/[^0-9]+/).filter(n => n.length >= 6).forEach(n => {
+    const e = m[n] = m[n] || {}; const s = e[sh.name] = e[sh.name] || {lines: 0, qty: 0}; s.lines++; s.qty += q; }))));
+  return Object.entries(m).filter(([, e]) => Object.keys(e).length > 1).map(([n, e]) => ({n, sheets: e})).sort((a, b) => a.n.localeCompare(b.n));
+}
 const mtoQ = v => v == null || v === '' ? '<span class="faint">—</span>' : (+(+v).toFixed(2)).toLocaleString();
 function mtoAifByNotif(label){
   const ns = String(label).split(/[^0-9]+/).filter(x => x.length >= 6);
@@ -1397,28 +1445,29 @@ function renderMto(){
   if(!MTO_SHEET || (MTO_SHEET !== '*' && !MTO.sheets.some(s => s.name === MTO_SHEET))) MTO_SHEET = '*';
   const linkedAll = all.filter(a => a.p);
   all.forEach(a => a.lines.forEach(l => { l.shName = a.sh.name; l.pkgName = a.p ? a.p.name : ''; l.items = a.items; }));
+  mtoCross(all);
   const tot = mtoCounts([].concat(...linkedAll.map(a => a.lines)));
   const src = `MTO file: <b>${esc(MTO.file || '—')}</b>${MTO.by ? ' · imported by ' + esc(MTO.by) : ''}${MTO.at ? ' · ' + esc(String(MTO.at).slice(0, 10)) : ''}${MTO_DIRTY ? ' · <span class="cache-note">not saved to the Sheet yet</span>' : ''}`;
   const cell = (n, cls) => `<td class="n"${n && cls ? ` style="color:var(--${cls});font-weight:700"` : ''}>${n || '<span class="faint">0</span>'}</td>`;
   let html = head + (MTO_ERR ? `<div class="note warn" style="margin-bottom:14px">${esc(MTO_ERR)}</div>` : '') + `<div class="box"><div class="box-h"><div><h3>Packages</h3><p>${src}</p></div></div>
-    <div class="tw"><table class="grid"><thead><tr><th>MTO sheet</th><th>Materials package</th><th class="n">MTO lines</th><th class="n">OK</th><th class="n">Short</th><th class="n">Not bought</th><th class="n">Over-bought</th><th class="n">Not in MTO</th><th class="n">Check</th></tr></thead><tbody>
+    <div class="tw"><table class="grid"><thead><tr><th>MTO sheet</th><th>Materials package</th><th class="n">MTO lines</th><th class="n">OK</th><th class="n">Short</th><th class="n">Not bought</th><th class="n">Over-bought</th><th class="n">Not in MTO</th><th class="n" title="Short / not bought here but bought under another package, or bought here but asked for by another package's MTO">Other pkg</th><th class="n">Check</th></tr></thead><tbody>
     ${all.map(a => { const c = mtoCounts(a.lines), on = a.sh.name === MTO_SHEET; return `<tr class="xrow${on ? ' mto-on' : ''}" data-msh="${esc(a.sh.name)}"><td style="white-space:nowrap"><b>${on ? '▸ ' : ''}${esc(a.sh.name)}</b>${a.sh.updateOn ? `<div class="faint" style="font-size:11.5px">update ${esc(a.sh.updateOn)}</div>` : ''}</td>
       <td><select class="mto-sel" data-mmap="${esc(a.sh.name)}" onclick="event.stopPropagation()"><option value="-"${!a.p ? ' selected' : ''}>— not linked —</option>${pk.map(p => `<option value="${esc(p.name)}"${a.p && a.p.id === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
-      <td class="n">${a.sh.items.length}</td>${a.p ? cell(c.ok, 'ok') + cell(c.short, 'bad') + cell(c.nobuy, 'bad') + cell(c.over, 'warn') + cell(c.extra, 'info') + cell(c.unit + c.weak, 'warn') : '<td colspan="6" class="faint">Pick the Materials package this MTO sheet belongs to.</td>'}</tr>`; }).join('')}
-    <tr class="xrow mto-all${MTO_SHEET === '*' ? ' mto-on' : ''}" data-msh="*"><td><b>${MTO_SHEET === '*' ? '▸ ' : ''}ALL PACKAGES</b><div class="faint" style="font-size:11.5px">one list for every linked package</div></td><td class="faint">${linkedAll.length} linked</td><td class="n"><b>${linkedAll.reduce((n, a) => n + a.sh.items.length, 0)}</b></td>${cell(tot.ok, 'ok') + cell(tot.short, 'bad') + cell(tot.nobuy, 'bad') + cell(tot.over, 'warn') + cell(tot.extra, 'info') + cell(tot.unit + tot.weak, 'warn')}</tr>
+      <td class="n">${a.sh.items.length}</td>${a.p ? cell(c.ok, 'ok') + cell(c.short, 'bad') + cell(c.nobuy, 'bad') + cell(c.over, 'warn') + cell(c.extra, 'info') + cell(c.cross, 'accent') + cell(c.unit + c.weak, 'warn') : '<td colspan="7" class="faint">Pick the Materials package this MTO sheet belongs to.</td>'}</tr>`; }).join('')}
+    <tr class="xrow mto-all${MTO_SHEET === '*' ? ' mto-on' : ''}" data-msh="*"><td><b>${MTO_SHEET === '*' ? '▸ ' : ''}ALL PACKAGES</b><div class="faint" style="font-size:11.5px">one list for every linked package</div></td><td class="faint">${linkedAll.length} linked</td><td class="n"><b>${linkedAll.reduce((n, a) => n + a.sh.items.length, 0)}</b></td>${cell(tot.ok, 'ok') + cell(tot.short, 'bad') + cell(tot.nobuy, 'bad') + cell(tot.over, 'warn') + cell(tot.extra, 'info') + cell(tot.cross, 'accent') + cell(tot.unit + tot.weak, 'warn')}</tr>
     </tbody></table></div></div><div class="gap"></div>`;
 
   const cur = MTO_SHEET === '*' ? {all: true, sh: {name: 'ALL PACKAGES', items: [].concat(...linkedAll.map(a => a.sh.items)), notifs: [].concat(...linkedAll.map(a => a.sh.notifs))}, p: {name: linkedAll.length + ' packages'}, items: [].concat(...linkedAll.map(a => a.items)), lines: [].concat(...linkedAll.map(a => a.lines))}
             : all.find(a => a.sh.name === MTO_SHEET);
   if(cur && cur.p){
     const c = mtoCounts(cur.lines);
-    const F = {issues: l => l.st !== 'ok' && l.st !== 'zero' || l.weak, all: () => true, short: l => l.st === 'short', nobuy: l => l.st === 'nobuy', over: l => l.st === 'over', extra: l => l.st === 'extra', check: l => l.st === 'unit' || l.weak, ok: l => l.st === 'ok'};
+    const F = {issues: l => l.st !== 'ok' && l.st !== 'zero' || l.weak, all: () => true, short: l => l.st === 'short', nobuy: l => l.st === 'nobuy', over: l => l.st === 'over', extra: l => l.st === 'extra', check: l => l.st === 'unit' || l.weak, ok: l => l.st === 'ok', cross: l => l.crossHit};
     const order = {short: 0, nobuy: 1, unit: 2, over: 3, extra: 4, ok: 5, zero: 6};
     const lines = cur.lines.filter(F[MTO_FILTER] || F.issues).sort((a, b) => (order[a.st] - order[b.st]) || ((b.weak ? 1 : 0) - (a.weak ? 1 : 0)));
     const chip = (k, lbl, n) => `<button class="chip" data-mf="${k}" aria-pressed="${MTO_FILTER === k}">${lbl} ${n}</button>`;
     const opts = (sel, items) => `<option value="">Auto match</option><option value="-"${sel === '-' ? ' selected' : ''}>— not bought —</option>${items.map(it => { const k = mtoNorm(it.desc); return `<option value="${esc(k)}"${sel === k ? ' selected' : ''}>${esc(it.desc)} · ${mtoQ(it.qty)} ${esc(it.unit || '')}</option>`; }).join('')}`;
     html += `<div class="box"><div class="box-h"><div><h3>${cur.all ? 'All packages' : esc(cur.sh.name) + ' ↔ ' + esc(cur.p.name)}</h3><p>${cur.sh.items.length} MTO lines · ${cur.items.length} purchase lines · ${cur.sh.notifs.length} notifications in the MTO</p></div>
-      <div class="chips">${chip('issues', 'Needs attention', cur.lines.filter(F.issues).length)}${chip('short', 'Short', c.short)}${chip('nobuy', 'Not bought', c.nobuy)}${chip('over', 'Over-bought', c.over)}${chip('extra', 'Not in MTO', c.extra)}${chip('check', 'Check', c.unit + c.weak)}${chip('ok', 'OK', c.ok)}${chip('all', 'All', cur.lines.length)}</div></div>
+      <div class="chips">${chip('issues', 'Needs attention', cur.lines.filter(F.issues).length)}${chip('short', 'Short', c.short)}${chip('nobuy', 'Not bought', c.nobuy)}${chip('over', 'Over-bought', c.over)}${chip('extra', 'Not in MTO', c.extra)}${chip('cross', '↔ Other package', c.cross)}${chip('check', 'Check', c.unit + c.weak)}${chip('ok', 'OK', c.ok)}${chip('all', 'All', cur.lines.length)}</div></div>
       <div class="tw"><table class="grid mto-t"><thead><tr>${cur.all ? '<th>Package</th>' : ''}<th>Status</th><th>MTO item (survey)</th><th>Bought as (Materials)</th><th class="n">MTO qty</th><th class="n">Need to buy</th><th class="n">Ordered</th><th class="n">Received</th><th class="n">Diff</th><th>Notifications</th></tr></thead><tbody>
       ${lines.map(l => { const s = MTO_ST[l.st], r0 = l.rows[0], editKey = r0 ? l.shName + '\u0001' + r0.x.key : '', sel = r0 && ((MTO.over || {})[l.shName] || {})[r0.x.key];
         const per = {}; l.rows.forEach(r => Object.entries(r.x.per || {}).forEach(([n, q]) => per[n] = (per[n] || 0) + q));
@@ -1426,7 +1475,7 @@ function renderMto(){
         const diff = l.st === 'extra' ? '+' + mtoQ(l.bought) : l.diff > 0 ? '+' + mtoQ(l.diff) : l.diff < 0 ? '−' + mtoQ(-l.diff) : '0';
         return `<tr class="mto-${s[1]}">${cur.all ? `<td style="white-space:nowrap"><button class="linkish" data-msh2="${esc(l.shName)}" title="Open this package">${esc(l.shName)}</button></td>` : ''}<td style="white-space:nowrap"><span class="mto-st ${s[1]}" title="${esc(s[2])}">${s[0]}</span>${l.weak ? `<div class="mto-weak" title="The descriptions only partly agree — check that this is the same item">? check match</div>` : ''}</td>
           <td style="min-width:220px">${l.rows.length ? l.rows.map(r => `<div>${esc(r.x.desc)}</div>`).join('') : '<span class="faint">—</span>'}</td>
-          <td style="min-width:220px">${l.it ? esc(l.it.desc) : '<span class="faint">—</span>'}${l.note ? `<div class="faint" style="font-size:11.5px">${esc(l.note)}</div>` : ''}${l.note2 ? `<div style="font-size:11.5px;color:var(--warn)">${esc(l.note2)}</div>` : ''}
+          <td style="min-width:220px">${l.it ? esc(l.it.desc) : '<span class="faint">—</span>'}${l.note ? `<div class="faint" style="font-size:11.5px">${esc(l.note)}</div>` : ''}${l.note2 ? `<div style="font-size:11.5px;color:var(--warn)">${esc(l.note2)}</div>` : ''}${mtoCrossHtml(l)}
             ${r0 ? (MTO_EDIT === editKey ? `<div><select class="mto-sel" data-mover="${esc(editKey)}" style="max-width:340px;margin-top:4px">${opts(sel, l.items)}</select></div>` : `<button class="mto-chg" data-medit="${esc(editKey)}">${sel !== undefined ? '✎ manual match · change' : '✎ change match'}</button>`) : ''}</td>
           <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.need) + ' <span class="faint">' + esc(l.rows[0] ? l.rows[0].x.unit : '') + '</span>'}</td>
           <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.needBuy) + ' <span class="faint">' + esc(l.unit || '') + '</span>'}</td>
@@ -1438,6 +1487,12 @@ function renderMto(){
   } else if(cur){
     html += `<div class="box"><div class="note">Link <b>${esc(cur.sh.name)}</b> to a Materials package in the table above to compare it.</div></div>`;
   }
+  const dups = mtoDupNotifs();
+  if(dups.length) html += `<div class="gap"></div><div class="box"><div class="box-h"><div><h3>Same notification in more than one MTO sheet</h3><p>${dups.length} notification${dups.length === 1 ? ' is' : 's are'} listed under two or more packages. Check the materials were not taken off (and bought) twice.</p></div></div>
+    <div class="tw"><table class="grid"><thead><tr><th>Notification</th><th>AIF finding</th><th>MTO sheets (lines · total qty)</th></tr></thead><tbody>
+    ${dups.map(d => { const f = mtoAifByNotif(d.n)[0]; return `<tr><td class="mono">${f ? `<button class="mto-n" data-aif='${esc(JSON.stringify([f.cat, f.view, f.uid]))}'>${esc(d.n)}</button>` : esc(d.n)}</td><td style="min-width:220px">${f ? esc(clean(f.finding || f.desc)) + ` <span class="faint">· ${esc(f.cat)} ${esc(f.view)} · ${esc(f.status)}</span>` : '<span class="faint">not in AIF</span>'}</td>
+      <td>${Object.entries(d.sheets).map(([sn, v]) => `<button class="mto-n" data-msh2="${esc(sn)}">${esc(sn)} <b>${v.lines} · ${mtoQ(v.qty)}</b></button>`).join(' ')}</td></tr>`; }).join('')}
+    </tbody></table></div></div>`;
   el.innerHTML = html; mtoWire(el);
 }
 function mtoWire(el){
@@ -1460,16 +1515,20 @@ function mtoWire(el){
 window.__HUB.mtoState = () => ({MTO, MTO_DIRTY, MTO_ERR, mat: DATA.mat ? {packages: DATA.mat.packages.length, items: DATA.mat.items.length} : null});
 async function mtoExport(){
   let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
-  const wb = X.utils.book_new(), sum = [['MTO sheet', 'Materials package', 'MTO lines', 'OK', 'Short', 'Not bought', 'Over-bought', 'Not in MTO', 'Check unit', 'Check match']];
-  MTO.sheets.forEach(sh => {
-    const a = mtoLinesFor(sh); if(!a.p){ sum.push([sh.name, '(not linked)', sh.items.length]); return; }
-    const c = mtoCounts(a.lines); sum.push([sh.name, a.p.name, sh.items.length, c.ok, c.short, c.nobuy, c.over, c.extra, c.unit, c.weak]);
-    const rows = [['Status', 'MTO item', 'MTO unit', 'MTO qty', 'Bought as', 'Need to buy', 'Unit', 'Ordered', 'Received', 'Diff', 'Note', 'Notifications (qty)']];
+  const all = MTO.sheets.map(sh => Object.assign({sh}, mtoLinesFor(sh))); mtoCross(all);
+  const wb = X.utils.book_new(), sum = [['MTO sheet', 'Materials package', 'MTO lines', 'OK', 'Short', 'Not bought', 'Over-bought', 'Not in MTO', 'Other package', 'Check unit', 'Check match']];
+  all.forEach(a => { const sh = a.sh;
+    if(!a.p){ sum.push([sh.name, '(not linked)', sh.items.length]); return; }
+    const c = mtoCounts(a.lines); sum.push([sh.name, a.p.name, sh.items.length, c.ok, c.short, c.nobuy, c.over, c.extra, c.cross, c.unit, c.weak]);
+    const rows = [['Status', 'MTO item', 'MTO unit', 'MTO qty', 'Bought as', 'Need to buy', 'Unit', 'Ordered', 'Received', 'Diff', 'Note', 'Other package', 'Notifications (qty)']];
     a.lines.forEach(l => { const per = {}; l.rows.forEach(r => Object.entries(r.x.per || {}).forEach(([n, q]) => per[n] = (per[n] || 0) + q));
-      rows.push([MTO_ST[l.st][0] + (l.weak ? ' (check match)' : ''), l.rows.map(r => r.x.desc).join(' + '), l.rows[0] ? l.rows[0].x.unit : '', l.kind === 'extra' ? '' : l.need, l.it ? l.it.desc : '', l.kind === 'extra' ? '' : l.needBuy, l.unit || '', l.bought == null ? '' : l.bought, l.recv == null ? '' : l.recv, l.st === 'unit' ? '' : (l.st === 'extra' ? l.bought : l.diff), [l.note, l.note2].filter(Boolean).join(' · '), Object.entries(per).map(([n, q]) => n + ' (' + q + ')').join(', ')]); });
-    const ws = X.utils.aoa_to_sheet(rows); ws['!cols'] = [{wch: 14}, {wch: 60}, {wch: 7}, {wch: 8}, {wch: 60}, {wch: 10}, {wch: 6}, {wch: 8}, {wch: 8}, {wch: 7}, {wch: 26}, {wch: 50}];
+      rows.push([MTO_ST[l.st][0] + (l.weak ? ' (check match)' : ''), l.rows.map(r => r.x.desc).join(' + '), l.rows[0] ? l.rows[0].x.unit : '', l.kind === 'extra' ? '' : l.need, l.it ? l.it.desc : '', l.kind === 'extra' ? '' : l.needBuy, l.unit || '', l.bought == null ? '' : l.bought, l.recv == null ? '' : l.recv, l.st === 'unit' ? '' : (l.st === 'extra' ? l.bought : l.diff), [l.note, l.note2].filter(Boolean).join(' · '), mtoCrossTxt(l), Object.entries(per).map(([n, q]) => n + ' (' + q + ')').join(', ')]); });
+    const ws = X.utils.aoa_to_sheet(rows); ws['!cols'] = [{wch: 14}, {wch: 60}, {wch: 7}, {wch: 8}, {wch: 60}, {wch: 10}, {wch: 6}, {wch: 8}, {wch: 8}, {wch: 7}, {wch: 26}, {wch: 50}, {wch: 50}];
     X.utils.book_append_sheet(wb, ws, sh.name.slice(0, 31));
   });
+  const dups = mtoDupNotifs();
+  if(dups.length){ const dr = [['Notification', 'AIF finding', 'MTO sheets (lines, total qty)']]; dups.forEach(d => { const f = mtoAifByNotif(d.n)[0]; dr.push([d.n, f ? clean(f.finding || f.desc) : '', Object.entries(d.sheets).map(([sn, v]) => `${sn} (${v.lines} lines, ${v.qty})`).join('; ')]); });
+    const wd = X.utils.aoa_to_sheet(dr); wd['!cols'] = [{wch: 14}, {wch: 60}, {wch: 70}]; X.utils.book_append_sheet(wb, wd, 'Same notif 2+ MTO'); }
   const ws0 = X.utils.aoa_to_sheet(sum); ws0['!cols'] = [{wch: 20}, {wch: 22}, {wch: 9}, {wch: 6}, {wch: 7}, {wch: 10}, {wch: 11}, {wch: 10}, {wch: 10}, {wch: 11}];
   wb.SheetNames.unshift('Summary'); wb.Sheets.Summary = ws0;
   X.writeFile(wb, `MTO_vs_Materials_${stamp8()}.xlsx`); toast('Comparison downloaded ✓');
