@@ -216,6 +216,7 @@ button.rd-tile{cursor:pointer;} button.rd-tile:hover{border-color:var(--accent);
 .rd-tile.ok{border-left-color:var(--ok);} .rd-tile.ok b{color:var(--ok);} .rd-tile.bad{border-left-color:var(--bad);} .rd-tile.bad b{color:var(--bad);}
 .rd-tile.warn{border-left-color:var(--warn);} .rd-tile.warn b{color:var(--warn);} .rd-tile.info{border-left-color:var(--info);} .rd-tile.info b{color:var(--info);}
 .rd-tile.acc{border-left-color:var(--accent);} .rd-tile.acc b{color:var(--accent);} .rd-tile.faint b{color:var(--text-faint);}
+.rd-fr th{padding:4px 6px!important;background:var(--panel2,var(--panel));position:static;} .rd-q{width:100%;min-width:70px;font:inherit;font-size:12px;font-weight:400;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);text-transform:none;letter-spacing:0;} .rd-q[data-on]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);} .rd-qbar{padding:8px 14px;font-size:12.5px;color:var(--text-dim);border-top:1px solid var(--border);}
 .rd-stg{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 5px;margin-right:3px;border-radius:3px;border:1px solid var(--border);color:var(--text-faint);}
 .rd-stg.ok{background:var(--ok);border-color:var(--ok);color:#fff;}
 .rd-lines{padding:8px 14px 10px 34px;font-size:12.5px;line-height:1.6;}
@@ -1895,6 +1896,38 @@ function overdueCause(r, rd){
   if(rd.k === 'unknown') return 'nodata';
   return 'execution';
 }
+function stageList(r){
+  const w = r.raw || {}, v = x => { x = String(x || '').replace(/\s+/g, ' ').trim(); return x ? '“' + x + '”' : '(blank)'; };
+  const toNA = /^(N\/?A|NIL|-)$/i.test(String(w.takeOff || '').trim());
+  return [['Survey', r.surveyDone, 'SURVEY ' + v(w.survey)], w.takeOff == null ? null : ['MTO', r.takeOffDone || toNA, 'MATERIAL TAKE OFF ' + v(w.takeOff)], ['MRIR', r.mtoDone || !r.needsMTO, 'MRIR ' + v(w.mrir)], r.needsFabrication ? ['Fab', r.fabricationDone, 'FABRICATION ' + v(w.fab) + ' · remarks ' + v(w.fabRem)] : null, ['Exe', r.executionDone, 'EXECUTION ' + v(w.exe)], ['Scan', r.scanDone, 'SCAN ' + v(w.scan)]].filter(Boolean);
+}
+/* ---- column filters for the Work Readiness tables ---- */
+let RDQ = {notif: '', find: '', pri: '', due: '', stg: '', mat: '', mto: ''};
+function rdQApply(list, skip){
+  const q = RDQ, T = dayN(todayISO()), low = x => String(x || '').toLowerCase();
+  return list.filter(x => { const r = x.r;
+    if(q.notif && !low(r.notif || r.report).includes(low(q.notif).trim())) return false;
+    if(q.find && !low([r.finding, r.desc, r.equip, r.module, r.packageTag, r.view].join(' ')).includes(low(q.find).trim())) return false;
+    if(q.pri && String(prioN(r.priority)) !== q.pri) return false;
+    if(q.due){ const d = dayN(r.due); if(q.due === 'none' ? d !== null : d === null || (q.due === 'late' ? !(d < T) : q.due === '30' ? !(d >= T && d - T <= 30) : !(d - T > 30))) return false; }
+    if(q.stg){ const [n, ok] = q.stg.split(':'), st = stageList(r).find(s => s[0] === n); if(!st || (!!st[1]) !== (ok === '1')) return false; }
+    if(q.mat && skip !== 'mat' && rdLab(x.rd)[0] !== q.mat) return false;
+    if(q.mto){ const t = x.rd.tot || 0, rc = x.rd.rec || 0; if(q.mto === 'none' ? t > 0 : !t || (q.mto === 'full' ? rc < t : q.mto === 'part' ? !(rc > 0 && rc < t) : rc > 0)) return false; }
+    return true; });
+}
+function rdQRow(base, cols){
+  const q = RDQ, sel = (k, opts) => `<select class="rd-q" data-rdq="${k}"${q[k] ? ' data-on="1"' : ''}><option value="">All</option>${opts.map(([v, l]) => `<option value="${esc(v)}"${q[k] === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  const txt = (k, ph) => `<input class="rd-q" type="search" data-rdq="${k}" placeholder="${ph}" value="${esc(q[k])}"${q[k] ? ' data-on="1"' : ''}>`;
+  const pris = [...new Set(base.map(x => prioN(x.r.priority)))].filter(p => p < 9).sort();
+  const stg = []; ['Survey', 'MTO', 'MRIR', 'Fab', 'Exe', 'Scan'].forEach(n => { if(base.some(x => stageList(x.r).some(s => s[0] === n))) stg.push([n + ':0', n + ' ✗ not done'], [n + ':1', n + ' ✓ done']); });
+  const mats = {}; rdQApply(base, 'mat').forEach(x => { const l = rdLab(x.rd)[0]; mats[l] = (mats[l] || 0) + 1; });
+  const cell = {why: '<th></th>', notif: `<th>${txt('notif', 'Search…')}</th>`, find: `<th>${txt('find', 'Search finding / area…')}</th>`,
+    pri: `<th>${sel('pri', pris.map(p => [String(p), 'P' + p]))}</th>`, due: `<th>${sel('due', [['late', 'Overdue'], ['30', 'Due ≤ 30 days'], ['later', 'Due later'], ['none', 'No due date']])}</th>`,
+    stg: `<th>${sel('stg', stg)}</th>`, mat: `<th>${sel('mat', Object.entries(mats).sort((a, b) => b[1] - a[1]).map(([l, n]) => [l, l + ' (' + n + ')']))}</th>`,
+    mto: `<th>${sel('mto', [['full', 'All received'], ['part', 'Partly received'], ['zero', 'None received'], ['none', 'No MTO lines']])}</th>`};
+  return `<tr class="rd-fr">${cols.map(c => cell[c]).join('')}</tr>`;
+}
+function rdQBar(n, of){ const on = Object.values(RDQ).some(Boolean); return on ? `<div class="rd-qbar">Showing <b>${n}</b> of ${of} · <button class="linkish" data-rdqclear>✕ Clear column filters</button></div>` : ''; }
 function stageTxt(r){
   const w = r.raw || {}, v = x => { x = String(x || '').replace(/\s+/g, ' ').trim(); return x ? '“' + x + '”' : '(blank)'; };
   const toNA = /^(N\/?A|NIL|-)$/i.test(String(w.takeOff || '').trim());
@@ -1949,27 +1982,28 @@ function renderReadiness(){
   if(RD_TAB === 'ready'){
     const K = ['ready', 'surplus', 'waiting', 'blocked', 'eta_ok', 'eta_no', 'none', 'pre', 'unknown'], cnt = {}; K.forEach(k => cnt[k] = rows.filter(x => x.rd.k === k).length);
     const notDone = rows.filter(x => !x.r.executionDone);
-    const list = notDone.filter(x => RD_F === 'all' || x.rd.k === RD_F || (RD_F === 'go' && (x.rd.k === 'ready' || x.rd.k === 'eta_ok' || x.rd.k === 'none')))
+    let list = notDone.filter(x => RD_F === 'all' || x.rd.k === RD_F || (RD_F === 'go' && (x.rd.k === 'ready' || x.rd.k === 'eta_ok' || x.rd.k === 'none')))
       .sort((a, b) => prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 1e9) - (dayN(b.r.due) ?? 1e9));
+    const base = list; list = rdQApply(base);
     const goN = notDone.filter(x => ['ready', 'eta_ok', 'none'].includes(x.rd.k)).length;
     const tile = (k, n, lbl, cls, sub) => `<button class="rd-tile ${cls}${RD_F === k ? ' on' : ''}" data-rdf="${k}"><b>${n}</b><span>${lbl}</span>${sub ? `<em>${sub}</em>` : ''}</button>`;
-    html += `<div class="head"><div><h2>Material Readiness${scope ? ' — ' + esc(scope) : ''}</h2><p>Every open AIF finding that is not executed yet, checked against the survey MTO (items listed for its notification number) and what Materials says was received. Use it to pick next week's work: <b>ready to execute</b> first, then chase the rest.</p></div></div>${noMto}
+    html += `<div class="head"><div><h2>Material Readiness${scope ? ' — ' + esc(scope) : ''}</h2></div></div>${noMto}
       <div class="rd-tiles">${tile('go', goN, 'Ready to execute', 'ok', 'material in hand or not needed')}${tile('waiting', notDone.filter(x => x.rd.k === 'waiting').length, 'Waiting delivery', 'info', 'ordered, not all arrived')}${tile('surplus', notDone.filter(x => x.rd.k === 'surplus').length, STAFF ? 'Surplus to issue' : 'Material being arranged', 'acc', STAFF ? 'no PO / not bought — stock available in another package' : 'from existing stock')}${tile('blocked', notDone.filter(x => x.rd.k === 'blocked').length, STAFF ? 'Blocked' : 'Material not ready', 'bad', STAFF ? 'MTO item not bought / short' : 'still being procured')}${tile('eta_no', notDone.filter(x => x.rd.k === 'eta_no').length, 'ETA not ready', 'warn', 'no MTO — going by ETA')}${tile('pre', notDone.filter(x => x.rd.k === 'pre').length, STAFF ? 'Before material' : 'Preparation', 'info', 'survey / drawing approval / MTO not done, or on hold')}${tile('unknown', notDone.filter(x => x.rd.k === 'unknown').length, 'Unknown', 'faint', 'no MTO, no ETA')}${tile('all', notDone.length, 'All open', '', 'not executed yet')}</div>
-      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th><th class="n">MTO lines received</th></tr></thead><tbody>
+      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th><th class="n">MTO lines received</th></tr>${rdQRow(base, ['notif', 'find', 'pri', 'due', 'stg', 'mat', 'mto'])}</thead><tbody>
       ${list.map(x => { const r = x.r, open = RD_OPEN.has(r.uid), R = rdLab(x.rd); return `<tr class="xrow" data-rdo="${esc(r.uid)}"><td style="white-space:nowrap">${open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div></td>
         <td style="min-width:260px">${esc(clean(r.finding || r.desc).slice(0, 160))}<div class="faint" style="font-size:11.5px">${esc([r.equip, r.module, r.packageTag].filter(v => !blank(v)).join(' · '))}</div></td>
         <td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
         <td style="white-space:nowrap"><span class="mto-st ${R[1]}">${R[0]}</span></td><td class="n">${x.rd.tot ? `${x.rd.rec} / ${x.rd.tot}` : '<span class="faint">—</span>'}</td></tr>
         ${open ? `<tr class="detail"><td colspan="7">${lineList(x)}</td></tr>` : ''}`; }).join('')}
-      </tbody></table></div>${!list.length ? '<div class="note">No finding in this group.</div>' : ''}
+      </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No finding in this group' + (Object.values(RDQ).some(Boolean) ? ' with these column filters' : '') + '.</div>' : ''}
       <div class="more">Click a row to see its MTO items. “Received” counts stock received for that package line (and surplus issued to it); if a package line is short, every finding that uses it shows as blocked until it is sorted.</div></div>`;
   } else {
     const od = rows.filter(x => x.cause);
     const keys = Object.keys(OC), cnt = {}; keys.forEach(k => cnt[k] = od.filter(x => x.cause === k).length);
     const byP = {}; od.forEach(x => { const p = 'P' + (prioN(x.r.priority) < 9 ? prioN(x.r.priority) : '?'); (byP[p] = byP[p] || {}); byP[p][x.cause] = (byP[p][x.cause] || 0) + 1; });
-    const list = od.filter(x => OC_F === 'all' || x.cause === OC_F).sort((a, b) => keys.indexOf(a.cause) - keys.indexOf(b.cause) || prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 0) - (dayN(b.r.due) ?? 0));
+    const base = od.filter(x => OC_F === 'all' || x.cause === OC_F).sort((a, b) => keys.indexOf(a.cause) - keys.indexOf(b.cause) || prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 0) - (dayN(b.r.due) ?? 0)), list = rdQApply(base);
     const max = Math.max(1, ...keys.map(k => cnt[k]));
-    html += `<div class="head"><div><h2>Overdue Analysis${scope ? ' — ' + esc(scope) : ''}</h2><p>${od.length} open AIF finding${od.length === 1 ? ' is' : 's are'} overdue. Each is put in one group by what is holding it — material, fabrication, or the work itself — so the follow-up goes to the right people.</p></div></div>${noMto}
+    html += `<div class="head"><div><h2>Overdue Analysis${scope ? ' — ' + esc(scope) : ''}</h2><p>${od.length} open AIF finding${od.length === 1 ? ' is' : 's are'} overdue.</p></div></div>${noMto}
       <div class="box"><div class="oc-bars">${keys.filter(k => cnt[k]).map(k => `<button class="oc-bar${OC_F === k ? ' on' : ''}" data-ocf="${k}" title="${esc(OCL()[k][2])}"><span class="oc-l">${OCL()[k][0]}</span><span class="oc-t"><span class="oc-f ${OCL()[k][1]}" style="width:${cnt[k] / max * 100}%"></span></span><b>${cnt[k]}</b></button>`).join('')}
         <button class="oc-bar${OC_F === 'all' ? ' on' : ''}" data-ocf="all"><span class="oc-l"><b>All overdue</b></span><span class="oc-t"></span><b>${od.length}</b></button></div>
         <div class="tw"><table class="grid"><thead><tr><th>Priority</th>${keys.filter(k => cnt[k]).map(k => `<th class="n" title="${esc(OCL()[k][0])}">${esc(OCL()[k][0].split(' — ')[0].replace('Material ready', 'Ready, not executed'))}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
@@ -1977,12 +2011,12 @@ function renderReadiness(){
         </tbody></table></div>${RD_AREA === 'all' && areasP.length > 1 ? (() => { const byL = {}; od.forEach(x => { const a = areaOf(x.r.view); (byL[a] = byL[a] || {}); byL[a][x.cause] = (byL[a][x.cause] || 0) + 1; });
         return `<div class="tw" style="border-top:1px solid var(--border)"><table class="grid"><thead><tr><th>Location</th>${keys.filter(k => cnt[k]).map(k => `<th class="n" title="${esc(OCL()[k][0])}">${esc(OCL()[k][0].split(' — ')[0].replace('Material ready', 'Ready, not executed'))}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
         ${areasP.filter(a => byL[a]).map(a => `<tr><td><button class="linkish" data-rda="${esc(a)}"><b>${esc(a)}</b></button></td>${keys.filter(k => cnt[k]).map(k => `<td class="n">${byL[a][k] || '<span class="faint">0</span>'}</td>`).join('')}<td class="n"><b>${Object.values(byL[a]).reduce((q, n) => q + n, 0)}</b></td></tr>`).join('')}</tbody></table></div>`; })() : ''}</div><div class="gap"></div>
-      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Why</th><th>Notification</th><th>Finding</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th></tr></thead><tbody>
+      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Why</th><th>Notification</th><th>Finding</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th></tr>${rdQRow(base, ['why', 'notif', 'find', 'pri', 'due', 'stg', 'mat'])}</thead><tbody>
       ${list.map(x => { const r = x.r, open = RD_OPEN.has(r.uid), R = rdLab(x.rd), C = OCL()[x.cause]; return `<tr class="xrow" data-rdo="${esc(r.uid)}"><td style="white-space:nowrap"><span class="mto-st ${C[1]}" title="${esc(C[2])}">${C[0]}</span></td><td style="white-space:nowrap">${open ? '▾ ' : '▸ '}${aifBtn(r)}</td>
         <td style="min-width:240px">${esc(clean(r.finding || r.desc).slice(0, 150))}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div></td><td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
         <td style="white-space:nowrap"><span class="mto-st ${R[1]}">${R[0]}</span>${x.rd.tot ? ` <span class="faint">${x.rd.rec}/${x.rd.tot}</span>` : ''}</td></tr>
         ${open ? `<tr class="detail"><td colspan="7">${lineList(x)}</td></tr>` : ''}`; }).join('')}
-      </tbody></table></div>${!list.length ? '<div class="note">No overdue finding in this group.</div>' : ''}</div>`;
+      </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No overdue finding in this group.</div>' : ''}</div>`;
   }
   el.innerHTML = html; rdWire(el);
 }
@@ -1993,6 +2027,11 @@ function rdWire(el){
   el.querySelectorAll('[data-rdb]').forEach(b => b.onclick = () => { RD_BATCH = b.dataset.rdb; renderReadiness(); });
   el.querySelectorAll('[data-rdf]').forEach(b => b.onclick = () => { RD_F = b.dataset.rdf; renderReadiness(); });
   el.querySelectorAll('[data-ocf]').forEach(b => b.onclick = () => { OC_F = b.dataset.ocf; renderReadiness(); });
+  el.querySelectorAll('select[data-rdq]').forEach(s => s.onchange = () => { RDQ[s.dataset.rdq] = s.value; renderReadiness(); });
+  el.querySelectorAll('input[data-rdq]').forEach(i => i.oninput = () => { RDQ[i.dataset.rdq] = i.value; clearTimeout(rdWire.t); rdWire.t = setTimeout(() => { const k = i.dataset.rdq, pos = i.selectionStart; renderReadiness();
+    const n = $('#rdy').querySelector(`input[data-rdq="${k}"]`); if(n){ n.focus(); try{ n.setSelectionRange(pos, pos); }catch(e){} } }, 250); });
+  el.querySelectorAll('[data-rdqclear]').forEach(b => b.onclick = () => { Object.keys(RDQ).forEach(k => RDQ[k] = ''); renderReadiness(); });
+  el.querySelectorAll('.rd-fr').forEach(tr => tr.onclick = e => e.stopPropagation());
   el.querySelectorAll('tr[data-rdo]').forEach(tr => tr.onclick = () => { const k = tr.dataset.rdo; RD_OPEN.has(k) ? RD_OPEN.delete(k) : RD_OPEN.add(k); renderReadiness(); });
   el.querySelectorAll('[data-aif]').forEach(b => b.onclick = e => { e.stopPropagation(); openRecord('aif', ...JSON.parse(b.dataset.aif)); });
 }
