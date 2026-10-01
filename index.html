@@ -1362,6 +1362,7 @@ const MTO_TYPES = [['U-BOLT','UBOLT'],['UBOLT','UBOLT'],['NU-BOLT','UBOLT'],['ST
   ['ELBOW','ELBOW'],['REDUCER TEE','RTEE'],['TEE REDUCER','RTEE'],['TEE','TEE'],['REDUCER','REDUCER'],['SWAGE','REDUCER'],['CAP','CAP'],['PLUG','PLUG'],['COUPLING','COUPLING'],['UNION','UNION'],['NIPPLE','NIPPLE'],
   ['FLANGE','FLANGE'],['PIPE','PIPE'],['TUBE','TUBE'],['FLAT BAR','FLATBAR'],['ANGLE','ANGLE'],['CHANNEL','CHANNEL'],['BEAM','BEAM'],['PLATE','PLATE'],['SHEET','SHEET'],
   ['TAPE','TAPE'],['CHAIN','CHAIN'],['BRACKET','BRACKET'],['NOZZLE','NOZZLE'],['CLAMP','CLAMP'],['PAINT','PAINT']];
+const MTO_LOOSE_SIZE = {'': 1, NOZZLE: 1, TAPE: 1, CHAIN: 1, BRACKET: 1, CLAMP: 1, PAINT: 1};
 const MTO_LEN_TYPES = {PIPE:1, TUBE:1, FLATBAR:1, ANGLE:1, CHANNEL:1, BEAM:1};
 function mtoNorm(s){ return String(s == null ? '' : s).toUpperCase().replace(/\s+/g, ' ').trim(); }
 function mtoFeat(desc){
@@ -1389,7 +1390,8 @@ function mtoFeat(desc){
 }
 function mtoScore(a, b){
   if(a.type !== b.type) return 0;
-  if(a.sizes !== b.sizes) return 0;
+  const halfSize = a.sizes !== b.sizes;            // one description gives a size, the other none (e.g. 'SPRINKLER NOZZLE' vs '… - 1" NPT')
+  if(halfSize && (a.sizes && b.sizes || !MTO_LOOSE_SIZE[a.type || ''])) return 0;   // only accessories (nozzle, tape, clamp…) — pipe, flange, valve… must agree on size
   if(a.rating && b.rating && a.rating !== b.rating) return 0;
   if(a.sch && b.sch && a.sch !== b.sch) return 0;
   if(a.len && b.len && a.len !== b.len) return 0;
@@ -1398,6 +1400,7 @@ function mtoScore(a, b){
   if(a.sub && b.sub && a.sub !== b.sub) return 0;
   let inter = 0; a.tok.forEach(t => { if(b.tok.has(t)) inter++; });
   const jac = inter / Math.max(1, a.tok.size + b.tok.size - inter);
+  if(halfSize) return jac >= 0.6 ? 0.7 : 0;   // only when the rest of the words agree well — shown as “check match”
   return 0.5 + jac / 2;           // passed every hard check → at least 0.5
 }
 function mtoIsLen(unit, f){ return /^(M|MTR|METER|METRE|LG|LENGTH)$/.test(mtoNorm(unit)) && MTO_LEN_TYPES[f.type]; }
@@ -1574,7 +1577,7 @@ function mtoCross(all){
       const f = l.rows[0].f;
       DATA.mat.items.forEach(it => { if(it.pkgId === a.p.id || !(+it.qty) || mtoScore(f, feats.get(it.id)) < 0.5) return;
         const sp = it.id in spare ? spare[it.id] : null;
-        l.cross.push({kind: 'bought', where: pkgName(it.pkgId), desc: it.desc, qty: +it.qty, unit: it.unit || '', qtyTxt: qtyTxt[it.id] || '', spare: sp, spareU: spareU[it.id] || ''}); });
+        l.cross.push({kind: 'bought', where: pkgName(it.pkgId), desc: it.desc, qty: +it.qty, unit: it.unit || '', recv: +it.received || 0, po: clean(it.poNo), qtyTxt: qtyTxt[it.id] || '', spare: sp, spareU: spareU[it.id] || ''}); });
     }
     if(l.it && (l.st === 'extra' || l.st === 'over' || (spareU[l.it.id] === 'm' && spare[l.it.id] > 0))){
       const f = feats.get(l.it.id) || mtoFeat(l.it.desc);
@@ -1818,6 +1821,7 @@ function mtoLineState(l){
 }
 function readinessMap(){
   const all = mtoAll(), m = {};
+  if(all) mtoCross(all);
   // not bought / short lines that leftover stock in another package can cover (greedy — each piece of stock is offered once)
   const spMap = new Map();
   if(all){ const pool = mtoSurplusPool(all), needs = mtoSurplusNeeds(all, pool), left = new Map(pool.map(p => [p, p.avail]));
@@ -1988,7 +1992,7 @@ function renderReadiness(){
   const aifBtn = r => `<button class="linkish mono" data-aif='${esc(JSON.stringify([r.cat, r.view, r.uid]))}'>${esc(r.notif || r.report || '—')}</button>`;
   const due = r => { const d = dayN(r.due), t = dayN(todayISO()); if(d === null) return '<span class="faint">—</span>'; const late = t - d; return `<span${late > 0 ? ' style="color:var(--bad);font-weight:600"' : ''}>${fmtD(r.due)}${late > 0 ? ` · ${late}d late` : ''}</span>`; };
   const LO = {missing: 0, spavail: 1, surplus: 2, ordered: 3, received: 4, remark: 5};
-  const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc((STAFF ? {received: 'Received', ordered: 'Ordered', surplus: 'From surplus', missing: 'Not bought / short', spavail: 'Not bought — surplus available', remark: 'Available (by remark)'} : {received: 'Received', ordered: 'On order', surplus: 'Being arranged', missing: 'Not yet available', spavail: 'Being arranged', remark: 'Available'})[m.st])}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)} <span class="faint">(${esc(m.sheet)}${STAFF && m.rem ? ' · remark: ' + esc(m.rem) : ''}${STAFF && m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span>${STAFF && m.sp ? `<div class="rd-sp">♻ Use surplus: ${m.sp.map(x => `<b>${mtoQ(x.q)} ${esc(x.unit)}</b> from ${esc(x.sheet)} <span class="faint">(${esc(x.desc)})</span>`).join(' + ')}${Math.abs(m.sp.reduce((t, x) => t + x.q, 0) - (+m.qty || 0)) > 0.01 ? ' <span class="faint">· total for this MTO line (all its notifications)</span>' : ''} <span class="faint">· issue it in Procurement → Material Reconciliation → Surplus</span></div>` : ''}</div>`).join('')}</div>`
+  const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc((STAFF ? {received: 'Received', ordered: 'Ordered', surplus: 'From surplus', missing: 'Not bought / short', spavail: 'Not bought — surplus available', remark: 'Available (by remark)'} : {received: 'Received', ordered: 'On order', surplus: 'Being arranged', missing: 'Not yet available', spavail: 'Being arranged', remark: 'Available'})[m.st])}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)} <span class="faint">(${esc(m.sheet)}${STAFF && m.rem ? ' · remark: ' + esc(m.rem) : ''}${STAFF && m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span>${STAFF && m.st === 'missing' && (m.l.cross || []).some(c => c.kind === 'bought') ? `<div class="rd-sp" style="color:var(--warn)">↔ ${(m.l.cross || []).filter(c => c.kind === 'bought').slice(0, 3).map(c => `Bought under <b>${esc(c.where)}</b>: ${c.qtyTxt ? esc(c.qtyTxt) : mtoQ(c.qty) + ' ' + esc(c.unit)} <span class="faint">(${esc(c.desc)}) · ${c.recv ? mtoQ(c.recv) + ' received' : 'not received yet'}${c.po ? ' · PO ' + esc(c.po) : ' · no PO yet'}</span>`).join(' · ')} — move it to this package or record it in the Surplus Ledger</div>` : ''}${STAFF && m.sp ? `<div class="rd-sp">♻ Use surplus: ${m.sp.map(x => `<b>${mtoQ(x.q)} ${esc(x.unit)}</b> from ${esc(x.sheet)} <span class="faint">(${esc(x.desc)})</span>`).join(' + ')}${Math.abs(m.sp.reduce((t, x) => t + x.q, 0) - (+m.qty || 0)) > 0.01 ? ' <span class="faint">· total for this MTO line (all its notifications)</span>' : ''} <span class="faint">· issue it in Procurement → Material Reconciliation → Surplus</span></div>` : ''}</div>`).join('')}</div>`
     : `<div class="rd-lines faint">${x.rd.src === 'ETA' ? 'From AIF ETA: ' + esc(clean(x.r.eta) || '—') : (x.rd.why ? '<b>' + esc(x.rd.why) + '</b> · ' : '') + 'No MTO line and no ETA for this notification.' + (STAFF && x.r.raw ? ' AIF Excel: ' + [['SURVEY', x.r.raw.survey], ['SURVEY_REMARKS', x.r.raw.surveyRem], ['MATERIAL TAKE OFF', x.r.raw.takeOff], ['MRIR', x.r.raw.mrir], ['FABRICATION', x.r.raw.fab], ['FAB REMARKS', x.r.raw.fabRem], ['EXECUTION', x.r.raw.exe], ['EXE REMARKS', x.r.raw.exeRem]].filter(([, v]) => v).map(([k, v]) => k + ' “' + esc(String(v).replace(/\s+/g, ' ').trim()) + '”').join(' · ') : '')}</div>`;
   let html = tabs + areaChips;
   if(RD_TAB === 'ready'){
