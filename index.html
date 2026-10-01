@@ -609,7 +609,7 @@ const SK_KEY = 'ttammhub_sk';
 try{ localStorage.removeItem('ttammhub_vk'); }catch(e){}
 let VIEW_OK = true, VIEW_BUSY = null, LEVEL = 'ops', STAFF = true, OPS = true, STAFF_NEEDED = false;
 const OPS_VIEWS = ['links', 'mto', 'quality', 'activity', 'admin'];     // operation team only
-const MGMT_VIEWS = ['proc', 'clm', 'mat', 'weekly'];                              // management and operation team
+const MGMT_VIEWS = ['w360', 'rdy', 'proc', 'clm', 'mat', 'weekly'];                              // management and operation team
 const LEVEL_NAME = {client: 'PCSB view', staff: 'Management', ops: 'Operation team'};
 function viewAllowed(v){ return LEVEL === 'ops' || (!OPS_VIEWS.includes(v) && (LEVEL === 'staff' || !MGMT_VIEWS.includes(v))); }
 function viewKey(){ try{ return localStorage.getItem(SK_KEY) || ''; }catch(e){ return ''; } }
@@ -1151,7 +1151,8 @@ function allExceptions(){
 
 /* ---------- WOP 360°: everything about one WOP on one page ---------- */
 let W360_ID = null;
-function openW360(id){ W360_ID = id || null; go('w360'); try{ $('#stage').scrollTop = 0; $('#p-w360').scrollTop = 0; }catch(e){} }
+function openW360(id){ if(!viewAllowed('w360')){ if(id) openRecord('wop', id); else go('wop'); return; }   // PCSB: open the WOP record (Client View) instead
+  W360_ID = id || null; go('w360'); try{ $('#stage').scrollTop = 0; $('#p-w360').scrollTop = 0; }catch(e){} }
 window.__HUB.openW360 = openW360;
 function sevPill(sev){ return `<span class="x-sev ${sev}">${X_SEV_LABEL[sev]}</span>`; }
 function renderW360(){
@@ -2344,8 +2345,8 @@ function freshWire(el){
 function shareHtml(){
   return `<div class="box"><div class="box-h"><div><h3>Access levels</h3><p>One app, one link. What each person sees depends on the password typed at 🔑 Log in (remembered on the device until Log out).</p></div><div class="chips"><span class="flag ${STAFF_NEEDED ? 'ok' : 'warn'}">${STAFF_NEEDED ? 'Levels ON' : 'Levels OFF — everyone sees everything'}</span></div></div>
     <div class="tw"><table class="grid"><thead><tr><th>Who</th><th>Password</th><th>Sees</th></tr></thead><tbody>
-      <tr><td><b>PCSB</b></td><td>none — just the link</td><td>Overview, WOP 360° (progress &amp; schedule), Work Readiness, AIF TBR/TBP (view), WOP Summary (Client View), Photos &amp; files, Trends. The Sheet never sends internal cost, suppliers, receiving documents, surplus ledger or the activity log.</td></tr>
-      <tr><td><b>ZNESB management</b></td><td>STAFF_PASSWORD</td><td>+ Weekly Report, Claim Readiness, Procurement → Supplier Performance, WOP &amp; Materials modules (view only), WOP 360° money &amp; materials, full Weekly Report.</td></tr>
+      <tr><td><b>PCSB</b></td><td>none — just the link</td><td>Overview, AIF TBR/TBP (view), WOP Summary (Client View), Photos &amp; files, Trends. The Sheet never sends internal cost, suppliers, receiving documents, surplus ledger or the activity log.</td></tr>
+      <tr><td><b>ZNESB management</b></td><td>STAFF_PASSWORD</td><td>+ WOP 360° &amp; exceptions, Work Readiness, Weekly Report, Claim Readiness, Procurement → Supplier Performance, WOP &amp; Materials modules (view only), WOP 360° money &amp; materials, full Weekly Report.</td></tr>
       <tr><td><b>Operation team</b></td><td>ACCESS_PASSWORD</td><td>Everything: Data Integrity, Material Reconciliation, Receiving Documents, Surplus Ledger, import / edit, Activity log, Health &amp; backups.</td></tr>
     </tbody></table></div>${STAFF_NEEDED ? '' : '<div class="note warn">Set STAFF_PASSWORD in Code.gs (then Deploy → New version) before giving the link to PCSB.</div>'}</div>`;
 }
