@@ -1434,7 +1434,7 @@ function mtoCompare(sheet, items, over){
     const it = rs[0].m.it, f = rs[0].m.f, need = Math.round(rs.reduce((a, r) => a + (+r.x.sum || 0), 0) * 1000) / 1000;
     const len = mtoIsLen(it.unit, f) || mtoIsLen(rs[0].x.unit, rs[0].f);
     const bu = mtoNorm(it.unit), mu = mtoNorm(rs[0].x.unit);
-    let needBuy = need, note = '', note2 = '', bought = it.qty == null ? null : +it.qty, recv = it.received == null ? null : +it.received, unit = it.unit || rs[0].x.unit;
+    let mAsLen = false, needBuy = need, note = '', note2 = '', bought = it.qty == null ? null : +it.qty, recv = it.received == null ? null : +it.received, unit = it.unit || rs[0].x.unit;
     if(len && /^(LG|LENGTH)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu)){ needBuy = Math.ceil(need / 6 - 1e-9); note = `${+need.toFixed(2)} m → ${needBuy} LG (6 m/LG)`; }
     else if(len && /^(M|MTR|METER|METRE)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu) && need > 0){ const n6 = Math.ceil(need / 6 - 1e-9); needBuy = n6 * 6; note = `${+need.toFixed(2)} m → ${n6} length${n6 > 1 ? 's' : ''} = ${needBuy} m (6 m/LG)`; }
     let st;
@@ -1442,11 +1442,16 @@ function mtoCompare(sheet, items, over){
     else if(bought < needBuy - 1e-9) st = 'short';
     else if(bought > needBuy + 1e-9){
       st = 'over';
-      if(len && /^(LG|LENGTH)$/.test(bu) && bought % 6 === 0){                                      // "6 LG" / "12 LG" that probably mean metres
-        st = 'unit'; const alt = bought / 6;
-        note2 = `${bought} LG = ${bought * 6} m? If “${bought}” means metres (${alt} LG), ` + (alt < needBuy ? `it is ${needBuy - alt} LG short.` : alt > needBuy ? `it is ${alt - needBuy} LG over.` : 'it is exactly enough.');
+      if(len && /^(LG|LENGTH)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu) && bought % 6 === 0){   // MTO in metres, Materials "6" / "12" under LG = metres (1 length = 6 m)
+        const b0 = bought, r0 = recv; bought = bought / 6; if(recv != null) recv = recv / 6; mAsLen = true;
+        st = bought < needBuy - 1e-9 ? 'short' : bought > needBuy + 1e-9 ? 'over' : 'ok';
+        note2 = `Ordered “${b0}”${r0 != null ? `, received “${r0}”` : ''} read as metres: ${b0} m = ${bought} LG (6 m/LG)`;
       }
     } else st = 'ok';
+    if(len && /^(M|MTR|METER|METRE)$/.test(mu) && /^(LG|LENGTH|M|MTR|METER|METRE)$/.test(bu) && (bought || 0) > 0){   // leftover of the cut length(s) = surplus
+      const leftM = Math.round(((/^(LG|LENGTH)$/.test(bu) ? bought * 6 : bought) - need) * 100) / 100;
+      if(leftM > 0) note += (note ? ' · ' : '') + `${mtoQ(leftM)} m left over → surplus`;
+    }
     const fs = mtoFromSurplus(it);
     if(fs){ st = (recv || 0) >= needBuy - 1e-9 ? 'ok' : 'surplus'; note2 = 'No PO — planned from surplus (remark: ' + String(it.remarks).trim() + ')' + (recv ? `, ${recv} received so far` : ''); }
     // short / not bought, but some MTO rows have a remark (re-use, third party, surplus…): those rows are covered — check the rest only
@@ -1459,7 +1464,7 @@ function mtoCompare(sheet, items, over){
       else { st = (bought || 0) ? 'short' : 'nobuy'; note2 = `Remark: ${remTxt} — those rows are covered; still ${mtoQ(nb2 - (bought || 0))} ${unit} short for the rest`; }
       needBuy = nb2;
     }
-    lines.push({kind: 'match', rows: rs, it, need, needBuy, bought, recv, unit, note, st, note2, fromSurplus: fs, diff: fs ? (recv || 0) - needBuy : bought == null ? -needBuy : bought - needBuy, weak: rs.some(r => r.auto && r.score < 0.72 && !(r.f.len && f.len))});
+    lines.push({kind: 'match', rows: rs, it, need, needBuy, bought, recv, unit, note, st, note2, mAsLen, fromSurplus: fs, diff: fs ? (recv || 0) - needBuy : bought == null ? -needBuy : bought - needBuy, weak: rs.some(r => r.auto && r.score < 0.72 && !(r.f.len && f.len))});
   });
   rows.filter(r => !r.m).forEach(r => { const rk = mtoHasRemark(r.x) && (+r.x.sum || 0) > 0;
     lines.push({kind: 'nobuy', rows: [r], it: null, need: +r.x.sum || 0, needBuy: rk ? 0 : +r.x.sum || 0, bought: 0, recv: null, unit: r.x.unit, note: '', note2: rk ? 'Remark: ' + String(r.x.remarks).trim() + ' — covered without a purchase' : '', st: rk ? 'remark' : (+r.x.sum || 0) > 0 ? 'nobuy' : 'zero', diff: rk ? 0 : -(+r.x.sum || 0)}); });
@@ -1489,7 +1494,8 @@ function mtoParseBook(X, wb, file){
       if((r[ic] === null || r[ic] === '') && !unit){ sec = desc; continue; }
       const per = {}; notifCols.forEach(c => { const q = Number(r[c.j]); if(isFinite(q) && q) per[c.label] = q; });
       let sum = sc >= 0 ? Number(r[sc]) : NaN;
-      if(!isFinite(sum)) sum = Object.values(per).reduce((a, b) => a + b, 0) || Number(r[uc + 1]) || 0;
+      const perSum = Object.values(per).reduce((a, b) => a + b, 0);
+      if(!isFinite(sum) || (!sum && perSum > 0)) sum = perSum || Number(r[uc + 1]) || 0;     // SUM blank / 0 (formula not recalculated) → add up the notification columns
       const k0 = mtoNorm(desc); seen[k0] = (seen[k0] || 0) + 1;
       items.push({key: k0 + '#' + seen[k0], sec, no: r[ic] == null ? '' : String(r[ic]), desc, unit, sum: Math.round(sum * 1000) / 1000, per, remarks: rc >= 0 && r[rc] != null ? String(r[rc]).replace(/\s+/g, ' ').trim() : ''});
     }
@@ -1553,7 +1559,13 @@ function mtoCross(all){
   DATA.mat.items.forEach(it => feats.set(it.id, mtoFeat(it.desc)));
   const pkgName = id => (pk.find(p => p.id === id) || {}).name || '';
   const spare = {};                                   // what each purchase line has left after its own package's MTO
-  all.forEach(a => a.lines.forEach(l => { if(l.it) spare[l.it.id] = l.st === 'extra' ? (+l.bought || 0) : l.st === 'over' ? l.diff : 0; }));
+  const spareU = {}, qtyTxt = {};                    // pipe bought by the length, MTO in metres: the leftover of the cut length (e.g. 6 m − 2.2 m = 3.8 m) is spare too
+  all.forEach(a => a.lines.forEach(l => { if(!l.it) return; const id = l.it.id;
+    if(l.kind === 'match' && mtoLineIsLen(l) && l.rows[0] && MTO_M(l.rows[0].x.unit) && (MTO_LGU(l.it.unit) || MTO_M(l.it.unit))){
+      spare[id] = Math.max(0, Math.round((mtoToM(+l.bought || 0, l.it.unit, l) - l.need) * 100) / 100); spareU[id] = 'm';
+      if(MTO_LGU(l.it.unit)) qtyTxt[id] = `${mtoQ(+l.bought || 0)} LG (${mtoQ((+l.bought || 0) * 6)} m)`;
+    } else { spare[id] = l.st === 'extra' ? (+l.bought || 0) : l.st === 'over' ? l.diff : 0; spareU[id] = l.it.unit || ''; }
+  }));
   const lineOf = {}, mrows = [];
   all.forEach(a => { if(!a.p) return; a.lines.forEach(l => l.rows.forEach(r => { lineOf[a.sh.name + '|' + r.x.key] = l; if(+r.x.sum && l.st !== 'remark' && !mtoHasRemark(r.x)) mrows.push({sheet: a.sh.name, r}); })); });
   all.forEach(a => { if(!a.p) return; a.lines.forEach(l => {
@@ -1562,13 +1574,13 @@ function mtoCross(all){
       const f = l.rows[0].f;
       DATA.mat.items.forEach(it => { if(it.pkgId === a.p.id || !(+it.qty) || mtoScore(f, feats.get(it.id)) < 0.5) return;
         const sp = it.id in spare ? spare[it.id] : null;
-        l.cross.push({kind: 'bought', where: pkgName(it.pkgId), desc: it.desc, qty: +it.qty, unit: it.unit || '', spare: sp}); });
+        l.cross.push({kind: 'bought', where: pkgName(it.pkgId), desc: it.desc, qty: +it.qty, unit: it.unit || '', qtyTxt: qtyTxt[it.id] || '', spare: sp, spareU: spareU[it.id] || ''}); });
     }
-    if((l.st === 'extra' || l.st === 'over') && l.it){
+    if(l.it && (l.st === 'extra' || l.st === 'over' || (spareU[l.it.id] === 'm' && spare[l.it.id] > 0))){
       const f = feats.get(l.it.id) || mtoFeat(l.it.desc);
       mrows.forEach(m => { if(m.sheet === a.sh.name || mtoScore(m.r.f, f) < 0.5) return;
         const ol = lineOf[m.sheet + '|' + m.r.x.key];
-        if(l.st === 'over' && ol && ol.st !== 'nobuy' && ol.st !== 'short') return;          // only interesting if that package is still short
+        if(l.st !== 'extra' && ol && ol.st !== 'nobuy' && ol.st !== 'short') return;          // only interesting if that package is still short
         l.cross.push({kind: 'needed', where: m.sheet, desc: m.r.x.desc, qty: m.r.x.sum, unit: m.r.x.unit, st: ol ? ol.st : ''}); });
     }
     const need = c => c.st === 'nobuy' || c.st === 'short';
@@ -1652,10 +1664,10 @@ function mtoSurplusHtml(all){
 function mtoCrossHtml(l){
   if(!l.cross || !l.cross.length) return '';
   return `<div class="mto-x">${l.cross.slice(0, 4).map(c => c.kind === 'bought'
-    ? `<div${c.spare === 0 ? ' class="faint"' : ''}>↔ Bought under <b>${esc(c.where)}</b>: ${mtoQ(c.qty)} ${esc(c.unit)}${c.spare === null ? ' <span class="faint">(no MTO for that package)</span>' : c.spare > 0 ? ` — <b>${mtoQ(c.spare)} more than its own MTO needs</b>` : ' <span class="faint">(all used by its own MTO)</span>'}</div>`
+    ? `<div${c.spare === 0 ? ' class="faint"' : ''}>↔ Bought under <b>${esc(c.where)}</b>: ${c.qtyTxt ? esc(c.qtyTxt) : mtoQ(c.qty) + ' ' + esc(c.unit)}${c.spare === null ? ' <span class="faint">(no MTO for that package)</span>' : c.spare > 0 ? ` — <b>${mtoQ(c.spare)} ${esc(c.spareU)} left after its own MTO</b>` : ' <span class="faint">(all used by its own MTO)</span>'}</div>`
     : `<div${c.st === 'nobuy' || c.st === 'short' ? '' : ' class="faint"'}>↔ Needed by MTO <b>${esc(c.where)}</b>: ${mtoQ(c.qty)} ${esc(c.unit)}${c.st === 'nobuy' ? ' — <b>not bought there</b>' : c.st === 'short' ? ' — <b>short there</b>' : ' (bought there already)'}</div>`).join('')}${l.cross.length > 4 ? `<div class="faint">+${l.cross.length - 4} more</div>` : ''}</div>`;
 }
-function mtoCrossTxt(l){ return (l.cross || []).map(c => c.kind === 'bought' ? `Bought under ${c.where}: ${c.qty} ${c.unit}` + (c.spare === null ? ' (no MTO there)' : c.spare > 0 ? ` (${c.spare} spare there)` : ' (used there)') : `Needed by MTO ${c.where}: ${c.qty} ${c.unit}` + (c.st === 'nobuy' ? ' (not bought there)' : c.st === 'short' ? ' (short there)' : '')).join(' | '); }
+function mtoCrossTxt(l){ return (l.cross || []).map(c => c.kind === 'bought' ? `Bought under ${c.where}: ${c.qtyTxt || c.qty + ' ' + c.unit}` + (c.spare === null ? ' (no MTO there)' : c.spare > 0 ? ` (${c.spare} ${c.spareU} spare there)` : ' (used there)') : `Needed by MTO ${c.where}: ${c.qty} ${c.unit}` + (c.st === 'nobuy' ? ' (not bought there)' : c.st === 'short' ? ' (short there)' : '')).join(' | '); }
 /* the same AIF notification written in more than one MTO sheet = possible double MTO / double purchase */
 function mtoDupNotifs(){
   const m = {};
