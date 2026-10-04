@@ -1367,6 +1367,23 @@ const MTO_TYPES = [['U-BOLT','UBOLT'],['UBOLT','UBOLT'],['NU-BOLT','UBOLT'],['ST
   ['TAPE','TAPE'],['CHAIN','CHAIN'],['BRACKET','BRACKET'],['NOZZLE','NOZZLE'],['CLAMP','CLAMP'],['PAINT','PAINT']];
 const MTO_LOOSE_SIZE = {'': 1, NOZZLE: 1, TAPE: 1, CHAIN: 1, BRACKET: 1, CLAMP: 1, PAINT: 1};
 const MTO_LEN_TYPES = {PIPE:1, TUBE:1, FLATBAR:1, ANGLE:1, CHANNEL:1, BEAM:1};
+/* Plate is bought as a full sheet (4' × 8') while the MTO asks for cut pieces (1' × 1', 150 mm × 150 mm): work in area,
+   each piece taking MTO_KERF mm extra on both sides for the cut. What is left of the sheet is surplus. */
+const MTO_KERF = 50;      // mm allowed for cutting: on the length and the width of every plate piece, and on every piece of pipe
+function mtoPlateDims(desc){
+  const s = mtoNorm(desc).replace(/[’`´]/g, "'").replace(/''|”|“/g, '"');
+  const m = /(\d+(?:\.\d+)?)\s*(MM|M|FT|'|")?\s*X\s*(\d+(?:\.\d+)?)\s*(MM|M|FT|'|")/.exec(s); if(!m) return null;
+  const u = x => x === 'MM' ? 1 : x === 'M' ? 1000 : x === '"' ? 25.4 : 304.8, lab = (v, x) => v + (x === 'MM' ? ' mm' : x === 'M' ? ' m' : x === 'FT' ? "'" : x);
+  const u2 = m[4], u1 = m[2] || u2, w = +m[1] * u(u1), l = +m[3] * u(u2);
+  return w > 0 && l > 0 ? {w, l, txt: lab(m[1], u1) + ' × ' + lab(m[3], u2)} : null;
+}
+/* pieces of pipe / bar that have to be cut for one MTO row: one per notification column, but a quantity that is a whole
+   number of 6 m lengths (6, 42, 186 m…) is taken as full lengths — nothing to cut */
+function mtoCuts(x){ const isCut = q => { q = +q || 0; return q > 0 && Math.abs(q / 6 - Math.round(q / 6)) > 1e-6; };
+  const per = Object.values(x.per || {}); return per.length ? per.filter(isCut).length : isCut(x.sum) ? 1 : 0; }
+function mtoPieceArea(d, sheet){ if(sheet && d.w * d.l >= 0.9 * sheet.w * sheet.l) return sheet.w * sheet.l;   // a whole sheet: no cutting
+  return (d.w + MTO_KERF) * (d.l + MTO_KERF); }
+const mtoM2 = a => Math.round(a / 1e4) / 100;
 function mtoNorm(s){ return String(s == null ? '' : s).toUpperCase().replace(/\s+/g, ' ').trim(); }
 function mtoFeat(desc){
   let s = mtoNorm(desc);
@@ -1441,8 +1458,17 @@ function mtoCompare(sheet, items, over){
     const len = mtoIsLen(it.unit, f) || mtoIsLen(rs[0].x.unit, rs[0].f);
     const bu = mtoNorm(it.unit), mu = mtoNorm(rs[0].x.unit);
     let mAsLen = false, needBuy = need, note = '', note2 = '', bought = it.qty == null ? null : +it.qty, recv = it.received == null ? null : +it.received, unit = it.unit || rs[0].x.unit;
-    if(len && /^(LG|LENGTH)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu)){ needBuy = Math.ceil(need / 6 - 1e-9); note = `${+need.toFixed(2)} m → ${needBuy} LG (6 m/LG)`; }
-    else if(len && /^(M|MTR|METER|METRE)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu) && need > 0){ const n6 = Math.ceil(need / 6 - 1e-9); needBuy = n6 * 6; note = `${+need.toFixed(2)} m → ${n6} length${n6 > 1 ? 's' : ''} = ${needBuy} m (6 m/LG)`; }
+    // pipe / steel in metres: every piece to be cut (one per notification column) takes MTO_KERF mm extra
+    const lenM = len && /^(M|MTR|METER|METRE)$/.test(mu), cutsOf = sub => sub.reduce((a, r) => a + mtoCuts(r.x), 0);
+    const withCut = (n, sub) => Math.round((n + cutsOf(sub) * MTO_KERF / 1000) * 100) / 100, needC = lenM ? withCut(need, rs) : need;
+    const cutTxt = lenM && need > 0 ? (cutsOf(rs) ? `${+need.toFixed(2)} m + ${cutsOf(rs)} cut${cutsOf(rs) === 1 ? '' : 's'} × ${MTO_KERF} mm = ${needC} m` : `${+need.toFixed(2)} m (full lengths)`) : '';
+    if(len && /^(LG|LENGTH)$/.test(bu) && lenM){ needBuy = Math.ceil(needC / 6 - 1e-9); note = `${cutTxt} → ${needBuy} LG (6 m/LG)`; }
+    else if(len && /^(M|MTR|METER|METRE)$/.test(bu) && lenM && need > 0){ const n6 = Math.ceil(needC / 6 - 1e-9); needBuy = n6 * 6; note = `${cutTxt} → ${n6} length${n6 > 1 ? 's' : ''} = ${needBuy} m (6 m/LG)`; }
+    const pd = f.type === 'PLATE' ? mtoPlateDims(it.desc) : null;      // bought as a full sheet, the MTO asks for cut pieces
+    const plateA = sub => sub.reduce((a, r) => { const d = mtoPlateDims(r.x.desc); return d ? a + (+r.x.sum || 0) * mtoPieceArea(d, pd) : NaN; }, 0);
+    let plate = null;
+    if(pd && isFinite(plateA(rs))){ plate = {sheetA: pd.w * pd.l, needA: plateA(rs), txt: pd.txt}; needBuy = Math.ceil(plate.needA / plate.sheetA - 1e-9);
+      note = `${mtoQ(need)} pc = ${mtoQ(mtoM2(plate.needA))} m² incl. ${MTO_KERF} mm cutting → ${needBuy} sheet${needBuy === 1 ? '' : 's'} of ${pd.txt} (${mtoQ(mtoM2(plate.sheetA))} m² each)`; }
     let st;
     if(bought == null || bought === 0) st = need > 0 ? 'nobuy' : 'ok';
     else if(bought < needBuy - 1e-9) st = 'short';
@@ -1455,27 +1481,32 @@ function mtoCompare(sheet, items, over){
       }
     } else st = 'ok';
     if(len && /^(M|MTR|METER|METRE)$/.test(mu) && /^(LG|LENGTH|M|MTR|METER|METRE)$/.test(bu) && (bought || 0) > 0){   // leftover of the cut length(s) = surplus
-      const leftM = Math.round(((/^(LG|LENGTH)$/.test(bu) ? bought * 6 : bought) - need) * 100) / 100;
+      const leftM = Math.round(((/^(LG|LENGTH)$/.test(bu) ? bought * 6 : bought) - needC) * 100) / 100;
       if(leftM > 0) note += (note ? ' · ' : '') + `${mtoQ(leftM)} m left over → surplus`;
     }
+    if(plate && (bought || 0) > 0){ const left = bought * plate.sheetA - plate.needA; if(left > 1e4) note += ` · ${mtoQ(mtoM2(left))} m² left over → surplus`; }
+    let needMx = lenM ? needC : null;
     const fs = mtoFromSurplus(it);
     if(fs){ st = (recv || 0) >= needBuy - 1e-9 ? 'ok' : 'surplus'; note2 = 'No PO — planned from surplus (remark: ' + String(it.remarks).trim() + ')' + (recv ? `, ${recv} received so far` : ''); }
     // short / not bought, but some MTO rows have a remark (re-use, third party, surplus…): those rows are covered — check the rest only
     const rr = rs.filter(r => mtoHasRemark(r.x));
     if((st === 'short' || st === 'nobuy') && rr.length){
       const n2 = Math.round(rs.filter(r => !mtoHasRemark(r.x)).reduce((a, r) => a + (+r.x.sum || 0), 0) * 1000) / 1000;
-      let nb2 = n2; if(len && /^(LG|LENGTH)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu)) nb2 = Math.ceil(n2 / 6 - 1e-9); else if(len && /^(M|MTR|METER|METRE)$/.test(bu) && /^(M|MTR|METER|METRE)$/.test(mu) && n2 > 0) nb2 = Math.ceil(n2 / 6 - 1e-9) * 6;
+      let nb2 = n2, needM2 = null; if(plate){ plate.needA = plateA(rs.filter(r => !mtoHasRemark(r.x))); nb2 = Math.ceil(plate.needA / plate.sheetA - 1e-9); } else if(len && /^(LG|LENGTH)$/.test(bu) && lenM){ needM2 = withCut(n2, rs.filter(r => !mtoHasRemark(r.x))); nb2 = Math.ceil(needM2 / 6 - 1e-9); } else if(len && /^(M|MTR|METER|METRE)$/.test(bu) && lenM && n2 > 0){ needM2 = withCut(n2, rs.filter(r => !mtoHasRemark(r.x))); nb2 = Math.ceil(needM2 / 6 - 1e-9) * 6; }
       const remTxt = [...new Set(rr.map(r => String(r.x.remarks).trim()))].join(', ');
       if((bought || 0) >= nb2 - 1e-9){ st = 'remark'; note2 = `Remark: ${remTxt} — ${rr.length === rs.length ? 'covered without a purchase' : 'the remarked rows are covered; the purchase covers the rest'}`; }
       else { st = (bought || 0) ? 'short' : 'nobuy'; note2 = `Remark: ${remTxt} — those rows are covered; still ${mtoQ(nb2 - (bought || 0))} ${unit} short for the rest`; }
-      needBuy = nb2;
+      needBuy = nb2; if(needM2 !== null) needMx = needM2;
     }
-    lines.push({kind: 'match', rows: rs, it, need, needBuy, bought, recv, unit, note, st, note2, mAsLen, fromSurplus: fs, diff: fs ? (recv || 0) - needBuy : bought == null ? -needBuy : bought - needBuy, weak: rs.some(r => r.auto && r.score < 0.72 && !(r.f.len && f.len))});
+    lines.push({kind: 'match', rows: rs, it, need, needM: needMx, needBuy, bought, recv, unit, note, st, note2, mAsLen, plate, fromSurplus: fs, diff: fs ? (recv || 0) - needBuy : bought == null ? -needBuy : bought - needBuy, weak: !plate && rs.some(r => r.auto && r.score < 0.72 && !(r.f.len && f.len))});
   });
   rows.filter(r => !r.m).forEach(r => { const rk = mtoHasRemark(r.x) && (+r.x.sum || 0) > 0;
-    lines.push({kind: 'nobuy', rows: [r], it: null, need: +r.x.sum || 0, needBuy: rk ? 0 : +r.x.sum || 0, bought: 0, recv: null, unit: r.x.unit, note: '', note2: rk ? 'Remark: ' + String(r.x.remarks).trim() + ' — covered without a purchase' : '', st: rk ? 'remark' : (+r.x.sum || 0) > 0 ? 'nobuy' : 'zero', diff: rk ? 0 : -(+r.x.sum || 0)}); });
+    const pdn = r.f.type === 'PLATE' ? mtoPlateDims(r.x.desc) : null;
+    const nbM = !rk && mtoIsLen(r.x.unit, r.f) && MTO_M(r.x.unit) && (+r.x.sum || 0) > 0 ? Math.round(((+r.x.sum || 0) + mtoCuts(r.x) * MTO_KERF / 1000) * 100) / 100 : null;
+    lines.push({kind: 'nobuy', needM: nbM, plate: pdn ? {sheetA: 0, needA: rk ? 0 : (+r.x.sum || 0) * mtoPieceArea(pdn, null), txt: pdn.txt} : null, rows: [r], it: null, need: +r.x.sum || 0, needBuy: rk ? 0 : +r.x.sum || 0, bought: 0, recv: null, unit: r.x.unit, note: '', note2: rk ? 'Remark: ' + String(r.x.remarks).trim() + ' — covered without a purchase' : '', st: rk ? 'remark' : (+r.x.sum || 0) > 0 ? 'nobuy' : 'zero', diff: rk ? 0 : -(+r.x.sum || 0)}); });
   items.filter(it => !byItem.has(it.id)).forEach(it => { const fs = mtoFromSurplus(it) && (+it.received || 0) < (+it.qty || 0);
-    lines.push({kind: 'extra', rows: [], it, need: 0, needBuy: 0, bought: it.qty == null ? null : +it.qty, recv: it.received, unit: it.unit, note: '', note2: fs ? 'No PO — planned from surplus (remark: ' + String(it.remarks).trim() + '). Not in the MTO.' : '', st: fs ? 'surplus' : 'extra', fromSurplus: mtoFromSurplus(it), diff: +it.qty || 0}); });
+    const pde = mtoFeat(it.desc).type === 'PLATE' ? mtoPlateDims(it.desc) : null;
+    lines.push({kind: 'extra', plate: pde ? {sheetA: pde.w * pde.l, needA: 0, txt: pde.txt} : null, rows: [], it, need: 0, needBuy: 0, bought: it.qty == null ? null : +it.qty, recv: it.received, unit: it.unit, note: '', note2: fs ? 'No PO — planned from surplus (remark: ' + String(it.remarks).trim() + '). Not in the MTO.' : '', st: fs ? 'surplus' : 'extra', fromSurplus: mtoFromSurplus(it), diff: +it.qty || 0}); });
   return lines;
 }
 /* ---- MTO parse (survey MTO workbook: one sheet per package, one column per AIF notification, SUM = required) ---- */
@@ -1573,8 +1604,9 @@ function mtoCross(all){
   const spare = {};                                   // what each purchase line has left after its own package's MTO
   const spareU = {}, qtyTxt = {};                    // pipe bought by the length, MTO in metres: the leftover of the cut length (e.g. 6 m − 2.2 m = 3.8 m) is spare too
   all.forEach(a => a.lines.forEach(l => { if(!l.it) return; const id = l.it.id;
-    if(l.kind === 'match' && mtoLineIsLen(l) && l.rows[0] && MTO_M(l.rows[0].x.unit) && (MTO_LGU(l.it.unit) || MTO_M(l.it.unit))){
-      spare[id] = Math.max(0, Math.round((mtoToM(+l.bought || 0, l.it.unit, l) - l.need) * 100) / 100); spareU[id] = 'm';
+    if(l.plate && l.plate.sheetA){ spare[id] = Math.max(0, mtoM2((+l.bought || 0) * l.plate.sheetA - l.plate.needA)); spareU[id] = 'm²'; qtyTxt[id] = `${mtoQ(+l.bought || 0)} sheet of ${l.plate.txt} (${mtoQ(mtoM2((+l.bought || 0) * l.plate.sheetA))} m²)`; }
+    else if(l.kind === 'match' && mtoLineIsLen(l) && l.rows[0] && MTO_M(l.rows[0].x.unit) && (MTO_LGU(l.it.unit) || MTO_M(l.it.unit))){
+      spare[id] = Math.max(0, Math.round((mtoToM(+l.bought || 0, l.it.unit, l) - (l.needM ?? l.need)) * 100) / 100); spareU[id] = 'm';
       if(MTO_LGU(l.it.unit)) qtyTxt[id] = `${mtoQ(+l.bought || 0)} LG (${mtoQ((+l.bought || 0) * 6)} m)`;
     } else { spare[id] = l.st === 'extra' ? (+l.bought || 0) : l.st === 'over' ? l.diff : 0; spareU[id] = l.it.unit || ''; }
   }));
@@ -1588,7 +1620,7 @@ function mtoCross(all){
         const sp = it.id in spare ? spare[it.id] : null;
         l.cross.push({kind: 'bought', where: pkgName(it.pkgId), desc: it.desc, qty: +it.qty, unit: it.unit || '', recv: +it.received || 0, po: clean(it.poNo), qtyTxt: qtyTxt[it.id] || '', spare: sp, spareU: spareU[it.id] || ''}); });
     }
-    if(l.it && (l.st === 'extra' || l.st === 'over' || (spareU[l.it.id] === 'm' && spare[l.it.id] > 0))){
+    if(l.it && (l.st === 'extra' || l.st === 'over' || ((spareU[l.it.id] === 'm' || spareU[l.it.id] === 'm²') && spare[l.it.id] > 0))){
       const f = feats.get(l.it.id) || mtoFeat(l.it.desc);
       mrows.forEach(m => { if(m.sheet === a.sh.name || mtoScore(m.r.f, f) < 0.5) return;
         const ol = lineOf[m.sheet + '|' + m.r.x.key];
@@ -1611,11 +1643,14 @@ function mtoSurplusPool(all){
     const have = l.recv != null ? +l.recv : 0; if(!(have > 0)) return;                 // only stock that has arrived
     const it = l.it, f = mtoFeat(it.desc), len = mtoLineIsLen(l);
     let avail, unit, basis;
-    if(len){
+    if(l.plate && l.plate.sheetA){
+      const haveA = have * l.plate.sheetA; avail = mtoM2(haveA - l.plate.needA); unit = 'm²';
+      basis = `${have} sheet${have === 1 ? '' : 's'} of ${l.plate.txt} received = ${mtoQ(mtoM2(haveA))} m²` + (l.kind === 'extra' ? ' · not in its MTO' : ` − ${mtoQ(mtoM2(l.plate.needA))} m² used by its MTO (incl. ${MTO_KERF} mm cutting)`);
+    } else if(len){
       const haveM = mtoToM(have, it.unit, l), mtoU = l.rows[0] ? l.rows[0].x.unit : '';
-      const usedM = l.kind === 'extra' ? 0 : MTO_M(mtoU) ? l.need : mtoToM(l.needBuy, it.unit, l);
+      const usedM = l.kind === 'extra' ? 0 : MTO_M(mtoU) ? (l.needM ?? l.need) : mtoToM(l.needBuy, it.unit, l);
       avail = Math.round((haveM - usedM) * 100) / 100; unit = 'm';
-      basis = `${have} ${it.unit} received${MTO_LGU(it.unit) ? (l.st === 'unit' ? ' (read as ' + haveM + ' m — check unit)' : ' = ' + haveM + ' m') : ''}` + (l.kind === 'extra' ? ' · not in its MTO' : ` − ${+usedM.toFixed(2)} m used by its MTO`);
+      basis = `${have} ${it.unit} received${MTO_LGU(it.unit) ? (l.st === 'unit' ? ' (read as ' + haveM + ' m — check unit)' : ' = ' + haveM + ' m') : ''}` + (l.kind === 'extra' ? ' · not in its MTO' : ` − ${+usedM.toFixed(2)} m used by its MTO (incl. ${MTO_KERF} mm per cut)`);
     } else {
       const used = l.kind === 'extra' ? 0 : l.needBuy; avail = have - used; unit = it.unit || '';
       basis = `${have} received` + (l.kind === 'extra' ? ' · not in its MTO' : ` − ${used} used by its MTO`);
@@ -1633,15 +1668,16 @@ function mtoSurplusNeeds(all, pool){
     const f = l.it ? mtoFeat(l.it.desc) : l.rows[0].f, len = mtoLineIsLen(l);
     const got = l.fromSurplus ? (+l.recv || 0) : (+l.bought || 0);
     let rem, unit;
-    if(len){
+    if(l.plate){ rem = mtoM2(l.plate.needA - (l.it ? got * l.plate.sheetA : 0)); unit = 'm²'; }
+    else if(len){
       const mtoU = l.rows[0] ? l.rows[0].x.unit : '';
-      const needM = l.rows[0] && MTO_M(mtoU) ? l.need : l.it ? mtoToM(l.kind === 'extra' ? +l.it.qty || 0 : l.needBuy, l.it.unit, l) : l.needBuy;
+      const needM = l.rows[0] && MTO_M(mtoU) ? (l.needM ?? l.need) : l.it ? mtoToM(l.kind === 'extra' ? +l.it.qty || 0 : l.needBuy, l.it.unit, l) : l.needBuy;
       rem = Math.round((needM - (l.it ? mtoToM(got, l.it.unit, l) : got)) * 100) / 100; unit = 'm';
     } else { rem = (l.kind === 'extra' ? +l.it.qty || 0 : l.needBuy) - got; unit = l.it ? l.it.unit || (l.rows[0] ? l.rows[0].x.unit : '') : l.rows[0].x.unit; }
     const nDesc = l.rows.length ? l.rows.map(r => r.x.desc).join(' + ') : l.it.desc, got2 = mtoIssuedTo(a.sh.name, nDesc);
     rem = Math.round((rem - got2) * 100) / 100;
     if(!(rem > 1e-9)) return;
-    const cands = pool.filter(p => (!l.it || p.it.id !== l.it.id) && mtoScore(f, p.f) >= 0.5).sort((x, y) => y.avail - x.avail);
+    const cands = pool.filter(p => (!l.it || p.it.id !== l.it.id) && (unit === 'm²') === (p.unit === 'm²') && mtoScore(f, p.f) >= 0.5).sort((x, y) => y.avail - x.avail);
     const n = {sheet: a.sh.name, pkg: a.p.name, l, desc: nDesc, why: l.st, rem, unit, cands, issued: got2};
     cands.forEach(c => c.wanted.push(n));
     needs.push(n);
