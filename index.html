@@ -217,6 +217,7 @@ button.rd-tile{cursor:pointer;} button.rd-tile:hover{border-color:var(--accent);
 .rd-tile.warn{border-left-color:var(--warn);} .rd-tile.warn b{color:var(--warn);} .rd-tile.info{border-left-color:var(--info);} .rd-tile.info b{color:var(--info);}
 .rd-tile.acc{border-left-color:var(--accent);} .rd-tile.acc b{color:var(--accent);} .rd-tile.faint b{color:var(--text-faint);}
 .rd-fr th{padding:4px 6px!important;background:var(--panel2,var(--panel));position:static;} .rd-q{width:100%;min-width:70px;font:inherit;font-size:12px;font-weight:400;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);text-transform:none;letter-spacing:0;} .rd-q[data-on]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);} .rd-qbar{padding:8px 14px;font-size:12.5px;color:var(--text-dim);border-top:1px solid var(--border);}
+.rd-t tr.rd-join > td:not([rowspan]){border-bottom:0;padding-bottom:4px;} .rd-t tr.rd-same > td{padding-top:4px;} .rd-sd{display:inline-block;margin-top:3px;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:8px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);}
 .rd-stg{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 5px;margin-right:3px;border-radius:3px;border:1px solid var(--border);color:var(--text-faint);}
 .rd-stg.ok{background:var(--ok);border-color:var(--ok);color:#fff;}
 .rd-lines{padding:8px 14px 10px 34px;font-size:12.5px;line-height:1.6;}
@@ -1970,7 +1971,28 @@ const RDL = () => LEVEL === 'client' ? RD_CLIENT : RD, OCL = () => LEVEL === 'cl
 function readinessRows(){
   if(!DATA.aif) return null;
   const map = readinessMap();
-  return DATA.aif.records.filter(r => aifOpen(r) && !r.transferred).map(r => { const rd = findingReadiness(r, map); return {r, rd, cause: aifOverdue(r) ? overdueCause(r, rd) : null}; });
+  const rows = DATA.aif.records.filter(r => aifOpen(r) && !r.transferred).map(r => { const rd = findingReadiness(r, map); return {r, rd, cause: aifOverdue(r) ? overdueCause(r, rd) : null}; });
+  // findings on the same drawing share one set of material: if only one of them is listed in the MTO, the others take its material status
+  const g = drawingGroups(), byG = {}; rows.forEach(x => { x.grp = g(x.r.notif); if(x.grp) (byG[x.grp] = byG[x.grp] || []).push(x); });
+  Object.values(byG).forEach(v => { const src = v.find(x => x.rd.src === 'MTO'); if(!src) return;
+    v.forEach(x => { if(x.rd.src !== 'MTO'){ x.rd = Object.assign({}, src.rd, {via: src.r.notif}); if(x.cause) x.cause = overdueCause(x.r, x.rd); } }); });
+  return rows;
+}
+/* Notifications that share one drawing: written together in one MTO column ("25223225 / 24934582"), or SURVEY_REMARKS says "SAME DRAWING AS NN …" */
+function drawingGroups(){
+  const par = {}, find = a => { let r = a; while(par[r] !== r) r = par[r]; return r; };
+  const uni = (a, b) => { if(!(a in par)) par[a] = a; if(!(b in par)) par[b] = b; const ra = find(a), rb = find(b); if(ra !== rb) par[rb] = ra; };
+  const nums = t => String(t || '').split(/[^0-9]+/).filter(n => n.length >= 6);
+  if(MTO) (MTO.sheets || []).forEach(sh => (sh.notifs || []).forEach(lab => { const n = nums(lab); n.slice(1).forEach(b => uni(n[0], b)); }));
+  if(DATA.aif) DATA.aif.records.forEach(r => { const t = r.raw && r.raw.surveyRem, me = String(r.notif || '').trim(); if(me && t && /SAME\s+(DRAWING|DWG)/i.test(t)) nums(t).forEach(b => { if(b !== me) uni(me, b); }); });
+  return n => { n = String(n || '').trim(); return n in par ? find(n) : ''; };
+}
+/* rows of the same drawing with the same material status are shown as one block */
+function rdGroupRows(list, extra){
+  const out = [], at = {};
+  list.forEach(x => { const sig = x.grp ? [x.grp, x.rd.k, x.rd.why || '', (x.rd.lines || []).map(l => l.sheet + '\u0001' + l.desc + '\u0001' + l.st).sort().join('\u0002'), extra ? extra(x) : ''].join('|') : '';
+    if(sig && at[sig]) at[sig].push(x); else { const g = [x]; if(sig) at[sig] = g; out.push(g); } });
+  return out;
 }
 const prioN = p => { const n = parseInt(String(p || '').replace(/\D/g, ''), 10); return isFinite(n) ? n : 9; };
 
@@ -2017,12 +2039,13 @@ function renderReadiness(){
     html += `<div class="head"><div><h2>Material Readiness${scope ? ' — ' + esc(scope) : ''}</h2></div></div>${noMto}
       <div class="rd-tiles">${tile('go', goN, 'Ready to execute', 'ok', 'material in hand or not needed')}${tile('waiting', notDone.filter(x => x.rd.k === 'waiting').length, 'Waiting delivery', 'info', 'ordered, not all arrived')}${tile('surplus', notDone.filter(x => x.rd.k === 'surplus').length, STAFF ? 'Surplus to issue' : 'Material being arranged', 'acc', STAFF ? 'no PO / not bought — stock available in another package' : 'from existing stock')}${tile('blocked', notDone.filter(x => x.rd.k === 'blocked').length, STAFF ? 'Blocked' : 'Material not ready', 'bad', STAFF ? 'MTO item not bought / short' : 'still being procured')}${tile('eta_no', notDone.filter(x => x.rd.k === 'eta_no').length, 'ETA not ready', 'warn', 'no MTO — going by ETA')}${tile('pre', notDone.filter(x => x.rd.k === 'pre').length, STAFF ? 'Before material' : 'Preparation', 'info', 'survey / drawing approval / MTO not done, or on hold')}${tile('unknown', notDone.filter(x => x.rd.k === 'unknown').length, 'Unknown', 'faint', 'no MTO, no ETA')}${tile('all', notDone.length, 'All open', '', 'not executed yet')}</div>
       <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Stages</th><th>Material</th><th class="n">MTO lines received</th></tr>${rdQRow(base, ['notif', 'find', 'pkg', 'pri', 'stg', 'mat', 'mto'])}</thead><tbody>
-      ${list.map(x => { const r = x.r, open = RD_OPEN.has(r.uid), R = rdLab(x.rd); return `<tr class="xrow" data-rdo="${esc(r.uid)}"><td style="white-space:nowrap">${open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div></td>
+      ${rdGroupRows(list).map(g => { const x0 = g[0], n = g.length, open = RD_OPEN.has(x0.r.uid), R = rdLab(x0.rd), via = g.find(x => x.rd.via);
+        return g.map((x, i) => { const r = x.r; return `<tr class="xrow${i ? ' rd-same' : ''}${i < n - 1 ? ' rd-join' : ''}" data-rdo="${esc(x0.r.uid)}"><td style="white-space:nowrap">${i ? '<span style="visibility:hidden">▸ </span>' : open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div>${n > 1 && !i ? `<div class="rd-sd" title="These notifications are on the same drawing, so they use the same material">⛓ same drawing × ${n}</div>` : ''}</td>
         <td style="min-width:260px">${esc(clean(r.finding || r.desc).slice(0, 160))}<div class="faint" style="font-size:11.5px">${esc([r.equip, r.module].filter(v => !blank(v)).join(' · '))}</div></td>
         <td style="white-space:nowrap">${pkgCell(x)}</td>
         <td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
-        <td style="white-space:nowrap"><span class="mto-st ${R[1]}">${R[0]}</span></td><td class="n">${x.rd.tot ? `${x.rd.rec} / ${x.rd.tot}` : '<span class="faint">—</span>'}</td></tr>
-        ${open ? `<tr class="detail"><td colspan="7">${lineList(x)}</td></tr>` : ''}`; }).join('')}
+        ${i ? '' : `<td rowspan="${n}" style="white-space:nowrap;vertical-align:top"><span class="mto-st ${R[1]}">${R[0]}</span></td><td rowspan="${n}" class="n" style="vertical-align:top">${x0.rd.tot ? `${x0.rd.rec} / ${x0.rd.tot}` : '<span class="faint">—</span>'}</td>`}</tr>`; }).join('') +
+        (open ? `<tr class="detail"><td colspan="7">${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
       </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No finding in this group' + (Object.values(RDQ).some(Boolean) ? ' with these column filters' : '') + '.</div>' : ''}
       <div class="more">Click a row to see its MTO items. “Received” counts stock received for that package line (and surplus issued to it); if a package line is short, every finding that uses it shows as blocked until it is sorted.</div></div>`;
   } else {
@@ -2040,10 +2063,11 @@ function renderReadiness(){
         return `<div class="tw" style="border-top:1px solid var(--border)"><table class="grid"><thead><tr><th>Location</th>${keys.filter(k => cnt[k]).map(k => `<th class="n" title="${esc(OCL()[k][0])}">${esc(OCL()[k][0].split(' — ')[0].replace('Material ready', 'Ready, not executed'))}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
         ${areasP.filter(a => byL[a]).map(a => `<tr><td><button class="linkish" data-rda="${esc(a)}"><b>${esc(a)}</b></button></td>${keys.filter(k => cnt[k]).map(k => `<td class="n">${byL[a][k] || '<span class="faint">0</span>'}</td>`).join('')}<td class="n"><b>${Object.values(byL[a]).reduce((q, n) => q + n, 0)}</b></td></tr>`).join('')}</tbody></table></div>`; })() : ''}</div><div class="gap"></div>
       <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Why</th><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th></tr>${rdQRow(base, ['why', 'notif', 'find', 'pkg', 'pri', 'due', 'stg', 'mat'])}</thead><tbody>
-      ${list.map(x => { const r = x.r, open = RD_OPEN.has(r.uid), R = rdLab(x.rd), C = OCL()[x.cause]; return `<tr class="xrow" data-rdo="${esc(r.uid)}"><td style="white-space:nowrap"><span class="mto-st ${C[1]}" title="${esc(C[2])}">${C[0]}</span></td><td style="white-space:nowrap">${open ? '▾ ' : '▸ '}${aifBtn(r)}</td>
+      ${rdGroupRows(list, x => x.cause).map(g => { const x0 = g[0], n = g.length, open = RD_OPEN.has(x0.r.uid), R = rdLab(x0.rd), C = OCL()[x0.cause], via = g.find(x => x.rd.via);
+        return g.map((x, i) => { const r = x.r; return `<tr class="xrow${i ? ' rd-same' : ''}${i < n - 1 ? ' rd-join' : ''}" data-rdo="${esc(x0.r.uid)}">${i ? '' : `<td rowspan="${n}" style="white-space:nowrap;vertical-align:top"><span class="mto-st ${C[1]}" title="${esc(C[2])}">${C[0]}</span></td>`}<td style="white-space:nowrap">${i ? '<span style="visibility:hidden">▸ </span>' : open ? '▾ ' : '▸ '}${aifBtn(r)}${n > 1 && !i ? `<div class="rd-sd" title="These notifications are on the same drawing, so they use the same material">⛓ same drawing × ${n}</div>` : ''}</td>
         <td style="min-width:240px">${esc(clean(r.finding || r.desc).slice(0, 150))}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div></td><td style="white-space:nowrap">${pkgCell(x)}</td><td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
-        <td style="white-space:nowrap"><span class="mto-st ${R[1]}">${R[0]}</span>${x.rd.tot ? ` <span class="faint">${x.rd.rec}/${x.rd.tot}</span>` : ''}</td></tr>
-        ${open ? `<tr class="detail"><td colspan="8">${lineList(x)}</td></tr>` : ''}`; }).join('')}
+        ${i ? '' : `<td rowspan="${n}" style="white-space:nowrap;vertical-align:top"><span class="mto-st ${R[1]}">${R[0]}</span>${x0.rd.tot ? ` <span class="faint">${x0.rd.rec}/${x0.rd.tot}</span>` : ''}</td>`}</tr>`; }).join('') +
+        (open ? `<tr class="detail"><td colspan="8">${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
       </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No overdue finding in this group.</div>' : ''}</div>`;
   }
   el.innerHTML = html; rdWire(el);
