@@ -220,7 +220,7 @@ button.rd-tile{cursor:pointer;} button.rd-tile:hover{border-color:var(--accent);
 .rd-t tr.rd-join > td:not([rowspan]){border-bottom:0;padding-bottom:4px;} .rd-t tr.rd-same > td{padding-top:4px;} .rd-sd{display:inline-block;margin-top:3px;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:8px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);}
 .mto-vb{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--border);} .mto-gh > td{background:color-mix(in srgb,var(--accent) 9%,var(--panel));border-top:2px solid var(--border);padding:8px 14px!important;} .mto-ghf{color:var(--text-dim);font-size:12.5px;margin-left:6px;} .mto-ghc{margin-left:14px;font-size:12px;color:var(--text-dim);white-space:nowrap;} .mto-ghn .mto-n{font-weight:700;}
 .rd-stg{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 5px;margin-right:3px;border-radius:3px;border:1px solid var(--border);color:var(--text-faint);}
-.rd-stg.ok{background:var(--ok);border-color:var(--ok);color:#fff;}
+.rd-stg.ok{background:var(--ok);border-color:var(--ok);color:#fff;} .rd-stg.on{background:#f2c200;border-color:#d9ad00;color:#3d3000;} .rd-now{margin-top:4px;font-size:11.5px;color:var(--text-dim);white-space:normal;max-width:330px;line-height:1.35;} .rd-now b{color:var(--text);font-size:10.5px;letter-spacing:.3px;}
 .rd-lines{padding:8px 14px 10px 34px;font-size:12.5px;line-height:1.6;}
 .rd-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--text-faint);vertical-align:middle;}
 .rd-dot.received{background:var(--ok);} .rd-dot.ordered{background:var(--info);} .rd-dot.surplus{background:var(--accent);} .rd-dot.missing{background:var(--bad);} .rd-dot.remark{background:var(--ok);opacity:.5;} .mto-rem{display:inline-block;margin-left:4px;padding:0 6px;border-radius:8px;font-size:11px;background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok);} .rd-dot.spavail{background:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--bad) 55%,transparent);} .rd-sp{margin:2px 0 4px 20px;font-size:12px;color:var(--accent);}
@@ -1989,9 +1989,19 @@ function overdueCause(r, rd){
   return 'execution';
 }
 function stageList(r){
-  const w = r.raw || {}, v = x => { x = String(x || '').replace(/\s+/g, ' ').trim(); return x ? '“' + x + '”' : '(blank)'; };
-  const toNA = /^(N\/?A|NIL|-)$/i.test(String(w.takeOff || '').trim());
-  return [['Survey', r.surveyDone, 'SURVEY ' + v(w.survey)], w.takeOff == null ? null : ['MTO', r.takeOffDone || toNA, 'MATERIAL TAKE OFF ' + v(w.takeOff)], ['MRIR', r.mtoDone || !r.needsMTO, 'MRIR ' + v(w.mrir)], r.needsFabrication ? ['Fab', r.fabricationDone, 'FABRICATION ' + v(w.fab) + ' · remarks ' + v(w.fabRem)] : null, ['Exe', r.executionDone, 'EXECUTION ' + v(w.exe)], ['Scan', r.scanDone, 'SCAN ' + v(w.scan)]].filter(Boolean);
+  // one entry per stage: [NAME, state ('done' | 'on' = in progress | 'todo'), what the AIF Excel says, note for the "latest status" line]
+  const w = r.raw || {}, t = x => String(x || '').replace(/\s+/g, ' ').trim(), v = x => t(x) ? '“' + t(x) + '”' : '(blank)';
+  const ON = /ON\s?-?GOING|IN\s?-?PROGRES|\bWIP\b|PARTIAL|STARTED|UNDERWAY/i, NA = /^(N\/?A|NIL|-)$/i, DONE = /^(DONE|COMPLETED?|YES)$/i;
+  const st = (done, ...txt) => done ? 'done' : txt.some(x => ON.test(t(x))) ? 'on' : 'todo';
+  const note = (x, skip) => { x = t(x); return x && !DONE.test(x) && !NA.test(x) && !(skip && skip.test(x)) ? x : ''; };
+  return [
+    ['SURVEY', st(r.surveyDone, w.survey, w.surveyRem), 'SURVEY ' + v(w.survey) + (t(w.surveyRem) ? ' · remarks ' + v(w.surveyRem) : ''), note(w.surveyRem, /SAME\s+(DRAWING|DWG)/i) || note(w.survey)],
+    w.takeOff == null ? null : ['MTO', st(r.takeOffDone || NA.test(t(w.takeOff)), w.takeOff), 'MATERIAL TAKE OFF ' + v(w.takeOff), note(w.takeOff)],
+    ['MRIR', st(r.mtoDone || !r.needsMTO, w.mrir), 'MRIR ' + v(w.mrir) + (t(r.eta) ? ' · ETA ' + v(r.eta) : ''), r.mtoDone ? '' : note(r.eta, /^RECEIVED$/i) || note(w.mrir)],
+    r.needsFabrication ? ['FAB', st(r.fabricationDone, w.fab, w.fabRem), 'FABRICATION ' + v(w.fab) + ' · remarks ' + v(w.fabRem), r.fabricationDone ? '' : note(w.fabRem)] : null,
+    ['EXE', st(r.executionDone, w.exe, w.exeRem), 'EXECUTION ' + v(w.exe) + (t(w.exeRem) ? ' · remarks ' + v(w.exeRem) : ''), note(w.exeRem) || note(w.exe)],
+    ['SCAN', st(r.scanDone, w.scan), 'SCAN ' + v(w.scan), note(w.scan)]
+  ].filter(Boolean);
 }
 /* ---- column filters for the Work Readiness tables ---- */
 let RDQ = {notif: '', find: '', pkg: '', pri: '', due: '', stg: '', mat: '', mto: ''};
@@ -2004,7 +2014,7 @@ function rdQApply(list, skip){
     if(q.pkg && (q.pkg === '(none)' ? rdPkg(x) !== '' : rdPkg(x) !== q.pkg)) return false;
     if(q.pri && String(prioN(r.priority)) !== q.pri) return false;
     if(q.due){ const d = dayN(r.due); if(q.due === 'none' ? d !== null : d === null || (q.due === 'late' ? !(d < T) : q.due === '30' ? !(d >= T && d - T <= 30) : !(d - T > 30))) return false; }
-    if(q.stg){ const [n, ok] = q.stg.split(':'), st = stageList(r).find(s => s[0] === n); if(!st || (!!st[1]) !== (ok === '1')) return false; }
+    if(q.stg){ const [n, ok] = q.stg.split(':'), st = stageList(r).find(s => s[0] === n); if(!st || (ok === '1' ? st[1] !== 'done' : ok === '2' ? st[1] !== 'on' : st[1] === 'done')) return false; }
     if(q.mat && skip !== 'mat' && rdLab(x.rd)[0] !== q.mat) return false;
     if(q.mto){ const t = x.rd.tot || 0, rc = x.rd.rec || 0; if(q.mto === 'none' ? t > 0 : !t || (q.mto === 'full' ? rc < t : q.mto === 'part' ? !(rc > 0 && rc < t) : rc > 0)) return false; }
     return true; });
@@ -2013,7 +2023,7 @@ function rdQRow(base, cols){
   const q = RDQ, sel = (k, opts) => `<select class="rd-q" data-rdq="${k}"${q[k] ? ' data-on="1"' : ''}><option value="">All</option>${opts.map(([v, l]) => `<option value="${esc(v)}"${q[k] === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
   const txt = (k, ph) => `<input class="rd-q" type="search" data-rdq="${k}" placeholder="${ph}" value="${esc(q[k])}"${q[k] ? ' data-on="1"' : ''}>`;
   const pris = [...new Set(base.map(x => prioN(x.r.priority)))].filter(p => p < 9).sort();
-  const stg = []; ['Survey', 'MTO', 'MRIR', 'Fab', 'Exe', 'Scan'].forEach(n => { if(base.some(x => stageList(x.r).some(s => s[0] === n))) stg.push([n + ':0', n + ' ✗ not done'], [n + ':1', n + ' ✓ done']); });
+  const stg = []; ['SURVEY', 'MTO', 'MRIR', 'FAB', 'EXE', 'SCAN'].forEach(n => { if(base.some(x => stageList(x.r).some(s => s[0] === n))){ stg.push([n + ':0', n + ' ✗ not done']); if(base.some(x => stageList(x.r).some(s => s[0] === n && s[1] === 'on'))) stg.push([n + ':2', n + ' ◐ in progress']); stg.push([n + ':1', n + ' ✓ done']); } });
   const mats = {}; rdQApply(base, 'mat').forEach(x => { const l = rdLab(x.rd)[0]; mats[l] = (mats[l] || 0) + 1; });
   const pkgs = {}; base.forEach(x => { const k = rdPkg(x) || '(none)'; pkgs[k] = (pkgs[k] || 0) + 1; });
   const cell = {why: '<th></th>', pkg: `<th>${sel('pkg', Object.keys(pkgs).sort((a, b) => (a === '(none)') - (b === '(none)') || a.localeCompare(b, undefined, {numeric: true})).map(k => [k, (k === '(none)' ? 'No package' : k) + ' (' + pkgs[k] + ')']))}</th>`, notif: `<th>${txt('notif', 'Search…')}</th>`, find: `<th>${txt('find', 'Search finding / area…')}</th>`,
@@ -2024,10 +2034,11 @@ function rdQRow(base, cols){
 }
 function rdQBar(n, of){ const on = Object.values(RDQ).some(Boolean); return on ? `<div class="rd-qbar">Showing <b>${n}</b> of ${of} · <button class="linkish" data-rdqclear>✕ Clear column filters</button></div>` : ''; }
 function stageTxt(r){
-  const w = r.raw || {}, v = x => { x = String(x || '').replace(/\s+/g, ' ').trim(); return x ? '“' + x + '”' : '(blank)'; };
-  const toNA = /^(N\/?A|NIL|-)$/i.test(String(w.takeOff || '').trim());
-  const s = [['Survey', r.surveyDone, 'SURVEY ' + v(w.survey)], w.takeOff == null ? null : ['MTO', r.takeOffDone || toNA, 'MATERIAL TAKE OFF ' + v(w.takeOff)], ['MRIR', r.mtoDone || !r.needsMTO, 'MRIR ' + v(w.mrir)], r.needsFabrication ? ['Fab', r.fabricationDone, 'FABRICATION ' + v(w.fab) + ' · remarks ' + v(w.fabRem)] : null, ['Exe', r.executionDone, 'EXECUTION ' + v(w.exe)], ['Scan', r.scanDone, 'SCAN ' + v(w.scan)]].filter(Boolean);
-  return s.map(([n, ok, t]) => `<span class="rd-stg${ok ? ' ok' : ''}" title="${n}: ${ok ? 'done' : 'not done'}${r.raw ? ' — AIF Excel: ' + esc(t) : ''}">${n}</span>`).join('');
+  const L = stageList(r), word = {done: 'done', on: 'in progress', todo: 'not done'};
+  // latest status = the note of the furthest stage that has one (e.g. EXE: "Existing handrail removal ongoing at site")
+  const last = L.slice().reverse().find(s => s[3]);
+  return L.map(([n, st, tip]) => `<span class="rd-stg${st === 'done' ? ' ok' : st === 'on' ? ' on' : ''}" title="${n}: ${word[st]}${r.raw ? ' — AIF Excel: ' + esc(tip) : ''}">${n}</span>`).join('') +
+    (last ? `<div class="rd-now" title="Latest status from the AIF Excel"><b>${last[0]}</b> · ${esc(last[3])}</div>` : '');
 }
 const RD_CLIENT = {ready: ['Material ready', 'ok'], eta_ok: ['Material ready', 'ok'], none: ['No material needed', 'faint'], waiting: ['Waiting delivery', 'info'],
   surplus: ['Material being arranged', 'acc'], blocked: ['Material not ready', 'bad'], eta_no: ['Material not ready', 'warn'], pre: ['Preparation in progress', 'info'], unknown: ['Not assessed yet', 'faint']};
