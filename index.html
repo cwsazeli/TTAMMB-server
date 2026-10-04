@@ -1536,7 +1536,7 @@ async function mtoImport(file){
     const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array'});
     const nx = mtoParseBook(X, wb, file.name);
     if(!nx.sheets.length){ toast('No MTO sheet found — each sheet needs an “Item | Descriptions | Units” header.', 7000); return; }
-    if(MTO){ nx.map = MTO.map || {}; nx.over = MTO.over || {}; }          // keep the package links and manual matches made before
+    if(MTO){ nx.map = MTO.map || {}; nx.over = MTO.over || {}; nx.rem = MTO.rem || {}; nx.issues = MTO.issues || []; }   // keep the package links, manual matches, remarks added in the app and the surplus ledger
     MTO = nx; MTO_DIRTY = true; mtoCache();
     if(MTO_SHEET !== '*' && !nx.sheets.some(s => s.name === MTO_SHEET)) MTO_SHEET = '*';
     toast(`MTO read: ${nx.sheets.length} sheets, ${nx.sheets.reduce((a, s) => a + s.items.length, 0)} lines. Press “Save to Sheet” to share it.`, 6000);
@@ -1555,6 +1555,9 @@ function mtoLinesFor(sh){
   const p = mtoPkgFor(sh); if(!p) return {p: null, lines: []};
   const items = DATA.mat.items.filter(i => i.pkgId === p.id);
   // SUM blank / 0 in the Excel (formula not recalculated, or an MTO saved by an older version) → add up the notification columns
+  // remarks added in the app (MTO.rem) sit on top of the Remarks column of the Excel
+  const rm = (MTO.rem || {})[sh.name] || {};
+  sh.items.forEach(x => { if(x.xl === undefined) x.xl = x.remarks || ''; const o = rm[x.key]; x.remApp = o !== undefined && o !== ''; x.remarks = x.remApp ? o : x.xl; });
   sh.items.forEach(x => { if(!(+x.sum)){ const ps = Object.values(x.per || {}).reduce((a, b) => a + (+b || 0), 0); if(ps > 0) x.sum = Math.round(ps * 1000) / 1000; } });
   return {p, items, lines: mtoCompare(sh, items, (MTO.over || {})[sh.name] || {})};
 }
@@ -1739,9 +1742,9 @@ function renderMto(){
         const notifs = Object.entries(per).map(([n, q]) => { const f = mtoAifByNotif(n)[0]; return f ? `<button class="mto-n" data-aif='${esc(JSON.stringify([f.cat, f.view, f.uid]))}' title="${esc(clean(f.finding || f.desc))} · ${esc(f.status)}">${esc(n)} <b>${mtoQ(q)}</b></button>` : `<span class="mto-n off" title="Not found in AIF">${esc(n)} <b>${mtoQ(q)}</b></span>`; }).join('');
         const diff = l.st === 'extra' ? '+' + mtoQ(l.bought) : l.diff > 0 ? '+' + mtoQ(l.diff) : l.diff < 0 ? '−' + mtoQ(-l.diff) : '0';
         return `<tr class="mto-${s[1]}">${cur.all ? `<td style="white-space:nowrap"><button class="linkish" data-msh2="${esc(l.shName)}" title="Open this package">${esc(l.shName)}</button></td>` : ''}<td style="white-space:nowrap"><span class="mto-st ${s[1]}" title="${esc(s[2])}">${s[0]}</span>${l.weak ? `<div class="mto-weak" title="The descriptions only partly agree — check that this is the same item">? check match</div>` : ''}</td>
-          <td style="min-width:220px">${l.rows.length ? l.rows.map(r => `<div>${esc(r.x.desc)}${mtoHasRemark(r.x) ? ` <span class="mto-rem" title="Remarks column of the MTO">📝 ${esc(r.x.remarks)}</span>` : ''}</div>`).join('') : '<span class="faint">—</span>'}</td>
+          <td style="min-width:220px">${l.rows.length ? l.rows.map(r => `<div>${esc(r.x.desc)}${mtoHasRemark(r.x) ? ` <span class="mto-rem" title="${r.x.remApp ? 'Remark added in this app' : 'Remarks column of the MTO Excel'}">📝 ${esc(r.x.remarks)}${r.x.remApp ? ' <i>(app)</i>' : ''}</span>` : ''}</div>`).join('') : '<span class="faint">—</span>'}</td>
           <td style="min-width:220px">${l.it ? esc(l.it.desc) : '<span class="faint">—</span>'}${l.note ? `<div class="faint" style="font-size:11.5px">${esc(l.note)}</div>` : ''}${l.note2 ? `<div style="font-size:11.5px;color:var(--warn)">${esc(l.note2)}</div>` : ''}${mtoCrossHtml(l)}
-            ${r0 ? (MTO_EDIT === editKey ? `<div><select class="mto-sel" data-mover="${esc(editKey)}" style="max-width:340px;margin-top:4px">${opts(sel, l.items)}</select></div>` : `<button class="mto-chg" data-medit="${esc(editKey)}">${sel !== undefined ? '✎ manual match · change' : '✎ change match'}</button>`) : ''}</td>
+            ${r0 ? (MTO_EDIT === editKey ? `<div><select class="mto-sel" data-mover="${esc(editKey)}" style="max-width:340px;margin-top:4px">${opts(sel, l.items)}</select></div>` : `<button class="mto-chg" data-medit="${esc(editKey)}">${sel !== undefined ? '✎ manual match · change' : '✎ change match'}</button>`) : ''}${r0 ? ` <button class="mto-chg" data-mrem="${esc(l.shName + '\u0001' + l.rows.map(r => r.x.key).join('\u0002'))}" title="Mark this MTO item as covered without a purchase (third party services, re-use, surplus…) — counted as available">📝 ${l.rows.some(r => mtoHasRemark(r.x)) ? 'edit remark' : 'add remark'}</button>` : ''}</td>
           <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.need) + ' <span class="faint">' + esc(l.rows[0] ? l.rows[0].x.unit : '') + '</span>'}</td>
           <td class="n" style="white-space:nowrap">${l.kind === 'extra' ? '<span class="faint">—</span>' : mtoQ(l.needBuy) + ' <span class="faint">' + esc(l.unit || '') + '</span>'}</td>
           <td class="n">${l.kind === 'nobuy' ? '<span class="faint">0</span>' : l.fromSurplus ? '<span class="faint" title="Listed ' + mtoQ(l.bought) + ' — no PO, from surplus">no PO</span>' : mtoQ(l.bought)}</td><td class="n">${mtoQ(l.recv)}</td>
@@ -1792,6 +1795,16 @@ function mtoWire(el){
     MTO_EDIT = null; MTO_DIRTY = true; mtoCache(); renderMto();
   });
   el.querySelectorAll('[data-aif]').forEach(b => b.onclick = e => { e.stopPropagation(); openRecord('aif', ...JSON.parse(b.dataset.aif)); });
+  el.querySelectorAll('[data-mrem]').forEach(b => b.onclick = () => {
+    const [shn, ks] = b.dataset.mrem.split('\u0001'), keys = ks.split('\u0002'), sh = MTO.sheets.find(x => x.name === shn); if(!sh) return;
+    const its = sh.items.filter(x => keys.includes(x.key)), cur = (its.find(x => x.remarks) || {}).remarks || '';
+    const v = prompt('Remark for this MTO item:\n' + its.map(x => '• ' + x.desc).join('\n') + '\n\nAn item with a remark is counted as AVAILABLE — no purchase needed.\nExamples: THIRD PARTY SERVICES · RE-USE · UTILISE SURPLUS\n\nLeave it empty to remove the remark added here.', cur);
+    if(v === null) return;
+    MTO.rem = MTO.rem || {}; const o = MTO.rem[shn] = MTO.rem[shn] || {}, t = v.replace(/\s+/g, ' ').trim().toUpperCase();
+    keys.forEach(k => { if(t) o[k] = t; else delete o[k]; });
+    MTO_DIRTY = true; mtoCache(); renderMto(); toast(t ? 'Remark saved — the item is now counted as available.' : 'Remark removed.');
+    if(hubUrl()) mtoSave();
+  });
 }
 window.__HUB.data = () => DATA;
 window.__HUB.mtoState = () => ({MTO, MTO_DIRTY, MTO_ERR, mat: DATA.mat ? {packages: DATA.mat.packages.length, items: DATA.mat.items.length} : null});
