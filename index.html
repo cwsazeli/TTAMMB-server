@@ -2011,18 +2011,18 @@ function renderReadiness(){
     const notDone = rows.filter(x => !x.r.executionDone);
     let list = notDone.filter(x => RD_F === 'all' || x.rd.k === RD_F || (RD_F === 'go' && (x.rd.k === 'ready' || x.rd.k === 'eta_ok' || x.rd.k === 'none')))
       .sort((a, b) => prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 1e9) - (dayN(b.r.due) ?? 1e9));
-    const base = list; list = rdQApply(base);
+    const base = list; if(RDQ.due) RDQ.due = ''; list = rdQApply(base);
     const goN = notDone.filter(x => ['ready', 'eta_ok', 'none'].includes(x.rd.k)).length;
     const tile = (k, n, lbl, cls, sub) => `<button class="rd-tile ${cls}${RD_F === k ? ' on' : ''}" data-rdf="${k}"><b>${n}</b><span>${lbl}</span>${sub ? `<em>${sub}</em>` : ''}</button>`;
     html += `<div class="head"><div><h2>Material Readiness${scope ? ' — ' + esc(scope) : ''}</h2></div></div>${noMto}
       <div class="rd-tiles">${tile('go', goN, 'Ready to execute', 'ok', 'material in hand or not needed')}${tile('waiting', notDone.filter(x => x.rd.k === 'waiting').length, 'Waiting delivery', 'info', 'ordered, not all arrived')}${tile('surplus', notDone.filter(x => x.rd.k === 'surplus').length, STAFF ? 'Surplus to issue' : 'Material being arranged', 'acc', STAFF ? 'no PO / not bought — stock available in another package' : 'from existing stock')}${tile('blocked', notDone.filter(x => x.rd.k === 'blocked').length, STAFF ? 'Blocked' : 'Material not ready', 'bad', STAFF ? 'MTO item not bought / short' : 'still being procured')}${tile('eta_no', notDone.filter(x => x.rd.k === 'eta_no').length, 'ETA not ready', 'warn', 'no MTO — going by ETA')}${tile('pre', notDone.filter(x => x.rd.k === 'pre').length, STAFF ? 'Before material' : 'Preparation', 'info', 'survey / drawing approval / MTO not done, or on hold')}${tile('unknown', notDone.filter(x => x.rd.k === 'unknown').length, 'Unknown', 'faint', 'no MTO, no ETA')}${tile('all', notDone.length, 'All open', '', 'not executed yet')}</div>
-      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th><th class="n">MTO lines received</th></tr>${rdQRow(base, ['notif', 'find', 'pkg', 'pri', 'due', 'stg', 'mat', 'mto'])}</thead><tbody>
+      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Stages</th><th>Material</th><th class="n">MTO lines received</th></tr>${rdQRow(base, ['notif', 'find', 'pkg', 'pri', 'stg', 'mat', 'mto'])}</thead><tbody>
       ${list.map(x => { const r = x.r, open = RD_OPEN.has(r.uid), R = rdLab(x.rd); return `<tr class="xrow" data-rdo="${esc(r.uid)}"><td style="white-space:nowrap">${open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(r.view)}</div></td>
         <td style="min-width:260px">${esc(clean(r.finding || r.desc).slice(0, 160))}<div class="faint" style="font-size:11.5px">${esc([r.equip, r.module].filter(v => !blank(v)).join(' · '))}</div></td>
         <td style="white-space:nowrap">${pkgCell(x)}</td>
-        <td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
+        <td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
         <td style="white-space:nowrap"><span class="mto-st ${R[1]}">${R[0]}</span></td><td class="n">${x.rd.tot ? `${x.rd.rec} / ${x.rd.tot}` : '<span class="faint">—</span>'}</td></tr>
-        ${open ? `<tr class="detail"><td colspan="8">${lineList(x)}</td></tr>` : ''}`; }).join('')}
+        ${open ? `<tr class="detail"><td colspan="7">${lineList(x)}</td></tr>` : ''}`; }).join('')}
       </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No finding in this group' + (Object.values(RDQ).some(Boolean) ? ' with these column filters' : '') + '.</div>' : ''}
       <div class="more">Click a row to see its MTO items. “Received” counts stock received for that package line (and surplus issued to it); if a package line is short, every finding that uses it shows as blocked until it is sorted.</div></div>`;
   } else {
