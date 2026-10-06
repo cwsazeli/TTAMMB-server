@@ -225,7 +225,7 @@ button.rd-tile{cursor:pointer;} button.rd-tile:hover{border-color:var(--accent);
 .rd-stg.ok{background:var(--ok);border-color:var(--ok);color:#fff;} .rd-stg.on{background:#f2c200;border-color:#d9ad00;color:#3d3000;} .rd-now{margin-top:4px;font-size:11.5px;color:var(--text-dim);white-space:normal;max-width:330px;line-height:1.35;} .rd-now b{color:var(--text);font-size:10.5px;letter-spacing:.3px;}
 .rd-lines{padding:8px 14px 10px 34px;font-size:12.5px;line-height:1.6;}
 .rd-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--text-faint);vertical-align:middle;}
-.rd-dot.received{background:var(--ok);} .rd-dot.ordered{background:var(--info);} .rd-dot.surplus{background:var(--accent);} .rd-dot.missing{background:var(--bad);} .rd-dot.remark{background:var(--ok);opacity:.5;} .mto-rem{display:inline-block;margin-left:4px;padding:0 6px;border-radius:8px;font-size:11px;background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok);} .rd-dot.spavail{background:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--bad) 55%,transparent);} .rd-sp{margin:2px 0 4px 20px;font-size:12px;color:var(--accent);}
+.rd-dot.received{background:var(--ok);} .rd-dot.ordered{background:var(--info);} .rd-dot.surplus{background:var(--accent);} .rd-dot.missing{background:var(--bad);} .rd-dot.remark{background:var(--ok);opacity:.5;} .mto-rem{display:inline-block;margin-left:4px;padding:0 6px;border-radius:8px;font-size:11px;background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok);} .rd-dot.spavail{background:var(--ok);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent);} .rd-sp{margin:2px 0 4px 20px;font-size:12px;color:var(--accent);}
 .oc-bars{padding:12px 16px;display:grid;gap:6px;}
 .oc-bar{display:grid;grid-template-columns:minmax(150px,260px) 1fr 44px;gap:10px;align-items:center;background:none;border:0;padding:3px 4px;font:inherit;color:var(--text);cursor:pointer;text-align:left;border-radius:3px;}
 .oc-bar:hover,.oc-bar.on{background:var(--panel2);} .oc-bar b{text-align:right;font-variant-numeric:tabular-nums;} .oc-l{font-size:12.5px;}
@@ -1574,7 +1574,7 @@ async function mtoImport(file){
     const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array'});
     const nx = mtoParseBook(X, wb, file.name);
     if(!nx.sheets.length){ toast('No MTO sheet found — each sheet needs an “Item | Descriptions | Units” header.', 7000); return; }
-    if(MTO){ nx.map = MTO.map || {}; nx.over = MTO.over || {}; nx.rem = MTO.rem || {}; nx.issues = MTO.issues || []; }   // keep the package links, manual matches, remarks added in the app and the surplus ledger
+    if(MTO){ nx.map = MTO.map || {}; nx.over = MTO.over || {}; nx.rem = MTO.rem || {}; nx.issues = MTO.issues || []; nx.noSpare = MTO.noSpare || {}; }   // keep the package links, manual matches, remarks added in the app and the surplus ledger
     MTO = nx; MTO_DIRTY = true; mtoCache();
     if(MTO_SHEET !== '*' && !nx.sheets.some(s => s.name === MTO_SHEET)) MTO_SHEET = '*';
     toast(`MTO read: ${nx.sheets.length} sheets, ${nx.sheets.reduce((a, s) => a + s.items.length, 0)} lines. Press “Save to Sheet” to share it.`, 6000);
@@ -1666,6 +1666,17 @@ function mtoSurplusPool(all){
     if(iss){ avail = Math.round((avail - iss) * 100) / 100; basis += ` − ${+iss.toFixed(2)} issued (ledger)`; }
     if(avail > 1e-9) pool.push({sheet: a.sh.name, pkg: a.p.name, it, f, avail, unit, basis, extra: l.kind === 'extra', wanted: []});
   }); });
+  // Materials packages with no MTO sheet (e.g. TGAST AU PACKAGE): no MTO asks for their stock, so everything received there is spare
+  const linked = new Set(all.filter(a => a.p).map(a => a.p.id));
+  if(DATA.mat) DATA.mat.packages.filter(p => !linked.has(p.id) && !((MTO && MTO.noSpare) || {})[p.name]).forEach(p => DATA.mat.items.filter(it => it.pkgId === p.id).forEach(it => {
+    const have = +it.received || 0; if(!(have > 0) || mtoFromSurplus(it)) return;
+    const f = mtoFeat(it.desc), pd = f.type === 'PLATE' ? mtoPlateDims(it.desc) : null, isLen = !!MTO_LEN_TYPES[f.type] && (MTO_M(it.unit) || MTO_LGU(it.unit));
+    let avail = have, unit = it.unit || '', basis = `${have} ${it.unit || ''} received · package has no MTO`;
+    if(pd){ avail = mtoM2(have * pd.w * pd.l); unit = 'm²'; basis = `${have} sheet${have === 1 ? '' : 's'} of ${pd.txt} received = ${mtoQ(avail)} m² · package has no MTO`; }
+    else if(isLen){ avail = MTO_LGU(it.unit) ? (have % 6 === 0 ? have : have * 6) : have; unit = 'm'; basis = `${have} ${it.unit} received = ${avail} m · package has no MTO`; }
+    const iss = mtoIssued(p.name, it.desc, 'from'); if(iss){ avail = Math.round((avail - iss) * 100) / 100; basis += ` − ${+iss.toFixed(2)} issued (ledger)`; }
+    if(avail > 1e-9) pool.push({sheet: p.name, pkg: p.name, it, f, avail, unit, basis, extra: true, noMto: true, wanted: []});
+  }));
   return pool;
 }
 function mtoSurplusNeeds(all, pool){
@@ -1762,7 +1773,7 @@ function renderMto(){
       <td><select class="mto-sel" data-mmap="${esc(a.sh.name)}" onclick="event.stopPropagation()"><option value="-"${!a.p ? ' selected' : ''}>— not linked —</option>${pk.map(p => `<option value="${esc(p.name)}"${a.p && a.p.id === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></td>
       <td class="n">${a.sh.items.length}</td>${a.p ? cell(c.ok, 'ok') + cell(c.short, 'bad') + cell(c.nobuy, 'bad') + cell(c.surplus, 'accent') + cell(c.over, 'warn') + cell(c.extra, 'info') + cell(c.cross, 'accent') + cell(c.unit + c.weak, 'warn') : '<td colspan="8" class="faint">Pick the Materials package this MTO sheet belongs to.</td>'}</tr>`; }).join('')}
     <tr class="xrow mto-all${MTO_SHEET === '*' ? ' mto-on' : ''}" data-msh="*"><td><b>${MTO_SHEET === '*' ? '▸ ' : ''}ALL PACKAGES</b><div class="faint" style="font-size:11.5px">one list for every linked package</div></td><td class="faint">${linkedAll.length} linked</td><td class="n"><b>${linkedAll.reduce((n, a) => n + a.sh.items.length, 0)}</b></td>${cell(tot.ok, 'ok') + cell(tot.short, 'bad') + cell(tot.nobuy, 'bad') + cell(tot.surplus, 'accent') + cell(tot.over, 'warn') + cell(tot.extra, 'info') + cell(tot.cross, 'accent') + cell(tot.unit + tot.weak, 'warn')}</tr>
-    </tbody></table></div></div><div class="gap"></div>`;
+    </tbody></table></div>${(() => { const un = pk.filter(p => !linkedAll.some(a => a.p.id === p.id)); return un.length ? `<div class="mto-vb"><span class="rd-fl" title="These Materials packages have no MTO sheet, so nothing in the MTO asks for their stock. Tick the ones whose received stock may be used by other packages.">No MTO sheet — use its stock as spare:</span><div class="chips">${un.map(p => `<button class="chip" data-nosp="${esc(p.name)}" aria-pressed="${!(MTO.noSpare || {})[p.name]}" title="Click to switch on / off">${(MTO.noSpare || {})[p.name] ? '✕' : '✓'} ${esc(p.name)}</button>`).join('')}</div></div>` : ''; })()}</div><div class="gap"></div>`;
 
   const cur = MTO_SHEET === '*' ? {all: true, sh: {name: 'ALL PACKAGES', items: [].concat(...linkedAll.map(a => a.sh.items)), notifs: [].concat(...linkedAll.map(a => a.sh.notifs))}, p: {name: linkedAll.length + ' packages'}, items: [].concat(...linkedAll.map(a => a.items)), lines: [].concat(...linkedAll.map(a => a.lines))}
             : all.find(a => a.sh.name === MTO_SHEET);
@@ -1830,6 +1841,7 @@ function mtoWire(el){
     if(n && c) mtoIssue(n, c); else toast('That match has changed — refresh and try again.'); });
   el.querySelectorAll('[data-msp]').forEach(b => b.onclick = () => { MTO_SPTAB = b.dataset.msp; renderMto(); });
   el.querySelectorAll('[data-mf]').forEach(b => b.onclick = () => { MTO_FILTER = b.dataset.mf; renderMto(); });
+  el.querySelectorAll('[data-nosp]').forEach(b => b.onclick = () => { MTO.noSpare = MTO.noSpare || {}; const k = b.dataset.nosp; if(MTO.noSpare[k]) delete MTO.noSpare[k]; else MTO.noSpare[k] = true; MTO_DIRTY = true; mtoCache(); renderMto(); if(hubUrl()) mtoSave(); });
   el.querySelectorAll('[data-mview]').forEach(b => b.onclick = () => { MTO_VIEW = b.dataset.mview; renderMto(); });
   el.querySelectorAll('[data-mnn]').forEach(x => x.onchange = () => { MTO_NN = x.value; renderMto(); });
   el.querySelectorAll('[data-medit]').forEach(b => b.onclick = () => { MTO_EDIT = b.dataset.medit; renderMto(); const s2 = el.querySelector('[data-mover]'); if(s2) s2.focus(); });
@@ -1908,13 +1920,13 @@ function readinessMap(){
   // not bought / short lines that leftover stock in another package can cover (greedy — each piece of stock is offered once)
   const spMap = new Map(), altMap = new Map();
   if(all){ const pool = mtoSurplusPool(all), needs = mtoSurplusNeeds(all, pool), left = new Map(pool.map(p => [p, p.avail]));
-    needs.filter(n => n.why === 'nobuy' || n.why === 'short').forEach(n => {
+    needs.forEach(n => {
       let rem = n.rem; const take = [];
       n.cands.forEach(c => { if(rem <= 1e-9) return; const av = left.get(c) || 0; if(av <= 1e-9) return; const q = Math.min(av, rem); take.push({c, q}); rem -= q; });
       if(n.alts.length) altMap.set(n.l, n.alts.slice(0, 3).map(c => ({sheet: c.sheet, desc: c.it.desc, q: c.avail, unit: c.unit})));
       if(rem <= 1e-9){ take.forEach(t => left.set(t.c, left.get(t.c) - t.q)); spMap.set(n.l, take.map(t => ({sheet: t.c.sheet, pkg: t.c.pkg, desc: t.c.it.desc, q: Math.round(t.q * 100) / 100, unit: t.c.unit}))); }
     }); }
-  if(all) all.forEach(a => { if(!a.p) return; a.lines.forEach(l => { let st0 = mtoLineState(l); const sp0 = st0 === 'missing' ? spMap.get(l) : null; if(sp0) st0 = 'spavail';
+  if(all) all.forEach(a => { if(!a.p) return; a.lines.forEach(l => { let st0 = mtoLineState(l); const sp0 = st0 === 'missing' || st0 === 'surplus' ? spMap.get(l) : null; if(sp0) st0 = 'spavail';
     l.rows.forEach(r => { const rk = mtoHasRemark(r.x) && (l.st === 'remark' || st0 === 'missing' || st0 === 'spavail' || st0 === 'remark'), st = rk ? 'remark' : st0, sp = rk ? null : sp0;
       Object.entries(r.x.per || {}).forEach(([lab, q]) => String(lab).split(/[^0-9]+/).filter(n => n.length >= 6).forEach(n =>
       (m[n] = m[n] || []).push({sheet: a.sh.name, desc: r.x.desc, qty: q, unit: r.x.unit, st, l, sp, alt: st === 'missing' ? altMap.get(l) : null, rem: rk ? String(r.x.remarks).trim() : ''}))); }); }); });
@@ -1955,7 +1967,7 @@ function findingReadiness(r, map){
     : x.st === 'spavail' || x.st === 'surplus' || x.st === 'remark' ? Object.assign({}, x, {st: 'received', sp: null, alt: null, rem: ''}) : x.sp || x.alt ? Object.assign({}, x, {sp: null, alt: null}) : x);
   if(lines.length){
     const c = k => lines.filter(x => x.st === k).length;
-    return {k: c('missing') ? 'blocked' : c('ordered') ? 'waiting' : c('surplus') || c('spavail') ? 'surplus' : 'ready', sp: c('spavail'), lines, rec: c('received') + c('remark'), tot: lines.length, remark: c('remark'), src: 'MTO'};
+    return {k: c('missing') ? 'blocked' : c('ordered') ? 'waiting' : c('surplus') ? 'surplus' : 'ready', sp: c('spavail'), lines, rec: c('received') + c('remark') + c('spavail'), tot: lines.length, remark: c('remark'), src: 'MTO'};
   }
   const eta = clean(r.eta);
   if(/^(N\/?A|NIL|NONE|-)$/i.test(eta)) return {k: 'none', lines: [], src: 'ETA'};
@@ -2115,16 +2127,16 @@ function renderReadiness(){
   const aifBtn = r => `<button class="linkish mono" data-aif='${esc(JSON.stringify([r.cat, r.view, r.uid]))}'>${esc(r.notif || r.report || '—')}</button>`;
   const due = r => { const d = dayN(r.due), t = dayN(todayISO()); if(d === null) return '<span class="faint">—</span>'; const late = t - d; return `<span${late > 0 ? ' style="color:var(--bad);font-weight:600"' : ''}>${fmtD(r.due)}${late > 0 ? ` · ${late}d late` : ''}</span>`; };
   const pkgCell = x => { const t = clean(x.r.packageTag), sh = [...new Set((x.rd.lines || []).map(l => l.sheet))].join(', '); return (t ? `<b>${esc(t)}</b>` : sh ? '' : '<span class="faint">—</span>') + (sh ? `<div class="faint" style="font-size:11.5px" title="Sheet in the survey MTO Excel">MTO: ${esc(sh)}</div>` : ''); };
-  const LO = {missing: 0, spavail: 1, surplus: 2, ordered: 3, received: 4, remark: 5};
+  const LO = {missing: 0, surplus: 1, ordered: 2, spavail: 3, received: 4, remark: 5};
   // "short" is not "not bought": say how much of the line was bought and received, and how much is still to buy
-  const part = m => (m.st === 'missing' || m.st === 'spavail') && m.l.it && (+m.l.bought || 0) > 0;
-  const lineLab = m => part(m) ? (STAFF ? (m.st === 'spavail' ? 'Short — surplus available' : 'Short') : 'Partly bought')
-    : (STAFF ? {received: 'Received', ordered: 'Ordered', surplus: 'From surplus', missing: 'Not bought', spavail: 'Not bought — surplus available', remark: 'Available (by remark)'} : {received: 'Received', ordered: 'Bought — not received yet', surplus: 'Received', missing: 'Not bought yet', spavail: 'Received', remark: 'By third party'})[m.st];
+  const part = m => (m.st === 'missing' || m.st === 'spavail') && m.l.it && !m.l.fromSurplus && (+m.l.bought || 0) > 0;
+  const lineLab = m => m.st === 'spavail' && STAFF ? (part(m) ? 'Received — part from spare' : 'Received — from spare') : part(m) ? (STAFF ? 'Short' : 'Partly bought')
+    : (STAFF ? {received: 'Received', ordered: 'Ordered', surplus: 'From surplus', missing: 'Not bought', spavail: 'Received — from spare', remark: 'Available (by remark)'} : {received: 'Received', ordered: 'Bought — not received yet', surplus: 'Received', missing: 'Not bought yet', spavail: 'Received', remark: 'By third party'})[m.st];
   const partTxt = m => { if(!part(m)) return ''; const l = m.l, u = esc(l.unit || ''), more = Math.round((l.needBuy - l.bought) * 100) / 100;
-    return ` <span class="rd-part">bought <b>${mtoQ(l.bought)}</b> of ${mtoQ(l.needBuy)} ${u} · received ${mtoQ(+l.recv || 0)}${more > 0 ? ` · <b>${mtoQ(more)} more to buy</b>` : ''}</span>`; };
+    return ` <span class="rd-part">bought <b>${mtoQ(l.bought)}</b> of ${mtoQ(l.needBuy)} ${u} · received ${mtoQ(+l.recv || 0)}${more > 0 ? (m.st === 'spavail' ? ' · the rest from spare' : ` · <b>${mtoQ(more)} more to buy</b>`) : ''}</span>`; };
   // the same item bought under another package is only worth showing when that package has some to spare (not all used by its own MTO)
   const spareElse = m => (m.l.cross || []).filter(c => c.kind === 'bought' && (c.spare === null || c.spare > 0)).slice(0, 3);
-  const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc(lineLab(m))}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)}${partTxt(m)} <span class="faint">(${esc(m.sheet)}${m.rem && (STAFF || m.st === 'remark') ? ' · remark: ' + esc(m.rem) : ''}${STAFF && m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span>${STAFF && m.sp ? `<div class="rd-sp">♻ Surplus: ${m.sp.map(x => `<b>${mtoQ(x.q)} ${esc(x.unit)}</b> from <b>${esc(x.sheet)}</b>`).join(' + ')}</div>` : ''}${STAFF && (m.st === 'missing') && spareElse(m).length ? `<div class="rd-sp" style="color:var(--warn)">↔ Spare in ${spareElse(m).map(c => `<b>${esc(c.where)}</b>: ${mtoQ(c.spare === null ? c.qty : c.spare)} ${esc(c.spareU || c.unit)}${c.recv ? '' : ' (not received yet)'}`).join(' · ')}</div>` : ''}${STAFF && m.alt ? `<div class="rd-sp" style="color:var(--text-dim)">≈ Other thickness in stock: ${m.alt.map(x => `<b>${esc(x.sheet)}</b> ${esc(x.desc)} — ${mtoQ(x.q)} ${esc(x.unit)}`).join(' · ')}</div>` : ''}</div>`).join('')}</div>`
+  const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc(lineLab(m))}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)}${partTxt(m)} <span class="faint">(${esc(m.sheet)}${m.rem && (STAFF || m.st === 'remark') ? ' · remark: ' + esc(m.rem) : ''}${STAFF && m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span>${STAFF && m.sp ? `<div class="rd-sp">♻ Spare taken from: ${m.sp.map(x => `<b>${esc(x.sheet)}</b> ${mtoQ(x.q)} ${esc(x.unit)}`).join(' + ')}</div>` : ''}${STAFF && (m.st === 'missing') && spareElse(m).length ? `<div class="rd-sp" style="color:var(--warn)">↔ Spare in ${spareElse(m).map(c => `<b>${esc(c.where)}</b>: ${mtoQ(c.spare === null ? c.qty : c.spare)} ${esc(c.spareU || c.unit)}${c.recv ? '' : ' (not received yet)'}`).join(' · ')}</div>` : ''}${STAFF && m.alt ? `<div class="rd-sp" style="color:var(--text-dim)">≈ Other thickness in stock: ${m.alt.map(x => `<b>${esc(x.sheet)}</b> ${esc(x.desc)} — ${mtoQ(x.q)} ${esc(x.unit)}`).join(' · ')}</div>` : ''}</div>`).join('')}</div>`
     : `<div class="rd-lines faint">${!STAFF ? (x.rd.src === 'ETA' ? 'Delivery status: ' + esc(clean(x.r.eta) || '—') : x.rd.why && x.rd.k !== 'unknown' ? '<b>' + esc(x.rd.why) + '</b>' : 'Material list not available yet.') : x.rd.src === 'ETA' ? 'From AIF ETA: ' + esc(clean(x.r.eta) || '—') : (x.rd.why ? '<b>' + esc(x.rd.why) + '</b> · ' : '') + 'No MTO line and no ETA for this notification.' + (STAFF && x.r.raw ? ' AIF Excel: ' + [['SURVEY', x.r.raw.survey], ['SURVEY_REMARKS', x.r.raw.surveyRem], ['MATERIAL TAKE OFF', x.r.raw.takeOff], ['MRIR', x.r.raw.mrir], ['FABRICATION', x.r.raw.fab], ['FAB REMARKS', x.r.raw.fabRem], ['EXECUTION', x.r.raw.exe], ['EXE REMARKS', x.r.raw.exeRem]].filter(([, v]) => v).map(([k, v]) => k + ' “' + esc(String(v).replace(/\s+/g, ' ').trim()) + '”').join(' · ') : '')}</div>`;
   let html = tabs + areaChips;
   if(RD_TAB === 'ready'){
