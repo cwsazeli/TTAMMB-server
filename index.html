@@ -1683,6 +1683,25 @@ function mtoSurplusPool(all){
   }));
   return pool;
 }
+/* Stud bolts: stock of the same stud bolt (same diameter, same bolt and nut grade) that is up to MTO_STUD_TOL mm longer or shorter than the MTO asks for.
+   Only SUGGESTED — never counted as received and never reserved; the engineer decides whether it fits and records it with Issue. */
+const MTO_STUD_TOL = 10;
+const mtoCoat = d => { d = String(d || '').toUpperCase(); return /FLUORO|PTFE|XYLAN/.test(d) ? 'FLUORO' : /GALV|\bHDG\b|ZINC/.test(d) ? 'GALV' : ''; };
+const mtoBoltGr = d => (/\b(B7M|B7|B16|B8M|B8|L7M|L7)\b/.exec(String(d || '').toUpperCase()) || [])[1] || '';
+const mtoNutGr = d => (/A-?\s?194\s*(?:GR\.?\s*)?(\w+)/.exec(String(d || '').toUpperCase()) || [])[1] || '';
+function mtoStudAlts(f, l, unit, pool){
+  if(f.type !== 'BOLT' || !f.len || !/\bSTUD/.test(f.desc)) return [];
+  const f0 = Object.assign({}, f, {len: ''}), want = +f.len, c0 = mtoCoat(f.desc), bg = mtoBoltGr(f.desc), ng = mtoNutGr(f.desc);
+  return pool.filter(p => (!l.it || p.it.id !== l.it.id) && (unit === 'm²') === (p.unit === 'm²') && p.f.type === 'BOLT' && p.f.len && p.f.len !== f.len && /\bSTUD/.test(p.f.desc)
+      && Math.abs(+p.f.len - want) <= MTO_STUD_TOL && mtoScore(f0, Object.assign({}, p.f, {len: ''})) >= 0.5
+      && !(bg && mtoBoltGr(p.f.desc) && bg !== mtoBoltGr(p.f.desc)) && !(ng && mtoNutGr(p.f.desc) && ng !== mtoNutGr(p.f.desc)))
+    .map(p => Object.assign({}, p, {lenDiff: +p.f.len - want, coatDiff: mtoCoat(p.f.desc) !== c0}))
+    .sort((x, y) => Math.abs(x.lenDiff) - Math.abs(y.lenDiff) || y.lenDiff - x.lenDiff || y.avail - x.avail);
+}
+function mtoLenAltHtml(n){
+  const A = n.lenAlts || []; if(!A.length || n.cands.some(c => c.avail >= n.rem - 1e-9)) return '';
+  return `<div class="mto-alt">≈ Stud bolt, other length (within ±${MTO_STUD_TOL} mm — check it fits before using it): ${A.slice(0, 4).map(c => `<span class="mto-sp">${c.avail >= n.rem - 1e-9 ? '<span class="ok">✓ enough</span>' : '<span class="part">partly</span>'} · <b>${esc(c.pkg)}</b>: ${esc(c.it.desc)} — <b>${mtoQ(c.avail)} ${esc(c.unit)}</b> left · <b>${c.lenDiff > 0 ? '+' : '−'}${Math.abs(c.lenDiff)} mm ${c.lenDiff > 0 ? 'longer' : 'shorter'}</b>${c.coatDiff ? ' · <b style="color:var(--bad)">coating differs</b>' : ''} <button class="btn sm mto-iss" data-iss="${esc(JSON.stringify([n.sheet, n.desc, c.sheet, c.it.desc, 'len']))}" title="Record this stud bolt as a substitute (Surplus Ledger)">Issue ▸</button></span>`).join(' ')}${A.length > 4 ? ` <span class="faint">+${A.length - 4} more</span>` : ''}</div>`;
+}
 function mtoSurplusNeeds(all, pool){
   const needs = [];
   all.forEach(a => { if(!a.p) return; a.lines.forEach(l => {
@@ -1702,7 +1721,7 @@ function mtoSurplusNeeds(all, pool){
     const cands = pool.filter(p => (!l.it || p.it.id !== l.it.id) && (unit === 'm²') === (p.unit === 'm²') && mtoScore(f, p.f) >= 0.5).sort((x, y) => y.avail - x.avail);
     // nothing matches exactly: stock of the same item in ANOTHER thickness (plate, channel, angle, flat bar…) is worth a look — never counted, only shown
     const f0 = Object.assign({}, f, {thk: ''}), alts = !cands.length && f.thk ? pool.filter(p => (!l.it || p.it.id !== l.it.id) && (unit === 'm²') === (p.unit === 'm²') && p.f.thk && p.f.thk !== f.thk && mtoScore(f0, Object.assign({}, p.f, {thk: ''})) >= 0.5).sort((x, y) => y.avail - x.avail) : [];
-    const n = {sheet: a.sh.name, pkg: a.p.name, l, desc: nDesc, why: l.st, rem, unit, cands, alts, issued: got2};
+    const lenAlts = mtoStudAlts(f, l, unit, pool), n = {sheet: a.sh.name, pkg: a.p.name, l, desc: nDesc, why: l.st, rem, unit, cands, alts, lenAlts, issued: got2};
     cands.forEach(c => c.wanted.push(n));
     needs.push(n);
   }); });
@@ -1727,7 +1746,7 @@ function mtoSurplusHtml(all){
     h += `<div class="tw"><table class="grid mto-t"><thead><tr><th>Package</th><th>Why</th><th>Item needed</th><th class="n">Still needed</th><th>Surplus that matches (other packages)</th></tr></thead><tbody>
       ${vNeeds.sort((x, y) => (y.why === 'surplus') - (x.why === 'surplus') || (y.cands.length > 0) - (x.cands.length > 0) || x.sheet.localeCompare(y.sheet)).map(n => { const w = why[n.why]; return `<tr class="mto-${w[1]}"><td style="white-space:nowrap"><button class="linkish" data-msh2="${esc(n.sheet)}">${esc(n.sheet)}</button></td><td style="white-space:nowrap"><span class="mto-st ${w[1]}">${w[0]}</span></td>
         <td style="min-width:240px">${esc(n.desc)}${n.l.it && n.l.rows.length ? `<div class="faint" style="font-size:11.5px">Materials: ${esc(n.l.it.desc)}</div>` : ''}</td><td class="n" style="white-space:nowrap;font-weight:700">${mtoQ(n.rem)} <span class="faint">${esc(n.unit)}</span>${n.issued ? `<div class="faint" style="font-weight:400;font-size:11px">${mtoQ(n.issued)} issued</div>` : ''}</td>
-        <td style="min-width:260px">${n.cands.length ? n.cands.slice(0, 4).map(c => `<span class="mto-sp">${c.avail >= n.rem - 1e-9 ? '<span class="ok">✓ enough</span>' : '<span class="part">partly</span>'} · <b>${esc(c.pkg)}</b>: ${esc(c.it.desc)} — <b>${mtoQ(c.avail)} ${esc(c.unit)}</b> left${c.extra ? ' <span class="faint">(not in its MTO)</span>' : ''}${c.wanted.length > 1 ? ` <span class="faint">· also wanted by ${c.wanted.length - 1} other line${c.wanted.length > 2 ? 's' : ''}</span>` : ''} <button class="btn sm mto-iss" data-iss="${esc(JSON.stringify([n.sheet, n.desc, c.sheet, c.it.desc]))}" title="Record that this surplus was issued (Surplus Ledger)">Issue ▸</button></span>`).join('') + (n.cands.length > 4 ? `<span class="faint">+${n.cands.length - 4} more</span>` : '') + (n.cands.length > 1 && !n.cands.some(c => c.avail >= n.rem - 1e-9) ? (t => `<span class="mto-sp">${t >= n.rem - 1e-9 ? '<span class="ok">✓ enough together</span>' : '<span class="part">still short ' + mtoQ(+(n.rem - t).toFixed(2)) + '</span>'} · all of them: ${mtoQ(+t.toFixed(2))} ${esc(n.unit)}</span>`)(n.cands.reduce((a, c) => a + c.avail, 0)) : '') : (n.alts.length ? `<span class="faint">No exact match — needs a PO.</span><div class="mto-alt">≈ Same item, other thickness: ${n.alts.slice(0, 3).map(c => `<b>${esc(c.pkg)}</b>: ${esc(c.it.desc)} — ${mtoQ(c.avail)} ${esc(c.unit)} left`).join(' · ')}</div>` : '<span class="faint">No matching surplus — needs a PO</span>')}</td></tr>`; }).join('')}
+        <td style="min-width:260px">${n.cands.length ? n.cands.slice(0, 4).map(c => `<span class="mto-sp">${c.avail >= n.rem - 1e-9 ? '<span class="ok">✓ enough</span>' : '<span class="part">partly</span>'} · <b>${esc(c.pkg)}</b>: ${esc(c.it.desc)} — <b>${mtoQ(c.avail)} ${esc(c.unit)}</b> left${c.extra ? ' <span class="faint">(not in its MTO)</span>' : ''}${c.wanted.length > 1 ? ` <span class="faint">· also wanted by ${c.wanted.length - 1} other line${c.wanted.length > 2 ? 's' : ''}</span>` : ''} <button class="btn sm mto-iss" data-iss="${esc(JSON.stringify([n.sheet, n.desc, c.sheet, c.it.desc]))}" title="Record that this surplus was issued (Surplus Ledger)">Issue ▸</button></span>`).join('') + (n.cands.length > 4 ? `<span class="faint">+${n.cands.length - 4} more</span>` : '') + (n.cands.length > 1 && !n.cands.some(c => c.avail >= n.rem - 1e-9) ? (t => `<span class="mto-sp">${t >= n.rem - 1e-9 ? '<span class="ok">✓ enough together</span>' : '<span class="part">still short ' + mtoQ(+(n.rem - t).toFixed(2)) + '</span>'} · all of them: ${mtoQ(+t.toFixed(2))} ${esc(n.unit)}</span>`)(n.cands.reduce((a, c) => a + c.avail, 0)) : '') : (n.alts.length ? `<span class="faint">No exact match — needs a PO.</span><div class="mto-alt">≈ Same item, other thickness: ${n.alts.slice(0, 3).map(c => `<b>${esc(c.pkg)}</b>: ${esc(c.it.desc)} — ${mtoQ(c.avail)} ${esc(c.unit)} left`).join(' · ')}</div>` : '<span class="faint">No matching surplus — needs a PO</span>')}${mtoLenAltHtml(n)}</td></tr>`; }).join('')}
       </tbody></table></div>${!vNeeds.length ? '<div class="note">Nothing here needs surplus stock.</div>' : ''}`;
   }
   h += `<div class="more">${covered} of ${vNeeds.length} can be fully covered from surplus${partly ? `, ${partly} only partly` : ''}. Leftover is only counted from stock already <b>received</b>. Check the item physically before issuing it — the match is by type, size, rating, schedule and bolt length.</div></div>`;
@@ -1841,7 +1860,7 @@ function mtoWire(el){
   el.querySelectorAll('[data-msh2]').forEach(b => b.onclick = () => { MTO_SHEET = b.dataset.msh2; MTO_EDIT = null; renderMto(); window.scrollTo(0, 0); });
   el.querySelectorAll('[data-iss]').forEach(b => b.onclick = () => { const [ns, nd, cs, cd] = JSON.parse(b.dataset.iss);
     const all = MTO.sheets.map(sh => Object.assign({sh}, mtoLinesFor(sh))), pool = mtoSurplusPool(all), needs = mtoSurplusNeeds(all, pool);
-    const n = needs.find(x => x.sheet === ns && x.desc === nd), c = n && n.cands.find(x => x.sheet === cs && x.it.desc === cd);
+    const n = needs.find(x => x.sheet === ns && x.desc === nd), c = n && (n.cands.find(x => x.sheet === cs && x.it.desc === cd) || (n.lenAlts || []).find(x => x.sheet === cs && x.it.desc === cd));
     if(n && c) mtoIssue(n, c); else toast('That match has changed — refresh and try again.'); });
   el.querySelectorAll('[data-msp]').forEach(b => b.onclick = () => { MTO_SPTAB = b.dataset.msp; renderMto(); });
   el.querySelectorAll('[data-mf]').forEach(b => b.onclick = () => { MTO_FILTER = b.dataset.mf; renderMto(); });
@@ -2259,7 +2278,7 @@ function buyList(){
     const per = {}; l.rows.forEach(r => Object.entries(r.x.per || {}).forEach(([k, q]) => per[k] = (per[k] || 0) + q));
     return {sheet: n.sheet, pkg: n.pkg, desc: n.desc, boughtAs: l.it ? l.it.desc : '', why: n.why, mtoQty: l.rows.length ? l.need : null, mtoUnit: l.rows[0] ? l.rows[0].x.unit : '',
       ordered: l.kind === 'nobuy' || l.fromSurplus ? 0 : (+l.bought || 0), ordUnit: l.it ? l.unit || '' : '', qty, unit, txt, cover, rem: n.rem, remUnit: n.unit || '',
-      take: found ? take.map(t => ({sheet: t.c.sheet, desc: t.c.it.desc, q: Math.round(t.q * 100) / 100, unit: t.c.unit})) : [], spRem: n.why === 'surplus' && l.it ? String(l.it.remarks || '').replace(/\s+/g, ' ').trim() : '', part: !cover && n.cands.length > 0, alts: n.alts.slice(0, 3).map(c => ({sheet: c.sheet, desc: c.it.desc, q: c.avail, unit: c.unit})), per};
+      take: found ? take.map(t => ({sheet: t.c.sheet, desc: t.c.it.desc, q: Math.round(t.q * 100) / 100, unit: t.c.unit})) : [], spRem: n.why === 'surplus' && l.it ? String(l.it.remarks || '').replace(/\s+/g, ' ').trim() : '', part: !cover && n.cands.length > 0, alts: n.alts.slice(0, 3).map(c => ({sheet: c.sheet, desc: c.it.desc, q: c.avail, unit: c.unit})), lenAlts: cover ? [] : (n.lenAlts || []).slice(0, 3).map(c => ({sheet: c.sheet, desc: c.it.desc, q: c.avail, unit: c.unit, d: c.lenDiff})), per};
   });
 }
 async function buyExport(){
@@ -2322,7 +2341,7 @@ function renderProcurement(){
             <td class="n" style="white-space:nowrap">${b.mtoQty == null ? '<span class="faint">—</span>' : mtoQ(b.mtoQty) + ' <span class="faint">' + esc(b.mtoUnit) + '</span>'}</td>
             <td class="n" style="white-space:nowrap">${b.ordered ? mtoQ(b.ordered) + ' <span class="faint">' + esc(b.ordUnit) + '</span>' : '<span class="faint">0</span>'}</td>
             <td class="n" style="white-space:nowrap">${b.cover ? '<span class="faint">0</span>' : `<b style="font-size:14px;color:var(--bad)">${mtoQ(b.qty)}</b> <span class="faint">${esc(b.unit)}</span>`}</td>
-            <td style="min-width:230px">${b.cover ? `<b style="color:var(--accent)">♻ Use surplus</b><div style="font-size:11.5px">${b.take.length ? b.take.map(t => `${mtoQ(t.q)} ${esc(t.unit)} from <b>${esc(t.sheet)}</b> <span class="faint">(${esc(t.desc)})</span>`).join('<br>') : 'Materials remark: <b>' + esc(b.spRem || 'surplus') + '</b>'}</div>` : `<b>Buy</b>${b.txt ? `<div class="faint" style="font-size:11.5px">${esc(b.txt)}</div>` : ''}${b.part && OPS ? '<div class="faint" style="font-size:11.5px">some surplus matches, but not enough — see the Surplus box</div>' : ''}${b.alts.length && OPS ? `<div class="faint" style="font-size:11.5px">≈ same item, other thickness in stock: ${b.alts.map(t => `<b>${esc(t.sheet)}</b> ${esc(t.desc)} — ${mtoQ(t.q)} ${esc(t.unit)}`).join(' · ')}</div>` : ''}`}</td>
+            <td style="min-width:230px">${b.cover ? `<b style="color:var(--accent)">♻ Use surplus</b><div style="font-size:11.5px">${b.take.length ? b.take.map(t => `${mtoQ(t.q)} ${esc(t.unit)} from <b>${esc(t.sheet)}</b> <span class="faint">(${esc(t.desc)})</span>`).join('<br>') : 'Materials remark: <b>' + esc(b.spRem || 'surplus') + '</b>'}</div>` : `<b>Buy</b>${b.txt ? `<div class="faint" style="font-size:11.5px">${esc(b.txt)}</div>` : ''}${b.part && OPS ? '<div class="faint" style="font-size:11.5px">some surplus matches, but not enough — see the Surplus box</div>' : ''}${b.alts.length && OPS ? `<div class="faint" style="font-size:11.5px">≈ same item, other thickness in stock: ${b.alts.map(t => `<b>${esc(t.sheet)}</b> ${esc(t.desc)} — ${mtoQ(t.q)} ${esc(t.unit)}`).join(' · ')}</div>` : ''}${b.lenAlts && b.lenAlts.length && OPS ? `<div class="faint" style="font-size:11.5px">≈ stud bolt, other length in stock (±${MTO_STUD_TOL} mm — check fit): ${b.lenAlts.map(t => `<b>${esc(t.sheet)}</b> ${esc(t.desc)} — ${mtoQ(t.q)} ${esc(t.unit)} (${t.d > 0 ? '+' : '−'}${Math.abs(t.d)} mm)`).join(' · ')}</div>` : ''}`}</td>
             <td><div class="mto-ns">${nn(b) || '<span class="faint">—</span>'}</div></td></tr>`; }).join(''); }).join('')}
         </tbody></table></div>${!list.length ? `<div class="note">${PR_BUYF === 'sp' ? 'No item is waiting on surplus.' : 'Nothing left to buy — every MTO item is bought, covered by a remark or by surplus. ✓'}</div>` : ''}
         <div class="more ops-only">“Use surplus” becomes final when you press <b>Issue</b> in the Surplus box (Material Reconciliation). Not needed after all? Add a remark to the item there (📝 add remark) and it leaves this list.</div></div>`;
@@ -2378,6 +2397,18 @@ function surplusToIssueHtml(){
 function surplusToIssueWire(el){ el.querySelectorAll('[data-spiss]').forEach(b => b.onclick = () => { MTO_SPTAB = 'needs'; go('mto'); setTimeout(() => { const x = $('#mtoSurplus'); if(x) x.scrollIntoView({behavior: 'smooth'}); }, 200); }); }
 /* Surplus still available = stock left over (already net of what the ledger has issued) minus what the items that plan to use surplus will take.
    Same allocation as buyList(): a need is only reserved against stock when the stock can cover it in full. */
+/* Same order as the survey MTO: pipes, fittings, flanges, valves — then gaskets, bolting, structural, other */
+const SP_CATS = [['Pipes', ['PIPE', 'TUBE']],
+  ['Fittings', ['ELBOW', 'TEE', 'RTEE', 'REDUCER', 'CAP', 'PLUG', 'COUPLING', 'UNION', 'NIPPLE', 'SOCKOLET', 'WELDOLET', 'THREDOLET', 'NIPOLET', 'NIPOFLANGE', 'FLANGEOLET', 'ELBOLET']],
+  ['Flanges', ['FLANGE', 'BLIND', 'SPECTACLE', 'SPADE', 'SPACER']],
+  ['Valves', ['VALVE', 'BVALVE', 'GVALVE', 'GLVALVE', 'CVALVE', 'NVALVE']],
+  ['Gaskets', ['GASKET']],
+  ['Bolting', ['BOLT', 'MBOLT', 'UBOLT']],
+  ['Structural', ['FLATBAR', 'ANGLE', 'CHANNEL', 'BEAM', 'PLATE', 'SHEET']]];
+function spCat(f){ const i = SP_CATS.findIndex(c => c[1].includes(f && f.type)); return i < 0 ? SP_CATS.length : i; }
+const spTypeRank = f => { const c = SP_CATS[spCat(f)]; const i = c ? c[1].indexOf(f.type) : 0; return i < 0 ? 99 : i; };
+const spCatName = i => i < SP_CATS.length ? SP_CATS[i][0] : 'Other';
+const spSize = f => { const m = String((f && f.sizes) || '').split(',')[0]; return /^M\d/.test(m) ? +m.slice(1) / 100 : parseFloat(m) || 0; };
 function surplusAvailable(){
   const all = mtoAll(); if(!all) return null;
   const pool = mtoSurplusPool(all), needs = mtoSurplusNeeds(all, pool), left = new Map(pool.map(p => [p, p.avail])), res = new Map(pool.map(p => [p, []]));
@@ -2390,8 +2421,8 @@ function surplusAvailable(){
     else if(take.length) partial.push(n);
   });
   const rows = pool.map(p => { const reserved = Math.round(res.get(p).reduce((a, r) => a + r.q, 0) * 100) / 100, avail = Math.max(0, Math.round((left.get(p) || 0) * 100) / 100);
-    return {sheet: p.sheet, pkg: p.pkg, desc: p.it.desc, unit: p.unit, stock: p.avail, reserved, avail, for: res.get(p), basis: p.basis}; });
-  rows.sort((x, y) => x.sheet.localeCompare(y.sheet) || x.desc.localeCompare(y.desc));
+    return {sheet: p.sheet, pkg: p.pkg, desc: p.it.desc, unit: p.unit, stock: p.avail, reserved, avail, for: res.get(p), basis: p.basis, cat: spCat(p.f), type: (p.f && p.f.type) || '', trank: p.f ? spTypeRank(p.f) : 99, size: spSize(p.f)}; });
+  rows.sort((x, y) => x.cat - y.cat || x.trank - y.trank || x.type.localeCompare(y.type) || x.size - y.size || x.desc.localeCompare(y.desc) || x.sheet.localeCompare(y.sheet));
   return {rows, remarkOnly, partial};
 }
 let SP_AV_ONLY = false;
@@ -2404,7 +2435,7 @@ function surplusAvailHtml(){
   let h = `<div class="box" id="spAvail" style="margin-bottom:14px"><div class="box-h"><div><h3>Surplus available</h3><p>Stock left over after each package's own MTO and after what the ledger has already issued, <b>minus</b> what the items that plan to use surplus will take (counted as received in Work Readiness, not issued yet). <b>Available</b> is what is really still free. Issuing the item later only moves it from <i>Reserved</i> into the ledger — nothing is deducted twice.</p></div>
     <div class="row-btns"><button class="btn sm" id="spAvOnly">${SP_AV_ONLY ? 'Show all' : 'Only with available'}</button></div></div>`;
   h += `<div class="tw"><table class="grid mto-t"><thead><tr><th>Surplus held in</th><th>Item</th><th class="n">Stock left</th><th class="n">Reserved</th><th class="n">Available</th><th>Reserved for</th></tr></thead><tbody>
-    ${rows.map(r => `<tr><td style="white-space:nowrap"><b>${esc(r.sheet)}</b></td><td style="min-width:240px" title="${esc(r.basis)}">${esc(r.desc)}</td><td class="n" style="white-space:nowrap">${fq(r.stock, r.unit)}</td>
+    ${rows.map((r, i) => (i === 0 || rows[i - 1].cat !== r.cat ? `<tr class="sp-cat"><td colspan="6" style="background:var(--panel2,rgba(128,128,128,.12));font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:11.5px">${spCatName(r.cat)} <span class="faint" style="font-weight:400">· ${rows.filter(x => x.cat === r.cat).length}</span></td></tr>` : '') + `<tr><td style="white-space:nowrap"><b>${esc(r.sheet)}</b></td><td style="min-width:240px" title="${esc(r.basis)}">${esc(r.desc)}</td><td class="n" style="white-space:nowrap">${fq(r.stock, r.unit)}</td>
       <td class="n" style="white-space:nowrap">${r.reserved > 1e-9 ? '<span style="color:var(--warn)">− ' + fq(r.reserved, r.unit) + '</span>' : '<span class="faint">–</span>'}</td>
       <td class="n" style="white-space:nowrap;font-weight:700;color:var(--${r.avail > 1e-9 ? 'ok' : 'bad'})">${fq(r.avail, r.unit)}</td>
       <td style="min-width:240px;font-size:12px">${r.for.length ? r.for.map(f => `<div><b>${esc(f.sheet)}</b>: ${esc(f.desc)} <span class="faint">− ${mtoQ(f.q)} ${esc(r.unit || '')}</span></div>`).join('') : '<span class="faint">nothing planned</span>'}</td></tr>`).join('')}
@@ -2421,13 +2452,14 @@ function mtoIssued(sheet, desc, dir){ if(!MTO || !MTO.issues) return 0; const k 
   return MTO.issues.filter(i => dir === 'from' ? i.fromSheet === sheet && mtoNorm(i.fromDesc) === k : i.toSheet === sheet && mtoNorm(i.toDesc) === k).reduce((a, i) => a + num(i.qty), 0); }
 function mtoIssuedTo(sheet, desc){ return mtoIssued(sheet, desc, 'to'); }
 async function mtoIssue(need, cand){
+  if(cand.lenDiff && !confirm(`Substitute stud bolt\n\nNeeded: ${need.desc}\nIssuing:  ${cand.it.desc}\n\nLength differs by ${cand.lenDiff > 0 ? '+' : ''}${cand.lenDiff} mm${cand.coatDiff ? ' and the coating differs' : ''}. Record it as a substitute?`)) return;
   const def = Math.min(cand.avail, need.rem);
   const v = prompt(`Issue surplus\n\nFrom ${cand.sheet}: ${cand.it.desc}\n(left over: ${cand.avail} ${cand.unit})\n\nTo ${need.sheet}: ${need.desc}\n(still needed: ${need.rem} ${need.unit})\n\nQuantity to issue (${cand.unit}):`, String(+def.toFixed(2)));
   if(v === null) return;
   const q = Number(String(v).replace(',', '.'));
   if(!(q > 0)){ toast('Enter a quantity above 0.'); return; }
   if(q > cand.avail + 1e-9 && !confirm(`${q} is more than the ${cand.avail} ${cand.unit} left over. Record it anyway?`)) return;
-  const note = prompt('Note (optional) — e.g. MIV / transfer no.:', '') || '';
+  const note = prompt('Note (optional) — e.g. MIV / transfer no.:', cand.lenDiff ? `Substitute: length ${cand.lenDiff > 0 ? '+' : ''}${cand.lenDiff} mm — approved by ` : '') || '';
   MTO.issues = MTO.issues || [];
   MTO.issues.push({id: 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), at: new Date().toISOString(), by: ensureUser(),
     fromSheet: cand.sheet, fromDesc: cand.it.desc, toSheet: need.sheet, toDesc: need.desc, qty: q, unit: cand.unit, note: note.trim()});
