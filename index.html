@@ -412,6 +412,13 @@ dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;borde
   #printArea .foot{margin-top:14px;font-size:8.5pt;color:#666;}
   @page{size:A4;margin:12mm;}
 }
+.rd-mx{border-collapse:separate;border-spacing:6px;font-size:13px}
+.rd-mx th{font-weight:600;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);text-align:center;padding:2px 6px;white-space:nowrap}
+.rd-mx th.l{text-align:left}
+.rd-mx td.l{font-weight:700;padding-right:12px;white-space:nowrap}
+.rd-mx button{min-width:84px;padding:8px 10px;border-radius:10px;border:1.5px solid var(--border,rgba(128,128,128,.35));background:transparent;font-weight:700;font-size:15px;cursor:pointer;color:var(--text);font-family:inherit}
+.rd-mx button.ok{color:var(--ok);border-color:var(--ok)}.rd-mx button.bad{color:var(--bad);border-color:var(--bad)}.rd-mx button.warn{color:var(--warn);border-color:var(--warn)}.rd-mx button.info{color:var(--info);border-color:var(--info)}
+.rd-mx button.zero{opacity:.4}.rd-mx button.on{outline:2px solid var(--accent);outline-offset:1px}.rd-mx button:hover{filter:brightness(1.15)}
 </style>
 </head>
 <body>
@@ -1929,10 +1936,17 @@ function mtoAll(){
 /* received / ordered (not arrived) / surplus (to be issued) / missing (not bought or short) / na (0 in MTO) */
 /* what is in hand for a line: received on its own purchase line + surplus issued to it */
 function mtoGot(l){ return (+l.recv || 0) + (l.it ? mtoIssuedTo(l.shName, l.rows.length ? l.rows.map(r => r.x.desc).join(' + ') : l.it.desc) : 0); }
+/* a line with no purchase of its own is "in hand" once the surplus issued to it (Surplus Ledger) covers the whole need — same quantities as the Surplus box uses */
+function mtoIssuedCovers(l){
+  if(!l.rows || !l.rows.length) return false;
+  const iss = mtoIssuedTo(l.shName, l.rows.map(r => r.x.desc).join(' + ')); if(!(iss > 0)) return false;
+  const need = l.plate ? l.plate.needA : mtoLineIsLen(l) ? (l.rows[0] && MTO_M(l.rows[0].x.unit) ? (l.needM ?? l.need) : l.needBuy) : l.needBuy;
+  return +need > 0 && iss >= +need - 0.005;
+}
 function mtoLineState(l){
   if(l.st === 'zero') return 'na';
   if(l.st === 'remark' && !l.it) return 'remark';
-  if(!l.it || l.st === 'nobuy') return 'missing';
+  if(!l.it || l.st === 'nobuy') return mtoIssuedCovers(l) ? 'received' : 'missing';     // never bought, but surplus issued to it may cover it in full
   const got = mtoGot(l);
   if(got >= l.needBuy - 1e-9) return 'received';
   if(l.st === 'surplus') return 'surplus';
@@ -2129,7 +2143,7 @@ function rdGroupRows(list, extra){
 const prioN = p => { const n = parseInt(String(p || '').replace(/\D/g, ''), 10); return isFinite(n) ? n : 9; };
 
 /* ---- page: Work Readiness ---- */
-let RD_TAB = 'ready', RD_F = 'all', RD_OPEN = new Set(), OC_F = 'all', RD_AREA = 'all', RD_CAT = 'TBR', RD_BATCH = 'ALL';
+let RD_TAB = 'ready', RD_F = 'all', RD_OPEN = new Set(), OC_F = 'all', RD_AREA = 'all', RD_CAT = 'TBR', RD_BATCH = 'ALL', RD_SD = 'all';
 function renderReadiness(){
   const el = $('#rdy'); if(!el) return;
   if(!STAFF) RD_TAB = 'ready';                       // PCSB: Material Readiness only
@@ -2148,11 +2162,17 @@ function renderReadiness(){
   const batches = [...new Set(rows.map(x => x.r.planYear).filter(Boolean))].sort();
   if(RD_BATCH !== 'ALL' && !batches.includes(RD_BATCH)) RD_BATCH = 'ALL';
   if(RD_BATCH !== 'ALL') rows = rows.filter(x => x.r.planYear === RD_BATCH);
+  // SD requirement category (same grouping as the AIF Package Overview): SD + UNIT SD / NSD / not assigned
+  const SD_CATS = [['SD_UNITSD', 'SD + UNIT SD'], ['NSD', 'NSD'], ['NONE', 'Not assigned']];
+  const sdOf = x => (x.r.sdCategory === 'SD' || x.r.sdCategory === 'UNIT SD') ? 'SD_UNITSD' : x.r.sdCategory === 'NSD' ? 'NSD' : 'NONE';
+  const rowsSD = rows, sdOpen = k => rowsSD.filter(x => !x.r.executionDone && (k === 'all' || sdOf(x) === k)).length;
+  if(RD_SD !== 'all') rows = rows.filter(x => sdOf(x) === RD_SD);
+  const sdChips = `<div class="rd-f"><span class="rd-fl">SD category:</span><div class="chips"><button class="chip" data-rdsd="all" aria-pressed="${RD_SD === 'all'}">All <span class="faint">${sdOpen('all')}</span></button>${SD_CATS.map(([k, l]) => `<button class="chip" data-rdsd="${k}" aria-pressed="${RD_SD === k}">${l} <span class="faint">${sdOpen(k)}</span></button>`).join('')}</div></div>`;
   const CAT_LBL = {TBR: '🔧 To be replace (TBR)', TBP: '🎨 To be paint (TBP)'};
   const areaChips = `<div class="rd-cats">${cats.map(c => `<button data-rdc="${esc(c)}" aria-selected="${RD_CAT === c}">${esc(CAT_LBL[c] || c)}</button>`).join('')}</div>
     <div class="rd-f"><div class="chips">${areasP.map(a => `<button class="chip" data-rda="${esc(a)}" aria-pressed="${RD_AREA === a}">${esc(a)}</button>`).join('')}${areasP.length > 1 ? `<button class="chip" data-rda="all" aria-pressed="${RD_AREA === 'all'}">${esc(areasP.join(' + '))}</button>` : ''}</div></div>
-    ${batches.length > 1 ? `<div class="rd-f"><span class="rd-fl">📅 Batch (plan year):</span><div class="chips"><button class="chip" data-rdb="ALL" aria-pressed="${RD_BATCH === 'ALL'}">All</button>${batches.map((b, i) => `<button class="chip" data-rdb="${esc(b)}" aria-pressed="${RD_BATCH === b}">Batch ${i + 1} (${esc(b)})</button>`).join('')}</div></div>` : ''}`;
-  const scope = [RD_CAT, RD_AREA !== 'all' ? RD_AREA : areasP.join(' + '), RD_BATCH !== 'ALL' ? 'Batch ' + (batches.indexOf(RD_BATCH) + 1) : ''].filter(Boolean).join(' · ');
+    ${batches.length > 1 ? `<div class="rd-f"><span class="rd-fl">📅 Batch (plan year):</span><div class="chips"><button class="chip" data-rdb="ALL" aria-pressed="${RD_BATCH === 'ALL'}">All</button>${batches.map((b, i) => `<button class="chip" data-rdb="${esc(b)}" aria-pressed="${RD_BATCH === b}">Batch ${i + 1} (${esc(b)})</button>`).join('')}</div></div>` : ''}${sdChips}`;
+  const scope = [RD_CAT, RD_AREA !== 'all' ? RD_AREA : areasP.join(' + '), RD_BATCH !== 'ALL' ? 'Batch ' + (batches.indexOf(RD_BATCH) + 1) : '', RD_SD !== 'all' ? (SD_CATS.find(c => c[0] === RD_SD) || [])[1] : ''].filter(Boolean).join(' · ');
   const noMto = MTO && OPS && mtoOldImport() ? `<div class="note warn" style="margin-bottom:14px">⚠ The survey MTO was imported by an older version that did not read the <b>Remarks</b> column — lines with a remark (RE-USE, third party, surplus…) are still counted as missing. Re-import it under <b>Procurement → Material Reconciliation</b> and Save to Sheet.</div>` : !MTO && OPS ? `<div class="note warn" style="margin-bottom:14px">No survey MTO loaded — readiness falls back to the AIF ETA column. Import the MTO under <b>Procurement → Material Reconciliation</b> for item-by-item readiness.</div>` : '';
   const aifBtn = r => `<button class="linkish mono" data-aif='${esc(JSON.stringify([r.cat, r.view, r.uid]))}'>${esc(r.notif || r.report || '—')}</button>`;
   const due = r => { const d = dayN(r.due), t = dayN(todayISO()); if(d === null) return '<span class="faint">—</span>'; const late = t - d; return `<span${late > 0 ? ' style="color:var(--bad);font-weight:600"' : ''}>${fmtD(r.due)}${late > 0 ? ` · ${late}d late` : ''}</span>`; };
@@ -2180,8 +2200,18 @@ function renderReadiness(){
     const base = list; if(RDQ.due) RDQ.due = ''; list = rdQApply(base);
     const goN = notDone.filter(x => ['ready', 'eta_ok', 'none'].includes(x.rd.k)).length;
     const tile = (k, n, lbl, cls, sub) => `<button class="rd-tile ${cls}${RD_F === k ? ' on' : ''}" data-rdf="${k}"><b>${n}</b><span>${lbl}</span>${sub ? `<em>${sub}</em>` : ''}</button>`;
+    // matrix like the AIF Package Overview: every readiness status split by SD category (click a cell to filter)
+    const notDoneSD = rowsSD.filter(x => !x.r.executionDone);
+    const MX = [['go', 'Ready to execute', 'ok', x => ['ready', 'eta_ok', 'none'].includes(x.rd.k)], ['waiting', STAFF ? 'Waiting delivery' : 'Bought — waiting delivery', 'info', x => inF(x, 'waiting')],
+      ...(!STAFF ? [['partial', 'Partially received', 'warn', x => x.rd.k === 'partial']] : []), ['blocked', STAFF ? 'Not bought / short' : 'Not bought yet', 'bad', x => x.rd.k === 'blocked'],
+      ...(OPS ? [['eta_no', 'ETA not ready', 'warn', x => x.rd.k === 'eta_no']] : []), ['pre', 'Preparation', 'info', x => inF(x, 'pre')], ...(OPS ? [['unknown', 'Unknown', 'faint', x => x.rd.k === 'unknown']] : []), ['all', 'All open', '', () => true]];
+    const mxCell = (k, cls, sd, n) => `<td><button class="${cls}${n ? '' : ' zero'}${RD_F === k && RD_SD === sd ? ' on' : ''}"${n ? '' : ' disabled'} data-rdm="${k}|${sd}" title="${n} finding${n === 1 ? '' : 's'}">${n || '–'}</button></td>`;
+    const sdMatrix = `<div class="box" style="margin-bottom:14px;padding:10px 12px;overflow-x:auto"><table class="rd-mx"><thead><tr><th class="l">Material readiness × SD category</th><th>All</th>${SD_CATS.map(c => `<th>${c[1]}</th>`).join('')}</tr></thead><tbody>
+      ${MX.map(([k, lbl, cls, f]) => { const L = notDoneSD.filter(f); return `<tr><td class="l">${lbl}</td>${mxCell(k, cls, 'all', L.length)}${SD_CATS.map(([sd]) => mxCell(k, cls, sd, L.filter(x => sdOf(x) === sd).length)).join('')}</tr>`; }).join('')}</tbody></table>
+      <div class="more" style="margin:6px 4px 0">SD category comes from the AIF (SD / UNIT SD are counted together). “Not assigned” = no SD category set on the finding yet. Open findings only.</div></div>`;
     html += `<div class="head"><div><h2>Material Readiness${scope ? ' — ' + esc(scope) : ''}</h2></div></div>${noMto}${surplusToIssueHtml()}
       <div class="rd-tiles">${tile('go', goN, 'Ready to execute', 'ok', 'material in hand or not needed')}${tile('waiting', notDone.filter(x => inF(x, 'waiting')).length, STAFF ? 'Waiting delivery' : 'Bought — waiting delivery', 'info', OPS ? 'ordered, not all arrived' : 'ordered, not received yet')}${!STAFF ? tile('partial', notDone.filter(x => x.rd.k === 'partial').length, 'Partially received', 'warn', 'part of an item still to come') : ''}${tile('blocked', notDone.filter(x => x.rd.k === 'blocked').length, STAFF ? 'Not bought / short' : 'Not bought yet', 'bad', OPS ? 'MTO item not bought / short' : STAFF ? 'some items still to buy' : 'some material still to be bought')}${OPS ? tile('eta_no', notDone.filter(x => x.rd.k === 'eta_no').length, 'ETA not ready', 'warn', 'no MTO — going by ETA') : ''}${tile('pre', notDone.filter(x => inF(x, 'pre')).length, 'Preparation', 'info', STAFF ? 'survey / drawing approval / MTO not done, or on hold' : 'survey / drawing approval / material list in progress')}${OPS ? tile('unknown', notDone.filter(x => x.rd.k === 'unknown').length, 'Unknown', 'faint', 'no MTO, no ETA') : ''}${tile('all', notDone.length, 'All open', '', 'not executed yet')}</div>
+      ${sdMatrix}
       <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Stages</th><th>Material</th><th class="n">${OPS ? 'MTO lines received' : 'Items received'}</th></tr>${rdQRow(base, ['notif', 'find', 'pkg', 'pri', 'stg', 'mat', 'mto'])}</thead><tbody>
       ${rdGroupRows(list).map(g => { const x0 = g[0], n = g.length, open = RD_OPEN.has(x0.r.uid), R = rdLab(x0.rd), via = g.find(x => x.rd.via);
         return g.map((x, i) => { const r = x.r; return `<tr class="xrow${i ? ' rd-same' : ''}${i < n - 1 ? ' rd-join' : ''}" data-rdo="${esc(x0.r.uid)}"><td style="white-space:nowrap">${i ? '<span style="visibility:hidden">▸ </span>' : open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(OPS ? r.view : areaOf(r.view))}</div>${n > 1 && !i ? `<div class="rd-sd" title="These notifications are on the same drawing, so they use the same material">⛓ same drawing × ${n}</div>` : ''}</td>
@@ -2222,6 +2252,8 @@ function rdWire(el){
   el.querySelectorAll('[data-rda]').forEach(b => b.onclick = () => { RD_AREA = b.dataset.rda; renderReadiness(); });
   el.querySelectorAll('[data-rdc]').forEach(b => b.onclick = () => { RD_CAT = b.dataset.rdc; RD_BATCH = 'ALL'; renderReadiness(); });
   el.querySelectorAll('[data-rdb]').forEach(b => b.onclick = () => { RD_BATCH = b.dataset.rdb; renderReadiness(); });
+  el.querySelectorAll('[data-rdsd]').forEach(b => b.onclick = () => { RD_SD = b.dataset.rdsd; renderReadiness(); });
+  el.querySelectorAll('[data-rdm]').forEach(b => b.onclick = () => { const [k, sd] = b.dataset.rdm.split('|'); RD_F = k; RD_SD = sd; renderReadiness(); });
   el.querySelectorAll('[data-rdf]').forEach(b => b.onclick = () => { RD_F = b.dataset.rdf; renderReadiness(); });
   el.querySelectorAll('[data-ocf]').forEach(b => b.onclick = () => { OC_F = b.dataset.ocf; renderReadiness(); });
   el.querySelectorAll('select[data-rdq]').forEach(s => s.onchange = () => { RDQ[s.dataset.rdq] = s.value; renderReadiness(); });
