@@ -2341,13 +2341,13 @@ function renderProcurement(){
   } else {
     const L = (MTO && MTO.issues) || [];
     html += `<div class="head"><div><h2>Surplus Ledger</h2><p>Surplus stock issued from one package to another. Each issue reduces the leftover in the Surplus box (Procurement → Material Reconciliation) and counts as received for the package that got it, so the same stock is not offered twice. Record an issue with the <b>Issue</b> button next to a match in the Surplus box.</p></div>
-      <div class="row-btns">${MTO && MTO_DIRTY ? '<button class="btn primary" id="ledSave">Save to Sheet</button>' : ''}<button class="btn" id="ledGo">Open Surplus box</button></div></div>${surplusToIssueHtml()}
+      <div class="row-btns">${MTO && MTO_DIRTY ? '<button class="btn primary" id="ledSave">Save to Sheet</button>' : ''}<button class="btn" id="ledGo">Open Surplus box</button></div></div>${surplusToIssueHtml()}${surplusAvailHtml()}
       <div class="box"><div class="tw"><table class="grid"><thead><tr><th>Date</th><th>From</th><th>To</th><th class="n">Qty</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>
       ${L.slice().reverse().map(i => `<tr><td style="white-space:nowrap">${esc(String(i.at || '').slice(0, 10))}</td><td style="min-width:200px"><b>${esc(i.fromSheet)}</b> · ${esc(i.fromDesc)}</td><td style="min-width:200px"><b>${esc(i.toSheet)}</b> · ${esc(i.toDesc)}</td>
         <td class="n" style="white-space:nowrap"><b>${mtoQ(i.qty)}</b> ${esc(i.unit || '')}</td><td>${esc(i.by || '')}</td><td>${esc(i.note || '')}</td><td><button class="btn sm" data-ledel="${esc(i.id)}" title="Remove this entry (e.g. recorded by mistake)">Remove</button></td></tr>`).join('')}
       </tbody></table></div>${!L.length ? `<div class="note">${MTO ? 'No surplus issued yet.' : 'Import the survey MTO first (Procurement → Material Reconciliation) — the ledger is kept with it.'}</div>` : ''}</div>`;
   }
-  el.innerHTML = html; prWire(el);
+  el.innerHTML = html; prWire(el); surplusAvailWire(el);
 }
 function prWire(el){
   el.querySelectorAll('[data-prt]').forEach(b => b.onclick = () => { if(b.dataset.prt === 'mto'){ go('mto'); return; } PR_TAB = b.dataset.prt; if(VIEW !== 'proc') go('proc'); else renderProcurement(); });
@@ -2376,6 +2376,46 @@ function surplusToIssueHtml(){
   return `<button class="fresh-strip warn" data-spiss>♻ <b>Surplus to issue: ${a}</b> item${a === 1 ? '' : 's'} — counted as received in Work Readiness, not issued yet.${r ? ` <span class="faint">+ ${r} planned from surplus by Materials remark only — no matching stock found, check it physically.</span>` : ''} <u>Open the Surplus box</u></button>`;
 }
 function surplusToIssueWire(el){ el.querySelectorAll('[data-spiss]').forEach(b => b.onclick = () => { MTO_SPTAB = 'needs'; go('mto'); setTimeout(() => { const x = $('#mtoSurplus'); if(x) x.scrollIntoView({behavior: 'smooth'}); }, 200); }); }
+/* Surplus still available = stock left over (already net of what the ledger has issued) minus what the items that plan to use surplus will take.
+   Same allocation as buyList(): a need is only reserved against stock when the stock can cover it in full. */
+function surplusAvailable(){
+  const all = mtoAll(); if(!all) return null;
+  const pool = mtoSurplusPool(all), needs = mtoSurplusNeeds(all, pool), left = new Map(pool.map(p => [p, p.avail])), res = new Map(pool.map(p => [p, []]));
+  const remarkOnly = [], partial = [];
+  needs.forEach(n => { let rem = n.rem; const take = [];
+    n.cands.forEach(c => { if(rem <= 1e-9) return; const av = left.get(c) || 0; if(av <= 1e-9) return; const q = Math.min(av, rem); take.push({c, q}); rem -= q; });
+    const found = rem <= 1e-9;
+    if(found) take.forEach(t => { left.set(t.c, left.get(t.c) - t.q); res.get(t.c).push({sheet: n.sheet, desc: n.desc, q: t.q, why: n.why}); });
+    else if(n.why === 'surplus') remarkOnly.push({sheet: n.sheet, desc: n.desc, rem: n.rem, unit: n.unit || '', remark: n.l.it ? String(n.l.it.remarks || '').replace(/\s+/g, ' ').trim() : '', part: take.length > 0});
+    else if(take.length) partial.push(n);
+  });
+  const rows = pool.map(p => { const reserved = Math.round(res.get(p).reduce((a, r) => a + r.q, 0) * 100) / 100, avail = Math.max(0, Math.round((left.get(p) || 0) * 100) / 100);
+    return {sheet: p.sheet, pkg: p.pkg, desc: p.it.desc, unit: p.unit, stock: p.avail, reserved, avail, for: res.get(p), basis: p.basis}; });
+  rows.sort((x, y) => x.sheet.localeCompare(y.sheet) || x.desc.localeCompare(y.desc));
+  return {rows, remarkOnly, partial};
+}
+let SP_AV_ONLY = false;
+function surplusAvailHtml(){
+  if(!OPS) return '';
+  let R; try{ R = surplusAvailable(); }catch(e){ return ''; }
+  if(!R) return '';
+  const rows = R.rows.filter(r => !SP_AV_ONLY || r.avail > 1e-9), nRes = R.rows.filter(r => r.reserved > 1e-9).length, nFree = R.rows.filter(r => r.avail > 1e-9).length;
+  const fq = (q, u) => `${mtoQ(q)} <span class="faint">${esc(u || '')}</span>`;
+  let h = `<div class="box" id="spAvail" style="margin-bottom:14px"><div class="box-h"><div><h3>Surplus available</h3><p>Stock left over after each package's own MTO and after what the ledger has already issued, <b>minus</b> what the items that plan to use surplus will take (counted as received in Work Readiness, not issued yet). <b>Available</b> is what is really still free. Issuing the item later only moves it from <i>Reserved</i> into the ledger — nothing is deducted twice.</p></div>
+    <div class="row-btns"><button class="btn sm" id="spAvOnly">${SP_AV_ONLY ? 'Show all' : 'Only with available'}</button></div></div>`;
+  h += `<div class="tw"><table class="grid mto-t"><thead><tr><th>Surplus held in</th><th>Item</th><th class="n">Stock left</th><th class="n">Reserved</th><th class="n">Available</th><th>Reserved for</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td style="white-space:nowrap"><b>${esc(r.sheet)}</b></td><td style="min-width:240px" title="${esc(r.basis)}">${esc(r.desc)}</td><td class="n" style="white-space:nowrap">${fq(r.stock, r.unit)}</td>
+      <td class="n" style="white-space:nowrap">${r.reserved > 1e-9 ? '<span style="color:var(--warn)">− ' + fq(r.reserved, r.unit) + '</span>' : '<span class="faint">–</span>'}</td>
+      <td class="n" style="white-space:nowrap;font-weight:700;color:var(--${r.avail > 1e-9 ? 'ok' : 'bad'})">${fq(r.avail, r.unit)}</td>
+      <td style="min-width:240px;font-size:12px">${r.for.length ? r.for.map(f => `<div><b>${esc(f.sheet)}</b>: ${esc(f.desc)} <span class="faint">− ${mtoQ(f.q)} ${esc(r.unit || '')}</span></div>`).join('') : '<span class="faint">nothing planned</span>'}</td></tr>`).join('')}
+    </tbody></table></div>${!rows.length ? `<div class="note">${R.rows.length ? 'No surplus is left after the planned use.' : 'No surplus stock found yet — stock only counts once it has been received.'}</div>` : ''}
+    <div class="more">${R.rows.length} surplus item${R.rows.length === 1 ? '' : 's'} in stock · ${nRes} with planned use · <b>${nFree}</b> still with something available. Hover an item to see how its stock was worked out. Quantities of different units (m², m, pcs) are never added together.</div>`;
+  if(R.remarkOnly.length) h += `<div class="note warn" style="margin:10px 14px 0"><b>${R.remarkOnly.length} item${R.remarkOnly.length === 1 ? '' : 's'} planned from surplus by Materials remark only</b> — no matching stock found, so nothing could be deducted above. Check them physically:
+    ${R.remarkOnly.slice(0, 12).map(x => `<div style="font-size:12px">• <b>${esc(x.sheet)}</b>: ${esc(x.desc)} <span class="faint">(needs ${mtoQ(x.rem)} ${esc(x.unit)}${x.remark ? ' · remark: ' + esc(x.remark) : ''}${x.part ? ' · stock covers only part of it' : ''})</span></div>`).join('')}${R.remarkOnly.length > 12 ? `<div class="faint" style="font-size:12px">… and ${R.remarkOnly.length - 12} more</div>` : ''}</div>`;
+  if(R.partial.length) h += `<div class="note" style="margin:10px 14px 0">${R.partial.length} item${R.partial.length === 1 ? '' : 's'} could be covered only <b>partly</b> from surplus, so no stock is reserved for them above (they still need buying).</div>`;
+  return h + '</div>';
+}
+function surplusAvailWire(el){ const b = el.querySelector('#spAvOnly'); if(b) b.onclick = () => { SP_AV_ONLY = !SP_AV_ONLY; renderProcurement(); }; }
 /* ---- surplus ledger helpers (entries live in MTO.issues, saved with the MTO) ---- */
 function mtoIssued(sheet, desc, dir){ if(!MTO || !MTO.issues) return 0; const k = mtoNorm(desc);
   return MTO.issues.filter(i => dir === 'from' ? i.fromSheet === sheet && mtoNorm(i.fromDesc) === k : i.toSheet === sheet && mtoNorm(i.toDesc) === k).reduce((a, i) => a + num(i.qty), 0); }
