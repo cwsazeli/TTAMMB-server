@@ -2362,8 +2362,8 @@ function renderProcurement(){
     const L = (MTO && MTO.issues) || [];
     html += `<div class="head"><div><h2>Surplus Ledger</h2><p>Surplus stock issued from one package to another. Each issue reduces the leftover in the Surplus box (Procurement → Material Reconciliation) and counts as received for the package that got it, so the same stock is not offered twice. Record an issue with the <b>Issue</b> button next to a match in the Surplus box.</p></div>
       <div class="row-btns">${MTO && MTO_DIRTY ? '<button class="btn primary" id="ledSave">Save to Sheet</button>' : ''}<button class="btn" id="ledGo">Open Surplus box</button></div></div>${surplusToIssueHtml()}${surplusAvailHtml()}
-      <div class="box"><div class="tw"><table class="grid"><thead><tr><th>Date</th><th>From</th><th>To</th><th class="n">Qty</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>
-      ${L.slice().reverse().map(i => `<tr><td style="white-space:nowrap">${esc(String(i.at || '').slice(0, 10))}</td><td style="min-width:200px"><b>${esc(i.fromSheet)}</b> · ${esc(i.fromDesc)}</td><td style="min-width:200px"><b>${esc(i.toSheet)}</b> · ${esc(i.toDesc)}</td>
+      <div class="box"><div class="tw"><table class="grid"><thead><tr><th>Date</th><th>From</th><th>To</th><th title="Notification numbers that need this item (from the MTO of the receiving package)">NN</th><th class="n">Qty</th><th>By</th><th>Note</th><th></th></tr></thead><tbody>
+      ${L.slice().reverse().map(i => `<tr><td style="white-space:nowrap">${esc(String(i.at || '').slice(0, 10))}</td><td style="min-width:200px"><b>${esc(i.fromSheet)}</b> · ${esc(i.fromDesc)}</td><td style="min-width:200px"><b>${esc(i.toSheet)}</b> · ${esc(i.toDesc)}</td><td style="white-space:nowrap;font-size:12.5px">${mtoNNhtml(mtoNN(i.toSheet, i.toDesc))}</td>
         <td class="n" style="white-space:nowrap"><b>${mtoQ(i.qty)}</b> ${esc(i.unit || '')}</td><td>${esc(i.by || '')}</td><td>${esc(i.note || '')}</td><td><button class="btn sm" data-ledel="${esc(i.id)}" title="Remove this entry (e.g. recorded by mistake)">Remove</button></td></tr>`).join('')}
       </tbody></table></div>${!L.length ? `<div class="note">${MTO ? 'No surplus issued yet.' : 'Import the survey MTO first (Procurement → Material Reconciliation) — the ledger is kept with it.'}</div>` : ''}</div>`;
   }
@@ -2417,7 +2417,7 @@ function surplusAvailable(){
   needs.forEach(n => { let rem = n.rem; const take = [];
     n.cands.forEach(c => { if(rem <= 1e-9) return; const av = left.get(c) || 0; if(av <= 1e-9) return; const q = Math.min(av, rem); take.push({c, q}); rem -= q; });
     const found = rem <= 1e-9;
-    if(found) take.forEach(t => { left.set(t.c, left.get(t.c) - t.q); res.get(t.c).push({sheet: n.sheet, desc: n.desc, q: t.q, why: n.why}); });
+    if(found) take.forEach(t => { left.set(t.c, left.get(t.c) - t.q); res.get(t.c).push({sheet: n.sheet, desc: n.desc, q: t.q, why: n.why, nn: mtoNN(n.sheet, n.desc)}); });
     else if(n.why === 'surplus') remarkOnly.push({sheet: n.sheet, desc: n.desc, rem: n.rem, unit: n.unit || '', remark: n.l.it ? String(n.l.it.remarks || '').replace(/\s+/g, ' ').trim() : '', part: take.length > 0});
     else if(take.length) partial.push(n);
   });
@@ -2439,7 +2439,7 @@ function surplusAvailHtml(){
     ${rows.map((r, i) => (i === 0 || rows[i - 1].cat !== r.cat ? `<tr class="sp-cat"><td colspan="6" style="background:var(--panel2,rgba(128,128,128,.12));font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:11.5px">${spCatName(r.cat)} <span class="faint" style="font-weight:400">· ${rows.filter(x => x.cat === r.cat).length}</span></td></tr>` : '') + `<tr><td style="white-space:nowrap"><b>${esc(r.sheet)}</b></td><td style="min-width:240px" title="${esc(r.basis)}">${esc(r.desc)}</td><td class="n" style="white-space:nowrap">${fq(r.stock, r.unit)}</td>
       <td class="n" style="white-space:nowrap">${r.reserved > 1e-9 ? '<span style="color:var(--warn)">− ' + fq(r.reserved, r.unit) + '</span>' : '<span class="faint">–</span>'}</td>
       <td class="n" style="white-space:nowrap;font-weight:700;color:var(--${r.avail > 1e-9 ? 'ok' : 'bad'})">${fq(r.avail, r.unit)}</td>
-      <td style="min-width:240px;font-size:12px">${r.for.length ? r.for.map(f => `<div><b>${esc(f.sheet)}</b>: ${esc(f.desc)} <span class="faint">− ${mtoQ(f.q)} ${esc(r.unit || '')}</span></div>`).join('') : '<span class="faint">nothing planned</span>'}</td></tr>`).join('')}
+      <td style="min-width:240px;font-size:12px">${r.for.length ? r.for.map(f => `<div><b>${esc(f.sheet)}</b>: ${esc(f.desc)} <span class="faint">− ${mtoQ(f.q)} ${esc(r.unit || '')}</span>${f.nn && f.nn.length ? ` <span class="faint">· NN</span> ${mtoNNhtml(f.nn, true)}` : ''}</div>`).join('') : '<span class="faint">nothing planned</span>'}</td></tr>`).join('')}
     </tbody></table></div>${!rows.length ? `<div class="note">${R.rows.length ? 'No surplus is left after the planned use.' : 'No surplus stock found yet — stock only counts once it has been received.'}</div>` : ''}
     <div class="more">${R.rows.length} surplus item${R.rows.length === 1 ? '' : 's'} in stock · ${nRes} with planned use · <b>${nFree}</b> still with something available. Hover an item to see how its stock was worked out. Quantities of different units (m², m, pcs) are never added together.</div>`;
   if(R.remarkOnly.length) h += `<div class="note warn" style="margin:10px 14px 0"><b>${R.remarkOnly.length} item${R.remarkOnly.length === 1 ? '' : 's'} planned from surplus by Materials remark only</b> — no matching stock found, so nothing could be deducted above. Check them physically:
@@ -2451,6 +2451,15 @@ function surplusAvailWire(el){ const b = el.querySelector('#spAvOnly'); if(b) b.
 /* ---- surplus ledger helpers (entries live in MTO.issues, saved with the MTO) ---- */
 function mtoIssued(sheet, desc, dir){ if(!MTO || !MTO.issues) return 0; const k = mtoNorm(desc);
   return MTO.issues.filter(i => dir === 'from' ? i.fromSheet === sheet && mtoNorm(i.fromDesc) === k : i.toSheet === sheet && mtoNorm(i.toDesc) === k).reduce((a, i) => a + num(i.qty), 0); }
+/* Notification numbers (NN) behind an MTO line: the MTO "per notification" columns of the line(s) that make up this need */
+function mtoNN(sheetName, desc){
+  const sh = MTO && (MTO.sheets || []).find(x => x.name === sheetName); if(!sh || !desc) return [];
+  const t = ' + ' + mtoNorm(desc) + ' + ', out = new Map();
+  sh.items.forEach(x => { const d = mtoNorm(x.desc); if(!d || !t.includes(' + ' + d + ' + ')) return;
+    Object.entries(x.per || {}).forEach(([lab, q]) => String(lab).split(/[^0-9]+/).filter(n => n.length >= 6).forEach(n => out.set(n, (out.get(n) || 0) + (+q || 0)))); });
+  return [...out.entries()].map(([nn, q]) => ({nn, q: Math.round(q * 1000) / 1000})).sort((x, y) => x.nn.localeCompare(y.nn));
+}
+const mtoNNhtml = (list, short) => list.length ? list.map(x => `<span class="mto-nn" style="white-space:nowrap">${short ? '' : '<b>'}${esc(x.nn)}${short ? '' : '</b>'}${x.q ? ` <span class="faint">×${mtoQ(x.q)}</span>` : ''}</span>`).join(short ? ', ' : '<br>') : '<span class="faint">—</span>';
 function mtoIssuedTo(sheet, desc){ return mtoIssued(sheet, desc, 'to'); }
 async function mtoIssue(need, cand){
   if(cand.lenDiff && !confirm(`Substitute stud bolt\n\nNeeded: ${need.desc}\nIssuing:  ${cand.it.desc}\n\nLength differs by ${cand.lenDiff > 0 ? '+' : ''}${cand.lenDiff} mm${cand.coatDiff ? ' and the coating differs' : ''}. Record it as a substitute?`)) return;
