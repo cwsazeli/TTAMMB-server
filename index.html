@@ -413,7 +413,11 @@ dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;borde
   @page{size:A4;margin:12mm;}
 }
 .spq{font:inherit;font-size:12.5px;padding:6px 10px;min-width:290px;border:1px solid var(--border);border-radius:7px;background:var(--panel);color:var(--text);} .spq:focus{outline:2px solid var(--accent);outline-offset:1px;}
-.sp-t tbody[hidden]{display:none;} .sp-mat td{background:rgba(128,128,128,.07);} .sp-pk td{font-size:12.5px;}
+.sp-t tbody.sp-g[hidden], .sp-t tbody.sp-c[hidden]{display:none !important;}
+.sp-t tbody.sp-g.sp-cc{display:none;} .sp-t tbody.sp-g.sp-gc .sp-pk{display:none;}
+.sp-t.sp-searching tbody.sp-g.sp-cc{display:table-row-group;} .sp-t.sp-searching tbody.sp-g.sp-gc .sp-pk{display:table-row;}
+.sp-ch, tr.sp-multi{cursor:pointer;user-select:none;} .sp-ch:hover, tr.sp-multi:hover td{filter:brightness(1.12);} .sp-ch:focus-visible, tr.sp-multi:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+.sp-caret{display:inline-block;width:15px;color:var(--text-dim);font-size:11px;} .sp-mat td{background:rgba(128,128,128,.07);} .sp-pk td{font-size:12.5px;}
 .vas{margin:8px 12px 4px;} .vas-l{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint);margin:0 4px 5px;}
 .vas-b{display:grid;gap:4px;} .vas-b button{font:inherit;font-size:12.5px;font-weight:600;text-align:left;padding:6px 10px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;}
 .vas-b button:hover{border-color:var(--accent);} .vas-b button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink,#fff);}
@@ -1151,7 +1155,7 @@ function queueBox(){
   const shown = QUEUE_ALL ? list : list.slice(0, 12);
   const chip = (k, lbl) => `<button class="chip" data-qf="${k}" aria-pressed="${QUEUE_FILTER === k}">${lbl} ${n[k]}</button>`;
   return `<div class="box-h"><div><h3>${PCSB ? 'Pending PO' : 'Needs attention'}</h3><p>${PCSB ? 'Work orders still waiting for a PO, longest waiting first. Click one to open it.' : OPS ? 'Overdue and at-risk items from all modules, most urgent first. WOP items open WOP 360°.' : 'Overdue and at-risk items, most urgent first. Click one to open it.'}</p></div>
-      ${PCSB ? '' : `<div class="chips">${chip('all','All')}${chip('aif','AIF')}${STAFF ? chip('mat','Materials') : ''}${chip('wop','WOP')}</div></div>`}</div>
+      ${PCSB ? '' : `<div class="chips">${chip('all','All')}${chip('aif','AIF')}${STAFF ? chip('mat','Materials') : ''}${chip('wop','WOP')}</div>`}</div>
     ${shown.length ? `<ul class="queue">${shown.map(q => `<li class="q" tabindex="0" role="button" style="--mc:${MODS[q.mod].color}" data-mod="${q.mod}" data-open='${esc(JSON.stringify(q.open))}' ${q.w360 ? 'data-w360="1"' : ''}>
         <span class="stripe"></span><span class="tag">${MODS[q.mod].tag}</span>
         <div style="min-width:0"><div class="t"><span class="mono dim">${esc(q.id)}</span> ${esc(q.title)}</div><div class="s">${esc(q.sub)}</div></div>
@@ -2524,7 +2528,7 @@ function surplusAvailable(){
   rows.sort((x, y) => x.cat - y.cat || x.trank - y.trank || x.type.localeCompare(y.type) || x.size - y.size || x.desc.localeCompare(y.desc) || x.sheet.localeCompare(y.sheet));
   return {rows, remarkOnly, partial};
 }
-let SP_AV_ONLY = false, SP_Q = '';
+let SP_AV_ONLY = false, SP_Q = '', SP_COLL = new Set();      // SP_COLL: collapsed groups ('c:<category>' and 'g:<material>')
 function surplusAvailHtml(){
   if(!STAFF) return '';
   let R; try{ R = surplusAvailable(); }catch(e){ return ''; }
@@ -2540,18 +2544,18 @@ function surplusAvailHtml(){
   const nums = (o, u) => `<td class="n" style="white-space:nowrap">${fq(o.stock, u)}</td><td class="n" style="white-space:nowrap">${o.reserved > 1e-9 ? '<span style="color:var(--warn)">\u2212 ' + fq(o.reserved, u) + '</span>' : '<span class="faint">\u2013</span>'}</td><td class="n" style="white-space:nowrap;font-weight:700;color:var(--${o.avail > 1e-9 ? 'ok' : 'bad'})">${fq(o.avail, u)}</td>`;
   const body = groups.map((g, i) => {
     const q = (g.desc + ' ' + g.parts.map(p => p.sheet + ' ' + p.for.map(f => f.sheet + ' ' + f.desc + ' ' + (f.nn || []).map(n => n.nn).join(' ')).join(' ')).join(' ')).toLowerCase();
-    const head = i === 0 || groups[i - 1].cat !== g.cat ? `<tbody class="sp-c"><tr><td colspan="5" style="background:var(--panel2,rgba(128,128,128,.12));font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:11.5px">${spCatName(g.cat)} <span class="faint" style="font-weight:400">\u00b7 ${groups.filter(x => x.cat === g.cat).length}</span></td></tr></tbody>` : '';
+    const head = i === 0 || groups[i - 1].cat !== g.cat ? `<tbody class="sp-c" data-cat="${g.cat}"><tr><td colspan="5" class="sp-ch" tabindex="0" role="button" aria-expanded="true" title="Click to collapse / expand" style="background:var(--panel2,rgba(128,128,128,.12));font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:11.5px"><span class="sp-caret">\u25be</span>${spCatName(g.cat)} <span class="faint" style="font-weight:400">\u00b7 ${groups.filter(x => x.cat === g.cat).length}</span></td></tr></tbody>` : '';
     let rows;
     if(g.parts.length === 1){ const p = g.parts[0];
-      rows = `<tr class="sp-mat"><td style="min-width:260px" title="${esc(p.basis)}"><b>${esc(g.desc)}</b><div class="faint" style="font-size:11.5px">held in <b style="color:var(--text)">${esc(p.sheet)}</b></div></td>${nums(p, g.unit)}<td style="min-width:240px;font-size:12px">${forHtml(p)}</td></tr>`;
+      rows = `<tr class="sp-mat"><td style="min-width:260px" title="${esc(p.basis)}"><span class="sp-caret"></span><b>${esc(g.desc)}</b><div class="faint" style="font-size:11.5px;padding-left:14px">held in <b style="color:var(--text)">${esc(p.sheet)}</b></div></td>${nums(p, g.unit)}<td style="min-width:240px;font-size:12px">${forHtml(p)}</td></tr>`;
     } else {
-      rows = `<tr class="sp-mat"><td style="min-width:260px"><b>${esc(g.desc)}</b> <span class="faint">\u00b7 ${g.parts.length} packages</span></td>${nums(g, g.unit)}<td></td></tr>`
+      rows = `<tr class="sp-mat sp-multi" tabindex="0" role="button" aria-expanded="true" title="Click to hide / show the packages"><td style="min-width:260px"><span class="sp-caret">\u25be</span><b>${esc(g.desc)}</b> <span class="faint">\u00b7 ${g.parts.length} packages</span></td>${nums(g, g.unit)}<td></td></tr>`
         + g.parts.map(p => `<tr class="sp-pk"><td style="padding-left:28px;white-space:nowrap" title="${esc(p.basis)}"><span class="faint">\u21b3</span> <b>${esc(p.sheet)}</b></td>${nums(p, g.unit)}<td style="min-width:240px;font-size:12px">${forHtml(p)}</td></tr>`).join('');
     }
-    return head + `<tbody class="sp-g" data-q="${esc(' ' + spNorm(q) + ' ')}">${rows}</tbody>`;
+    return head + `<tbody class="sp-g" data-cat="${g.cat}" data-gk="${esc(g.cat + '|' + mtoNorm(g.desc) + '|' + (g.unit || ''))}" data-q="${esc(' ' + spNorm(q) + ' ')}">${rows}</tbody>`;
   }).join('');
   let h = `<div class="box" id="spAvail" style="margin-bottom:14px"><div class="box-h"><div><h3>Surplus available</h3><p>Stock left over after each package's own MTO and after what the ledger has already issued, <b>minus</b> what the items that plan to use surplus will take (counted as received in Work Readiness, not issued yet). <b>Available</b> is what is really still free. Issuing the item later only moves it from <i>Reserved</i> into the ledger \u2014 nothing is deducted twice.</p></div>
-    <div class="row-btns"><input type="search" id="spQ" class="spq" placeholder="Search material, package or NN\u2026" value="${esc(SP_Q)}" aria-label="Search surplus"><span class="faint" id="spQn" style="font-size:12px"></span><button class="btn sm" id="spAvOnly">${SP_AV_ONLY ? 'Show all' : 'Only with available'}</button></div></div>`;
+    <div class="row-btns"><input type="search" id="spQ" class="spq" placeholder="Search material, package or NN\u2026" value="${esc(SP_Q)}" aria-label="Search surplus"><span class="faint" id="spQn" style="font-size:12px"></span><button class="btn sm" id="spCollAll" title="Collapse every group">Collapse all</button><button class="btn sm" id="spExpAll" title="Show every group and package">Expand all</button><button class="btn sm" id="spAvOnly">${SP_AV_ONLY ? 'Show all' : 'Only with available'}</button></div></div>`;
   h += `<div class="tw"><table class="grid mto-t sp-t"><thead><tr><th>Material / held in</th><th class="n">Stock left</th><th class="n">Reserved</th><th class="n">Available</th><th>Reserved for</th></tr></thead>${body}</table></div>
     <div class="note" id="spNone" hidden>No material matches your search.</div>${!groups.length ? `<div class="note">${R.rows.length ? 'No surplus is left after the planned use.' : 'No surplus stock found yet \u2014 stock only counts once it has been received.'}</div>` : ''}
     <div class="more">${groups.length} material${groups.length === 1 ? '' : 's'} \u00b7 ${R.rows.length} package line${R.rows.length === 1 ? '' : 's'} in stock \u00b7 ${nRes} with planned use \u00b7 <b>${nFree}</b> still with something available. Hover a line to see how its stock was worked out. Quantities of different units (m\u00b2, m, pcs) are never added together.</div>`;
@@ -2569,10 +2573,30 @@ function spApplySearch(el){
     if(tb.classList.contains('sp-c')){ cat = tb; cat.hidden = true; return; }
     tot++; const ok = words.every(w => (tb.dataset.q || '').includes(w)); tb.hidden = !ok; if(ok){ n++; if(cat) cat.hidden = false; }
   });
+  t.classList.toggle('sp-searching', words.length > 0);
   const c = el.querySelector('#spQn'); if(c) c.textContent = words.length ? `${n} of ${tot} materials` : '';
   const none = el.querySelector('#spNone'); if(none) none.hidden = !(words.length && !n);
 }
-function surplusAvailWire(el){ const b = el.querySelector('#spAvOnly'); if(b) b.onclick = () => { SP_AV_ONLY = !SP_AV_ONLY; renderProcurement(); };
+function spApplyColl(el){
+  const t = el.querySelector('table.sp-t'); if(!t) return;
+  Array.from(t.tBodies).forEach(tb => {
+    if(tb.classList.contains('sp-c')){ const on = SP_COLL.has('c:' + tb.dataset.cat), td = tb.querySelector('.sp-ch'); if(td){ td.setAttribute('aria-expanded', String(!on)); td.querySelector('.sp-caret').textContent = on ? '\u25b8' : '\u25be'; } return; }
+    tb.classList.toggle('sp-cc', SP_COLL.has('c:' + tb.dataset.cat));
+    const gc = SP_COLL.has('g:' + tb.dataset.gk), m = tb.querySelector('tr.sp-multi'); tb.classList.toggle('sp-gc', gc);
+    if(m){ m.setAttribute('aria-expanded', String(!gc)); m.querySelector('.sp-caret').textContent = gc ? '\u25b8' : '\u25be'; }
+  });
+}
+function spWireColl(el){
+  const t = el.querySelector('table.sp-t'); if(!t) return;
+  const tgl = k => { if(SP_COLL.has(k)) SP_COLL.delete(k); else SP_COLL.add(k); spApplyColl(el); };
+  t.onclick = e => { const ch = e.target.closest('.sp-ch'); if(ch){ tgl('c:' + ch.closest('tbody').dataset.cat); return; } const m = e.target.closest('tr.sp-multi'); if(m) tgl('g:' + m.closest('tbody').dataset.gk); };
+  t.onkeydown = e => { if(e.key !== 'Enter' && e.key !== ' ') return; const x = e.target.closest('.sp-ch, tr.sp-multi'); if(x){ e.preventDefault(); x.click(); } };
+  const ca = el.querySelector('#spCollAll'), ea = el.querySelector('#spExpAll');
+  if(ca) ca.onclick = () => { SP_COLL = new Set(Array.from(t.querySelectorAll('tbody.sp-c')).map(x => 'c:' + x.dataset.cat)); spApplyColl(el); };
+  if(ea) ea.onclick = () => { SP_COLL = new Set(); spApplyColl(el); };
+  spApplyColl(el);
+}
+function surplusAvailWire(el){ spWireColl(el); const b = el.querySelector('#spAvOnly'); if(b) b.onclick = () => { SP_AV_ONLY = !SP_AV_ONLY; renderProcurement(); };
   const q = el.querySelector('#spQ'); if(q){ q.oninput = () => { SP_Q = q.value; spApplySearch(el); }; spApplySearch(el); } }
 /* ---- surplus ledger helpers (entries live in MTO.issues, saved with the MTO) ---- */
 function mtoIssued(sheet, desc, dir){ if(!MTO || !MTO.issues) return 0; const k = mtoNorm(desc);
