@@ -422,7 +422,7 @@ dialog .df{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;borde
 .vas-b{display:grid;gap:4px;} .vas-b button{font:inherit;font-size:12.5px;font-weight:600;text-align:left;padding:6px 10px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;}
 .vas-b button:hover{border-color:var(--accent);} .vas-b button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink,#fff);}
 .rd-fbar{display:grid;gap:9px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin:4px 0 16px;position:relative;}
-.rd-frow{display:grid;grid-template-columns:96px 1fr;align-items:center;gap:12px;}
+.rd-frow{display:grid;grid-template-columns:128px 1fr;align-items:center;gap:12px;}
 .rd-flab{font-size:12px;font-weight:600;color:var(--text-dim);}
 .rd-fbar .chips{display:flex;flex-wrap:wrap;gap:6px;}
 .rd-fbar .chip{font-family:inherit;font-size:12.5px;font-weight:600;padding:5px 13px;}
@@ -2220,6 +2220,13 @@ function overdueCause(r, rd){
   if(rd.k === 'unknown') return 'nodata';
   return 'execution';
 }
+/* One status per finding taken straight from the Stages column (the AIF updates): no second source that can disagree */
+function stageKind(r){
+  const S = {}; stageList(r).forEach(x => { S[x[0]] = x[1]; });
+  const g = aifStageInfo(r);
+  if(g.hold || g.drawing || S.SURVEY !== 'done' || (S.MTO && S.MTO !== 'done')) return 'pre';        // survey / drawing approval / take-off not done, or on hold
+  return S.MRIR === 'done' ? 'ready' : S.MRIR === 'on' ? 'partial' : 'waiting';                       // MRIR done (or not needed) / in progress / not started
+}
 function stageList(r){
   // one entry per stage: [NAME, state ('done' | 'on' = in progress | 'todo'), what the AIF Excel says, note for the "latest status" line]
   const w = r.raw || {}, t = x => String(x || '').replace(/\s+/g, ' ').trim(), v = x => t(x) ? '“' + t(x) + '”' : '(blank)';
@@ -2284,7 +2291,7 @@ const RDL = () => LEVEL === 'client' ? RD_CLIENT : LEVEL === 'staff' ? RD_MGMT :
 function readinessRows(){
   if(!DATA.aif) return null;
   const map = readinessMap();
-  const rows = DATA.aif.records.filter(r => aifOpen(r) && !r.transferred).map(r => { const rd = findingReadiness(r, map); return {r, rd, cause: aifOverdue(r) ? overdueCause(r, rd) : null}; });
+  const rows = DATA.aif.records.filter(r => aifOpen(r) && !r.transferred).map(r => { const rd = findingReadiness(r, map); return {r, rd, sk: stageKind(r), cause: aifOverdue(r) ? overdueCause(r, rd) : null}; });
   // findings on the same drawing share one set of material: if only one of them is listed in the MTO, the others take its material status
   const g = drawingGroups(), byG = {}; rows.forEach(x => { x.grp = g(x.r.notif); if(x.grp) (byG[x.grp] = byG[x.grp] || []).push(x); });
   Object.values(byG).forEach(v => { const src = v.find(x => x.rd.src === 'MTO'); if(!src) return;
@@ -2361,38 +2368,40 @@ function renderReadiness(){
   const spareElse = m => (m.l.cross || []).filter(c => c.kind === 'bought' && (c.spare === null || c.spare > 0)).slice(0, 3);
   const lineList = x => x.rd.lines.length ? `<div class="rd-lines">${x.rd.lines.slice().sort((a, b) => LO[a.st] - LO[b.st]).map(m => `<div><span class="rd-dot ${m.st}"></span><b>${esc(lineLab(m))}</b> · ${esc(m.desc)} — ${mtoQ(m.qty)} ${esc(m.unit)}${partTxt(m)}${OPS ? ` <span class="faint">(${esc(m.sheet)}${m.noPkg ? ' · no Materials package linked yet' : ''}${m.rem ? ' · remark: ' + esc(m.rem) : ''}${m.l.it && m.st === 'ordered' ? ', PO ' + esc(m.l.it.poNo || '—') + (m.l.it.target ? ', target ' + esc(m.l.it.target) : '') : ''})</span>` : STAFF && m.l.it && m.st === 'ordered' ? ` <span class="faint">(PO ${esc(m.l.it.poNo || '—')}${m.l.it.target ? ', target ' + esc(m.l.it.target) : ''})</span>` : m.rem && (STAFF || m.st === 'remark') ? ` <span class="faint">(remark: ${esc(m.rem)})</span>` : ''}${STAFF && m.st === 'spavail' ? `<div class="rd-sp">♻ Surplus to be issued — ${m.sp ? 'from: ' + m.sp.map(x => `<b>${esc(x.sheet)}</b> ${mtoQ(x.q)} ${esc(x.unit)}`).join(' + ') : 'Materials remark: <b>' + esc(String(m.l.it && m.l.it.remarks || '').replace(/\s+/g, ' ').trim() || 'surplus') + '</b>'}</div>` : ''}${OPS && (m.st === 'missing') && spareElse(m).length ? `<div class="rd-sp" style="color:var(--warn)">↔ Surplus in ${spareElse(m).map(c => `<b>${esc(c.where)}</b>: ${mtoQ(c.spare === null ? c.qty : c.spare)} ${esc(c.spareU || c.unit)}${c.recv ? '' : ' (not received yet)'}`).join(' · ')}</div>` : ''}${OPS && m.lenAlt ? `<div class="rd-sp" style="color:var(--text-dim)">≈ Stud bolt, other length in stock (±${MTO_STUD_TOL} mm — check it fits): ${m.lenAlt.map(x => `<b>${esc(x.sheet)}</b> ${esc(x.desc)} — ${mtoQ(x.q)} ${esc(x.unit)} · <b>${x.d > 0 ? '+' : '−'}${Math.abs(x.d)} mm</b>${x.coat ? ' · <b style="color:var(--bad)">coating differs</b>' : ''}`).join(' · ')}</div>` : ''}${OPS && m.alt ? `<div class="rd-sp" style="color:var(--text-dim)">≈ Other thickness in stock: ${m.alt.map(x => `<b>${esc(x.sheet)}</b> ${esc(x.desc)} — ${mtoQ(x.q)} ${esc(x.unit)}`).join(' · ')}</div>` : ''}</div>`).join('')}</div>`
     : `<div class="rd-lines faint">${!STAFF ? (x.rd.src === 'ETA' ? 'Delivery status: ' + esc(clean(x.r.eta) || '—') : x.rd.why && x.rd.k !== 'unknown' ? '<b>' + esc(x.rd.why) + '</b>' : 'Material list not available yet.') : x.rd.src === 'ETA' ? 'From AIF ETA: ' + esc(clean(x.r.eta) || '—') : (x.rd.why ? '<b>' + esc(x.rd.why) + '</b> · ' : '') + 'No MTO line and no ETA for this notification.' + (STAFF && x.r.raw ? ' AIF Excel: ' + [['SURVEY', x.r.raw.survey], ['SURVEY_REMARKS', x.r.raw.surveyRem], ['MATERIAL TAKE OFF', x.r.raw.takeOff], ['MRIR', x.r.raw.mrir], ['FABRICATION', x.r.raw.fab], ['FAB REMARKS', x.r.raw.fabRem], ['EXECUTION', x.r.raw.exe], ['EXE REMARKS', x.r.raw.exeRem]].filter(([, v]) => v).map(([k, v]) => k + ' “' + esc(String(v).replace(/\s+/g, ' ').trim()) + '”').join(' · ') : '')}</div>`;
+  const stTxt = {ready: 'MRIR done', partial: 'MRIR in progress', waiting: 'MRIR not started', pre: 'still in preparation'};
+  // Material Tracking is only a reference now; flag the rows where it disagrees with the Stages so someone can update the stale one
+  const xchk = x => { if(!STAFF) return ''; const k = x.rd.k, c = x.sk, okMat = ['ready', 'eta_ok', 'none'].includes(k), lateMat = ['blocked', 'waiting', 'partial', 'eta_no'].includes(k);
+    if(!((c === 'ready' && lateMat) || ((c === 'waiting' || c === 'partial') && okMat))) return '';
+    return `<div class="note warn" style="margin:0 0 8px;font-size:12.5px">\u26a0 Material Tracking says <b>${esc(rdLab(x.rd)[0])}</b>, but the Stages say <b>${stTxt[c]}</b>. Update whichever is out of date.</div>`; };
   let html = tabs + areaChips;
   if(RD_TAB === 'ready'){
-    if(RD_F === 'surplus' || (STAFF && RD_F === 'partial') || (!OPS && (RD_F === 'eta_no' || RD_F === 'unknown'))) RD_F = 'all';
-    const GRP = OPS ? {} : {waiting: ['waiting', 'eta_no'], pre: ['pre', 'unknown']}, inF = (x, k) => (GRP[k] || [k]).includes(x.rd.k);   // PCSB: fewer tiles
-    const K = ['ready', 'waiting', 'partial', 'blocked', 'eta_ok', 'eta_no', 'none', 'pre', 'unknown'], cnt = {}; K.forEach(k => cnt[k] = rows.filter(x => x.rd.k === k).length);
+    if(!['all', 'go', 'waiting', 'partial', 'pre'].includes(RD_F)) RD_F = 'all';
+    const inF = (x, k) => x.sk === (k === 'go' ? 'ready' : k);        // the status is the Stages column, not Material Tracking
     const notDone = rows.filter(x => !x.r.executionDone);
-    let list = notDone.filter(x => RD_F === 'all' || inF(x, RD_F) || (RD_F === 'go' && (x.rd.k === 'ready' || x.rd.k === 'eta_ok' || x.rd.k === 'none')))
+    let list = notDone.filter(x => RD_F === 'all' || inF(x, RD_F))
       .sort((a, b) => prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 1e9) - (dayN(b.r.due) ?? 1e9));
     const base = list; if(RDQ.due) RDQ.due = ''; list = rdQApply(base);
-    const goN = notDone.filter(x => ['ready', 'eta_ok', 'none'].includes(x.rd.k)).length;
+    const goN = notDone.filter(x => inF(x, 'go')).length;
     const sdSplit = k => { const f = (MX.find(m => m[0] === k) || [])[3]; if(!f) return ''; const L = notDoneSD.filter(f);
       const chip = (sd, lbl, ttl) => { const n = L.filter(x => sdOf(x) === sd).length; return `<button class="rd-sd${n ? '' : ' zero'}${RD_F === k && RD_SD === sd ? ' on' : ''}"${n ? '' : ' disabled'} data-rdm="${k}|${sd}" title="${ttl}: ${n}">${lbl} <i>${n || '–'}</i></button>`; };
       return `<div class="rd-sdr">${chip('SD_UNITSD', 'SD', 'SD + UNIT SD')}${chip('NSD', 'NSD', 'NSD')}${chip('NONE', 'N/A', 'SD category not assigned')}</div>`; };
     const tile = (k, n, lbl, cls, sub) => `<div class="rd-tile rt ${cls}${RD_F === k ? ' on' : ''}"><button class="rd-main" data-rdf="${k}"><b>${n}</b><span>${lbl}</span>${sub ? `<em>${sub}</em>` : ''}</button>${sdSplit(k)}</div>`;
     // matrix like the AIF Package Overview: every readiness status split by SD category (click a cell to filter)
     const notDoneSD = rowsSD.filter(x => !x.r.executionDone);
-    const MX = [['go', 'Ready to execute', 'ok', x => ['ready', 'eta_ok', 'none'].includes(x.rd.k)], ['waiting', STAFF ? 'Waiting delivery' : 'Bought — waiting delivery', 'info', x => inF(x, 'waiting')],
-      ...(!STAFF ? [['partial', 'Partially received', 'warn', x => x.rd.k === 'partial']] : []), ['blocked', STAFF ? 'Not bought / short' : 'Not bought yet', 'bad', x => x.rd.k === 'blocked'],
-      ...(OPS ? [['eta_no', 'ETA not ready', 'warn', x => x.rd.k === 'eta_no']] : []), ['pre', 'Preparation', 'info', x => inF(x, 'pre')], ...(OPS ? [['unknown', 'Unknown', 'faint', x => x.rd.k === 'unknown']] : []), ['all', 'All open', '', () => true]];
-    html += `<div class="head"><div><h2>Material Readiness${scope ? ' — ' + esc(scope) : ''}</h2></div></div>${noMto}${surplusToIssueHtml()}
-      <div class="rd-tiles rd-tilesx">${tile('go', goN, 'Ready to execute', 'ok', 'material in hand or not needed')}${tile('waiting', notDone.filter(x => inF(x, 'waiting')).length, STAFF ? 'Waiting delivery' : 'Bought — waiting delivery', 'info', OPS ? 'ordered, not all arrived' : 'ordered, not received yet')}${!STAFF ? tile('partial', notDone.filter(x => x.rd.k === 'partial').length, 'Partially received', 'warn', 'part of an item still to come') : ''}${tile('blocked', notDone.filter(x => x.rd.k === 'blocked').length, STAFF ? 'Not bought / short' : 'Not bought yet', 'bad', OPS ? 'MTO item not bought / short' : STAFF ? 'some items still to buy' : 'some material still to be bought')}${OPS ? tile('eta_no', notDone.filter(x => x.rd.k === 'eta_no').length, 'ETA not ready', 'warn', 'no MTO — going by ETA') : ''}${tile('pre', notDone.filter(x => inF(x, 'pre')).length, 'Preparation', 'info', STAFF ? 'survey / drawing approval / MTO not done, or on hold' : 'survey / drawing approval / material list in progress')}${OPS ? tile('unknown', notDone.filter(x => x.rd.k === 'unknown').length, 'Unknown', 'faint', 'no MTO, no ETA') : ''}${tile('all', notDone.length, 'All open', '', 'not executed yet')}</div>
+    const MX = [['go', 'Ready to execute', 'ok', x => inF(x, 'go')], ['waiting', 'Waiting for material', 'info', x => inF(x, 'waiting')], ['partial', 'Partly received', 'warn', x => inF(x, 'partial')], ['pre', 'Preparation', 'info', x => inF(x, 'pre')], ['all', 'All open', '', () => true]];
+    html += `<div class="head"><div><h2>Material Readiness${scope ? ' — ' + esc(scope) : ''}</h2></div></div>${surplusToIssueHtml()}
+      <div class="rd-tiles rd-tilesx">${tile('go', goN, 'Ready to execute', 'ok', 'MRIR done, or no material needed')}${tile('waiting', notDone.filter(x => inF(x, 'waiting')).length, 'Waiting for material', 'info', 'take-off done, MRIR not started')}${tile('partial', notDone.filter(x => inF(x, 'partial')).length, 'Partly received', 'warn', 'MRIR in progress')}${tile('pre', notDone.filter(x => inF(x, 'pre')).length, 'Preparation', 'info', 'survey / drawing approval / MTO not done, or on hold')}${tile('all', notDone.length, 'All open', '', 'not executed yet')}</div>
       <div class="more" style="margin:-6px 2px 12px">Under each card: <b>SD</b> = SD + UNIT SD · <b>NSD</b> · <b>N/A</b> = no SD category set on the finding yet. Click a small number to filter by that status and SD category.</div>
-      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Stages</th><th>Material</th><th class="n">${OPS ? 'MTO lines received' : 'Items received'}</th></tr>${rdQRow(base, ['notif', 'find', 'pkg', 'pri', 'stg', 'mat', 'mto'])}</thead><tbody>
+      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Stages</th><th class="n">${OPS ? 'MTO lines received' : 'Items received'}</th></tr>${rdQRow(base, ['notif', 'find', 'pkg', 'pri', 'stg', 'mto'])}</thead><tbody>
       ${rdGroupRows(list).map(g => { const x0 = g[0], n = g.length, open = RD_OPEN.has(x0.r.uid), R = rdLab(x0.rd), via = g.find(x => x.rd.via);
         return g.map((x, i) => { const r = x.r; return `<tr class="xrow${i ? ' rd-same' : ''}${i < n - 1 ? ' rd-join' : ''}" data-rdo="${esc(x0.r.uid)}"><td style="white-space:nowrap">${i ? '<span style="visibility:hidden">▸ </span>' : open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(OPS ? r.view : areaOf(r.view))}</div>${n > 1 && !i ? `<div class="rd-sd" title="These notifications are on the same drawing, so they use the same material">⛓ same drawing × ${n}</div>` : ''}</td>
         <td style="min-width:260px">${esc(clean(r.finding || r.desc).slice(0, 160))}<div class="faint" style="font-size:11.5px">${esc([r.equip, r.module].filter(v => !blank(v)).join(' · '))}</div></td>
         <td style="white-space:nowrap">${pkgCell(x)}</td>
         <td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
-        ${i ? '' : `<td rowspan="${n}" style="white-space:nowrap;vertical-align:top"><span class="mto-st ${R[1]}">${R[0]}</span></td><td rowspan="${n}" class="n" style="vertical-align:top">${x0.rd.tot ? `${x0.rd.rec} / ${x0.rd.tot}` : '<span class="faint">—</span>'}</td>`}</tr>`; }).join('') +
-        (open ? `<tr class="detail"><td colspan="7">${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
+        ${i ? '' : `<td rowspan="${n}" class="n" style="vertical-align:top">${x0.rd.tot ? `${x0.rd.rec} / ${x0.rd.tot}` : '<span class="faint">—</span>'}</td>`}</tr>`; }).join('') +
+        (open ? `<tr class="detail"><td colspan="6">${xchk(x0)}${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
       </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No finding in this group' + (Object.values(RDQ).some(Boolean) ? ' with these column filters' : '') + '.</div>' : ''}
-      ${OPS ? `<div class="more">Click a row to see its MTO items. “Received” counts stock received for that package line (and surplus issued to it); if a package line is short, every finding that uses it shows as “Not bought / short” until it is sorted.</div>` : '<div class="more">Click a row to see its material items.</div>'}</div>`;
+      ${OPS ? `<div class="more">The status follows the <b>Stages</b> column (the AIF updates). Click a row to see its MTO items from Material Tracking \u2014 a \u26a0 note appears when Material Tracking and the Stages disagree.</div>` : '<div class="more">Click a row to see its material items.</div>'}</div>`;
   } else {
     const od = rows.filter(x => x.cause);
     const keys = Object.keys(OC), cnt = {}; keys.forEach(k => cnt[k] = od.filter(x => x.cause === k).length);
