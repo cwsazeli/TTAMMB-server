@@ -543,6 +543,18 @@ dialog::backdrop{backdrop-filter:blur(3px);}
 .rd-flab{display:inline-flex;align-items:center;gap:8px;}
 .sdd{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:7px;vertical-align:1px;box-shadow:0 0 0 2px color-mix(in srgb,var(--c) 22%,transparent);}
 @media (max-width:720px){ .rd-frow{grid-template-columns:1fr;gap:6px;} }
+/* Surplus available: one colour per category so the table stops looking flat */
+.sp-t tbody[data-cat="0"]{--cc:#3B82C4;} .sp-t tbody[data-cat="1"]{--cc:#8B5CF6;} .sp-t tbody[data-cat="2"]{--cc:#14A3A3;} .sp-t tbody[data-cat="3"]{--cc:#E07B39;}
+.sp-t tbody[data-cat="4"]{--cc:#D6558B;} .sp-t tbody[data-cat="5"]{--cc:#C99A1B;} .sp-t tbody[data-cat="6"]{--cc:#5B7C99;} .sp-t tbody[data-cat="7"]{--cc:#8A94A3;}
+.sp-t tbody.sp-c td.sp-ch{background:color-mix(in srgb,var(--cc) 16%,var(--panel))!important;border-left:4px solid var(--cc);padding-top:10px;padding-bottom:10px;}
+.sp-t tbody.sp-c .sp-caret{color:var(--cc);}
+.sp-t tr.sp-mat td{background:color-mix(in srgb,var(--cc) 6%,var(--panel))!important;}
+.sp-t tr.sp-mat td:first-child{border-left:3px solid var(--cc);}
+.sp-t tbody.sp-g:hover tr.sp-mat td{background:color-mix(in srgb,var(--cc) 13%,var(--panel))!important;}
+.sp-t tr.sp-pk td{background:var(--panel)!important;}
+.sp-t tr.sp-pk td:first-child{border-left:3px solid color-mix(in srgb,var(--cc) 40%,transparent);}
+.sp-av{display:inline-block;padding:2px 11px;border-radius:999px;font-weight:700;background:var(--ok-bg);color:var(--ok);}
+.sp-av.bad{background:var(--bad-bg);color:var(--bad);} .sp-av .faint{color:inherit;opacity:.8;}
 @media print{ .box,.mod,.rd-tile,.rd-fbar,.btn,.tbtn{box-shadow:none!important;} .panel.on{animation:none;} }
 </style>
 </head>
@@ -2199,27 +2211,25 @@ const OC = {   // why an overdue finding is still open — checked in this order
   survey:    ['Survey not done', 'info',               'No survey yet, so no MTO and no material.'],
   drawing:   ['Drawing pending approval', 'info',      'Survey done; SURVEY_REMARKS says the drawing is waiting for approval, so no MTO yet.'],
   mto:       ['MTO not done', 'info',                  'Survey and drawing done, but MATERIAL TAKE OFF is not done yet.'],
-  material:  ['Material not bought / short', 'bad',    'MTO items not bought or short, or the ETA says the material is not ready.'],
-  delivery:  ['Waiting material delivery', 'warn',     'Everything is ordered; some has not arrived.'],
-  surplus:   ['Material ready — work not executed', 'bad', 'Material is taken from surplus — nothing is waiting on material.'],
+  material:  ['Material partly received', 'warn',   'MRIR is in progress: only part of the material has arrived or been inspected.'],
+  delivery:  ['Waiting for material', 'warn',        'Take-off is done, but MRIR has not started: the material has not arrived yet.'],
   fab:       ['Fabrication pending', 'warn',           'Material is in hand; fabrication is not done.'],
-  execution: ['Material ready — work not executed', 'bad', 'Nothing is waiting on material or fabrication — a manpower / planning / access issue.'],
-  nodata:    ['Material status unknown', 'faint',      'No MTO line and no ETA — cannot tell.']
+  execution: ['Material ready — work not executed', 'bad', 'MRIR is done (or no material is needed) and nothing else is waiting — a manpower / planning / access issue.']
 };
-function overdueCause(r, rd){
+function overdueCause(r, rd){      // follows the Stages column (the AIF updates) - the same status as the Material Readiness tab
   if(r.executionDone) return 'closeout';
   const g = aifStageInfo(r);
   if(g.hold) return 'hold';
-  if(!r.surveyDone && rd.src !== 'MTO') return 'survey';
-  if(g.drawing && rd.src !== 'MTO') return 'drawing';
-  if(g.takeOffPending && (rd.k === 'pre' || rd.k === 'unknown')) return 'mto';
-  if(rd.k === 'blocked' || rd.k === 'partial' || rd.k === 'eta_no') return 'material';
-  if(rd.k === 'waiting') return 'delivery';
-  if(rd.k === 'surplus') return 'surplus';
+  if(!r.surveyDone) return 'survey';
+  if(g.drawing) return 'drawing';
+  const k = stageKind(r);
+  if(k === 'pre') return 'mto';                       // survey and drawing done, take-off not done
+  if(k === 'partial') return 'material';              // MRIR in progress: only part of the material is in
+  if(k === 'waiting') return 'delivery';              // take-off done, MRIR not started
   if(r.needsFabrication && !r.fabricationDone) return 'fab';
-  if(rd.k === 'unknown') return 'nodata';
   return 'execution';
 }
+const SK_LBL = {ready: 'Ready to execute', waiting: 'Waiting for material', partial: 'Partly received', pre: 'Preparation'};
 /* One status per finding taken straight from the Stages column (the AIF updates): no second source that can disagree */
 function stageKind(r){
   const S = {}; stageList(r).forEach(x => { S[x[0]] = x[1]; });
@@ -2282,9 +2292,8 @@ function stageTxt(r){
 const RD_CLIENT = {partial: ['Partially received', 'warn'], ready: ['Material received', 'ok'], eta_ok: ['Material received', 'ok'], none: ['No material needed', 'faint'], waiting: ['Bought — waiting delivery', 'info'],
   surplus: ['Material received', 'ok'], blocked: ['Not bought yet', 'bad'], eta_no: ['Not received yet', 'warn'], pre: ['Preparation in progress', 'info'], unknown: ['Not assessed yet', 'faint']};
 const OC_CLIENT = {closeout: ['Work done — close-out in progress', 'ok', 'Execution complete; documentation / status update in progress.'], hold: ['On hold', 'faint', 'Work on hold.'], survey: ['Survey pending', 'info', 'Site survey not yet done.'], drawing: ['Drawing approval pending', 'info', 'Drawing submitted, waiting for approval.'], mto: ['Material take-off in progress', 'info', 'Material list being prepared.'],
-  material: ['Material not ready', 'bad', 'Material still being procured.'], delivery: ['Waiting material delivery', 'warn', 'Material ordered; delivery pending.'],
-  surplus: ['Material being arranged', 'acc', 'Material to be issued from existing stock.'], fab: ['Fabrication in progress', 'warn', 'Material in hand; fabrication pending.'],
-  execution: ['Ready — execution being scheduled', 'info', 'Material in hand; work to be scheduled.'], nodata: ['Under review', 'faint', 'Status being confirmed.']};
+  material: ['Material partly received', 'warn', 'Part of the material has arrived.'], delivery: ['Waiting for material', 'warn', 'Material not yet received.'], fab: ['Fabrication in progress', 'warn', 'Material in hand; fabrication pending.'],
+  execution: ['Ready — execution being scheduled', 'info', 'Material in hand; work to be scheduled.']};
 const RD_MGMT = {ready: ['Ready — material received', 'ok'], surplus: ['Ready — material received', 'ok'], waiting: ['Waiting delivery', 'info'], blocked: ['Not bought / short', 'bad'],
   eta_ok: ['Ready — material received', 'ok'], eta_no: ['Not received yet', 'warn'], none: ['No material needed', 'faint'], pre: ['Preparation — survey / drawing / MTO', 'info'], unknown: ['Not assessed yet', 'faint']};
 const RDL = () => LEVEL === 'client' ? RD_CLIENT : LEVEL === 'staff' ? RD_MGMT : RD, OCL = () => LEVEL === 'client' ? OC_CLIENT : OC;
@@ -2408,7 +2417,7 @@ function renderReadiness(){
     const byP = {}; od.forEach(x => { const p = 'P' + (prioN(x.r.priority) < 9 ? prioN(x.r.priority) : '?'); (byP[p] = byP[p] || {}); byP[p][x.cause] = (byP[p][x.cause] || 0) + 1; });
     const base = od.filter(x => OC_F === 'all' || x.cause === OC_F).sort((a, b) => keys.indexOf(a.cause) - keys.indexOf(b.cause) || prioN(a.r.priority) - prioN(b.r.priority) || (dayN(a.r.due) ?? 0) - (dayN(b.r.due) ?? 0)), list = rdQApply(base);
     const max = Math.max(1, ...keys.map(k => cnt[k]));
-    html += `<div class="head"><div><h2>Overdue Analysis${scope ? ' — ' + esc(scope) : ''}</h2><p>${od.length} open AIF finding${od.length === 1 ? ' is' : 's are'} overdue.</p></div></div>${noMto}
+    html += `<div class="head"><div><h2>Overdue Analysis${scope ? ' — ' + esc(scope) : ''}</h2><p>${od.length} open AIF finding${od.length === 1 ? ' is' : 's are'} overdue. The reason follows the <b>Stages</b> column.</p></div></div>
       <div class="box"><div class="oc-bars">${keys.filter(k => cnt[k]).map(k => `<button class="oc-bar${OC_F === k ? ' on' : ''}" data-ocf="${k}" title="${esc(OCL()[k][2])}"><span class="oc-l">${OCL()[k][0]}</span><span class="oc-t"><span class="oc-f ${OCL()[k][1]}" style="width:${cnt[k] / max * 100}%"></span></span><b>${cnt[k]}</b></button>`).join('')}
         <button class="oc-bar${OC_F === 'all' ? ' on' : ''}" data-ocf="all"><span class="oc-l"><b>All overdue</b></span><span class="oc-t"></span><b>${od.length}</b></button></div>
         <div class="tw"><table class="grid"><thead><tr><th>Priority</th>${keys.filter(k => cnt[k]).map(k => `<th class="n" title="${esc(OCL()[k][0])}">${esc(OCL()[k][0].split(' — ')[0].replace('Material ready', 'Ready, not executed'))}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
@@ -2416,12 +2425,12 @@ function renderReadiness(){
         </tbody></table></div>${RD_AREA === 'all' && areasP.length > 1 ? (() => { const byL = {}; od.forEach(x => { const a = areaOf(x.r.view); (byL[a] = byL[a] || {}); byL[a][x.cause] = (byL[a][x.cause] || 0) + 1; });
         return `<div class="tw" style="border-top:1px solid var(--border)"><table class="grid"><thead><tr><th>Location</th>${keys.filter(k => cnt[k]).map(k => `<th class="n" title="${esc(OCL()[k][0])}">${esc(OCL()[k][0].split(' — ')[0].replace('Material ready', 'Ready, not executed'))}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>
         ${areasP.filter(a => byL[a]).map(a => `<tr><td><button class="linkish" data-rda="${esc(a)}"><b>${esc(a)}</b></button></td>${keys.filter(k => cnt[k]).map(k => `<td class="n">${byL[a][k] || '<span class="faint">0</span>'}</td>`).join('')}<td class="n"><b>${Object.values(byL[a]).reduce((q, n) => q + n, 0)}</b></td></tr>`).join('')}</tbody></table></div>`; })() : ''}</div><div class="gap"></div>
-      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Why</th><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Due</th><th>Stages</th><th>Material</th></tr>${rdQRow(base, ['why', 'notif', 'find', 'pkg', 'pri', 'due', 'stg', 'mat'])}</thead><tbody>
+      <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Why</th><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Due</th><th>Stages</th><th class="n">${OPS ? 'MTO lines received' : 'Items received'}</th></tr>${rdQRow(base, ['why', 'notif', 'find', 'pkg', 'pri', 'due', 'stg', 'mto'])}</thead><tbody>
       ${rdGroupRows(list, x => x.cause).map(g => { const x0 = g[0], n = g.length, open = RD_OPEN.has(x0.r.uid), R = rdLab(x0.rd), C = OCL()[x0.cause], via = g.find(x => x.rd.via);
         return g.map((x, i) => { const r = x.r; return `<tr class="xrow${i ? ' rd-same' : ''}${i < n - 1 ? ' rd-join' : ''}" data-rdo="${esc(x0.r.uid)}">${i ? '' : `<td rowspan="${n}" style="white-space:nowrap;vertical-align:top"><span class="mto-st ${C[1]}" title="${esc(C[2])}">${C[0]}</span></td>`}<td style="white-space:nowrap">${i ? '<span style="visibility:hidden">▸ </span>' : open ? '▾ ' : '▸ '}${aifBtn(r)}${n > 1 && !i ? `<div class="rd-sd" title="These notifications are on the same drawing, so they use the same material">⛓ same drawing × ${n}</div>` : ''}</td>
         <td style="min-width:240px">${esc(clean(r.finding || r.desc).slice(0, 150))}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(OPS ? r.view : areaOf(r.view))}</div></td><td style="white-space:nowrap">${pkgCell(x)}</td><td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
-        ${i ? '' : `<td rowspan="${n}" style="white-space:nowrap;vertical-align:top"><span class="mto-st ${R[1]}">${R[0]}</span>${x0.rd.tot ? ` <span class="faint">${x0.rd.rec}/${x0.rd.tot}</span>` : ''}</td>`}</tr>`; }).join('') +
-        (open ? `<tr class="detail"><td colspan="8">${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
+        ${i ? '' : `<td rowspan="${n}" class="n" style="vertical-align:top">${x0.rd.tot ? `${x0.rd.rec} / ${x0.rd.tot}` : '<span class="faint">—</span>'}</td>`}</tr>`; }).join('') +
+        (open ? `<tr class="detail"><td colspan="8">${xchk(x0)}${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
       </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No overdue finding in this group.</div>' : ''}</div>`;
   }
   el.innerHTML = html; rdWire(el);
@@ -2655,7 +2664,7 @@ function surplusAvailHtml(){
     .sort((x, y) => x.cat - y.cat || x.trank - y.trank || x.type.localeCompare(y.type) || x.size - y.size || x.desc.localeCompare(y.desc));
   const nRes = R.rows.filter(r => r.reserved > 1e-9).length, nFree = R.rows.filter(r => r.avail > 1e-9).length;
   const forHtml = p => p.for.length ? p.for.map(f => `<div><b>${esc(f.sheet)}</b>: ${esc(f.desc)} <span class="faint">\u2212 ${mtoQ(f.q)} ${esc(p.unit || '')}</span>${f.nn && f.nn.length ? ` <span class="faint">\u00b7 NN</span> ${mtoNNhtml(f.nn, true)}` : ''}</div>`).join('') : '<span class="faint">nothing planned</span>';
-  const nums = (o, u) => `<td class="n" style="white-space:nowrap">${fq(o.stock, u)}</td><td class="n" style="white-space:nowrap">${o.reserved > 1e-9 ? '<span style="color:var(--warn)">\u2212 ' + fq(o.reserved, u) + '</span>' : '<span class="faint">\u2013</span>'}</td><td class="n" style="white-space:nowrap;font-weight:700;color:var(--${o.avail > 1e-9 ? 'ok' : 'bad'})">${fq(o.avail, u)}</td>`;
+  const nums = (o, u) => `<td class="n" style="white-space:nowrap">${fq(o.stock, u)}</td><td class="n" style="white-space:nowrap">${o.reserved > 1e-9 ? '<span style="color:var(--warn)">\u2212 ' + fq(o.reserved, u) + '</span>' : '<span class="faint">\u2013</span>'}</td><td class="n" style="white-space:nowrap"><span class="sp-av${o.avail > 1e-9 ? '' : ' bad'}">${fq(o.avail, u)}</span></td>`;
   const body = groups.map((g, i) => {
     const q = (g.desc + ' ' + g.parts.map(p => p.sheet + ' ' + p.for.map(f => f.sheet + ' ' + f.desc + ' ' + (f.nn || []).map(n => n.nn).join(' ')).join(' ')).join(' ')).toLowerCase();
     const head = i === 0 || groups[i - 1].cat !== g.cat ? `<tbody class="sp-c" data-cat="${g.cat}"><tr><td colspan="5" class="sp-ch" tabindex="0" role="button" aria-expanded="true" title="Click to collapse / expand" style="background:var(--panel2,rgba(128,128,128,.12));font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:11.5px"><span class="sp-caret">\u25be</span>${spCatName(g.cat)} <span class="faint" style="font-weight:400">\u00b7 ${groups.filter(x => x.cat === g.cat).length}</span></td></tr></tbody>` : '';
@@ -2746,17 +2755,15 @@ async function mtoIssue(need, cand){
 function weeklyExtrasHtml(tbl, td){
   const T = dayN(todayISO()), out = [], C = LEVEL === 'client';
   const rows = readinessRows() || [];
-  const nd = rows.filter(x => !x.r.executionDone), g = k => nd.filter(x => k.includes(x.rd.k)).length;
-  out.push(`<h2>Work readiness (open findings not executed: ${nd.length})</h2>` + (!OPS && !C ? tbl(['Ready to execute', 'Waiting delivery', 'Not bought / short', 'Preparation'],
-    [`<tr>${td(g(['ready', 'eta_ok', 'none', 'surplus']), true)}${td(g(['waiting', 'eta_no']), true)}${td(g(['blocked']), true, g(['blocked']))}${td(g(['pre', 'unknown']), true)}</tr>`])
-    : tbl(C ? ['Ready to execute', 'Waiting delivery', 'Material not ready', 'Material not ready (ETA)', 'Preparation', 'Not assessed'] : ['Ready to execute', 'Waiting delivery', 'Not bought / short', 'ETA not ready', 'Preparation', 'Unknown'],
-    [`<tr>${td(g(['ready', 'eta_ok', 'none', 'surplus']), true)}${td(g(['waiting']), true)}${td(g(['blocked', 'partial']), true, g(['blocked']))}${td(g(['eta_no']), true)}${td(g(['pre']), true)}${td(g(['unknown']), true)}</tr>`])));
+  const nd = rows.filter(x => !x.r.executionDone), g = k => nd.filter(x => x.sk === k).length;
+  out.push(`<h2>Work readiness (open findings not executed: ${nd.length})</h2>` + tbl(['Ready to execute', 'Waiting for material', 'Partly received', 'Preparation'],
+    [`<tr>${td(g('ready'), true)}${td(g('waiting'), true)}${td(g('partial'), true)}${td(g('pre'), true)}</tr>`]));
   const od = rows.filter(x => x.cause), keys = Object.keys(OC).filter(k => od.some(x => x.cause === k));
   if(od.length) out.push(`<h2>Why overdue findings are still open (${od.length})</h2>` + tbl(['Reason', 'Findings', 'P1', 'P2', 'P3', 'P4'],
     keys.map(k => { const l = od.filter(x => x.cause === k); return `<tr>${td(OCL()[k][0])}${td(l.length, true)}${[1, 2, 3, 4].map(p => td(l.filter(x => prioN(x.r.priority) === p).length, true)).join('')}</tr>`; })));
   const soon = (DATA.aif ? DATA.aif.records : []).filter(r => aifOpen(r) && !r.transferred && dayN(r.due) !== null && dayN(r.due) >= T && dayN(r.due) <= T + 7).sort((a, b) => dayN(a.due) - dayN(b.due));
-  if(soon.length) out.push(`<h2>AIF due in the next 7 days (${soon.length})</h2>` + tbl(['Notification', 'Finding', 'Pri', 'Due', 'Material'],
-    soon.slice(0, 25).map(r => { const x = rows.find(y => y.r === r); return `<tr>${td(r.notif || r.report || '—')}${td(clean(r.finding || r.desc).slice(0, 90))}${td(r.priority || '—')}${td(r.due)}${td(x ? RDL()[x.rd.k][0] : '—')}</tr>`; })));
+  if(soon.length) out.push(`<h2>AIF due in the next 7 days (${soon.length})</h2>` + tbl(['Notification', 'Finding', 'Pri', 'Due', 'Readiness'],
+    soon.slice(0, 25).map(r => { const x = rows.find(y => y.r === r); return `<tr>${td(r.notif || r.report || '—')}${td(clean(r.finding || r.desc).slice(0, 90))}${td(r.priority || '—')}${td(r.due)}${td(x ? SK_LBL[x.sk] : '—')}</tr>`; })));
   if(C) return out.join('');
   const del = (DATA.mat ? DATA.mat.items : []).filter(x => dayN(x.target) !== null && num(x.received) < num(x.qty) && dayN(x.target) <= T + 7 && !mtoFromSurplus(x)).sort((a, b) => dayN(a.target) - dayN(b.target));
   if(del.length) out.push(`<h2>Material deliveries due / overdue (${del.length})</h2>` + tbl(['Package', 'Item', 'PO', 'Supplier', 'Target', 'Recv / Qty'],
@@ -2787,7 +2794,7 @@ function weeklyExtrasHtml(tbl, td){
 function weeklyText(){
   collect();
   const W = DATA.wop ? DATA.wop.records : [], A = DATA.aif ? DATA.aif.records : [], M = DATA.mat;
-  const rows = readinessRows() || [], nd = rows.filter(x => !x.r.executionDone), g = k => nd.filter(x => k.includes(x.rd.k)).length, od = rows.filter(x => x.cause);
+  const rows = readinessRows() || [], nd = rows.filter(x => !x.r.executionDone), g = k => nd.filter(x => x.sk === k).length, od = rows.filter(x => x.cause);
   const oc = Object.keys(OC).map(k => [k, od.filter(x => x.cause === k).length]).filter(v => v[1]);
   const T = dayN(todayISO()), s = M ? M.stats || {} : {};
   const up = s => String(s || '').toUpperCase();
@@ -2795,7 +2802,7 @@ function weeklyText(){
     `*TTAMM Package B — weekly ${LEVEL === 'client' ? 'progress' : 'update'}* (${window.__zbFmtHub ? window.__zbFmtHub(new Date()) : todayISO()})`, '',
     `*WOP*: ${W.length} — ${W.filter(r => up(r.projectStatus) === 'COMPLETED').length} completed, ${W.filter(r => up(r.projectStatus) === 'ONGOING').length} ongoing, ${W.filter(r => up(r.projectStatus) === 'HOLD').length} hold`,
     `*AIF*: ${A.filter(aifOpen).length} open, ${A.filter(aifOverdue).length} overdue` + ['1', '2', '3', '4'].map(p => { const n = A.filter(r => aifOpen(r) && prioN(r.priority) === +p).length; return n ? ` · P${p} ${n}` : ''; }).join(''),
-    LEVEL === 'client' ? `*Readiness*: ${g(['ready', 'eta_ok', 'none'])} ready to execute · ${g(['waiting'])} waiting delivery · ${g(['blocked', 'partial', 'eta_no'])} material not ready` : `*Readiness*: ${g(['ready', 'eta_ok', 'none'])} ready to execute · ${g(['waiting'])} waiting delivery · ${g(['blocked'])} not bought / short`,
+    `*Readiness*: ${g('ready')} ready to execute · ${g('waiting')} waiting for material · ${g('partial')} partly received · ${g('pre')} in preparation`,
     od.length ? `*Overdue — why*: ` + oc.map(([k, n]) => `${OCL()[k][0]} ${n}`).join(' · ') : '',
     M && LEVEL !== 'client' ? `*Materials*: ${s.lines || 0} lines, ${Math.round(num(s.recv))}% received, ${s.overdue || 0} late` : '',
     (() => { const CR = OPS ? claimRows() : null; if(!CR) return ''; const s2 = (k, f) => CR.filter(x => k.includes(x.k)).reduce((a, x) => a + f(x), 0); return `*Claims*: ready for final claim ${rm(s2(['final'], x => x.unclaimed))} · blocked ${rm(s2(['blocked'], x => x.unclaimed))} · progress claim possible ${rm(s2(['progress'], x => x.claimable))} · ${CR.filter(x => x.k === 'nopo').length} WOP with progress but no PO`; })(),
