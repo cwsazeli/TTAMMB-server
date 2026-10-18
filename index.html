@@ -555,6 +555,7 @@ dialog::backdrop{backdrop-filter:blur(3px);}
 .sp-t tr.sp-pk td:first-child{border-left:3px solid color-mix(in srgb,var(--cc) 40%,transparent);}
 .sp-av{display:inline-block;padding:2px 11px;border-radius:999px;font-weight:700;background:var(--ok-bg);color:var(--ok);}
 .sp-av.bad{background:var(--bad-bg);color:var(--bad);} .sp-av .faint{color:inherit;opacity:.8;}
+.rd-now + .rd-now{margin-top:3px;}
 @media print{ .box,.mod,.rd-tile,.rd-fbar,.btn,.tbtn{box-shadow:none!important;} .panel.on{animation:none;} }
 </style>
 </head>
@@ -2246,11 +2247,11 @@ function stageList(r){
   return [
     ['SURVEY', st(r.surveyDone, w.survey, w.surveyRem), 'SURVEY ' + v(w.survey) + (t(w.surveyRem) ? ' · remarks ' + v(w.surveyRem) : ''), note(w.surveyRem, /SAME\s+(DRAWING|DWG)/i) || note(w.survey)],
     w.takeOff == null ? null : ['MTO', st(r.takeOffDone || NA.test(t(w.takeOff)), w.takeOff), 'MATERIAL TAKE OFF ' + v(w.takeOff), note(w.takeOff)],
-    ['MRIR', st(r.mtoDone || !r.needsMTO, w.mrir), 'MRIR ' + v(w.mrir) + (t(r.eta) ? ' · ETA ' + v(r.eta) : ''), r.mtoDone ? '' : note(r.eta, /^RECEIVED$/i) || note(w.mrir)],
-    r.needsFabrication ? ['FAB', st(r.fabricationDone, w.fab, w.fabRem), 'FABRICATION ' + v(w.fab) + ' · remarks ' + v(w.fabRem), r.fabricationDone ? '' : note(w.fabRem)] : null,
+    ['MRIR', st(r.mtoDone || !r.needsMTO, w.mrir), 'MRIR ' + v(w.mrir) + (t(r.eta) ? ' · ETA ' + v(r.eta) : ''), r.mtoDone ? '' : note(w.mrir) || note(r.eta, /^RECEIVED$/i)],
+    r.needsFabrication ? ['FAB', st(r.fabricationDone, w.fab, w.fabRem), 'FABRICATION ' + v(w.fab) + ' · remarks ' + v(w.fabRem), r.fabricationDone ? '' : note(w.fabRem) || note(w.fab, /^(YES.*|NO|FW)$/i)] : null,
     ['EXE', st(r.executionDone, w.exe, w.exeRem), 'EXECUTION ' + v(w.exe) + (t(w.exeRem) ? ' · remarks ' + v(w.exeRem) : ''), note(w.exeRem) || note(w.exe)],
     ['SCAN', st(r.scanDone, w.scan), 'SCAN ' + v(w.scan), note(w.scan)]
-  ].filter(Boolean);
+  ].filter(Boolean).map(e => { if(e[1] === 'done') e[3] = ''; return e; });      // a finished stage has nothing left to say
 }
 /* ---- column filters for the Work Readiness tables ---- */
 let RDQ = {notif: '', find: '', pkg: '', pri: '', due: '', stg: '', mat: '', mto: ''};
@@ -2284,10 +2285,10 @@ function rdQRow(base, cols){
 function rdQBar(n, of){ const on = Object.values(RDQ).some(Boolean); return on ? `<div class="rd-qbar">Showing <b>${n}</b> of ${of} · <button class="linkish" data-rdqclear>✕ Clear column filters</button></div>` : ''; }
 function stageTxt(r){
   const L = stageList(r), word = {done: 'done', on: 'in progress', todo: 'not done'};
-  // latest status = the note of the furthest stage that has one (e.g. EXE: "Existing handrail removal ongoing at site")
-  const last = L.slice().reverse().find(s => s[3]);
-  return L.map(([n, st, tip]) => `<span class="rd-stg${st === 'done' ? ' ok' : st === 'on' ? ' on' : ''}" title="${n}: ${word[st]}${r.raw ? ' — AIF Excel: ' + esc(tip) : ''}">${n}</span>`).join('') +
-    (last ? `<div class="rd-now" title="Latest status from the AIF Excel"><b>${last[0]}</b> · ${esc(last[3])}</div>` : '');
+  // remarks come from the AIF Excel remark columns; every stage in progress is listed, else the furthest unfinished stage that has one
+  const act = L.filter(x => x[1] === 'on' && x[3]), last = L.slice().reverse().find(x => x[1] !== 'done' && x[3]), notes = act.length ? act : last ? [last] : [];
+  return L.map(([n, st, tip]) => `<span class="rd-stg${st === 'done' ? ' ok' : st === 'on' ? ' on' : ''}" title="${n}: ${word[st]}${r.raw ? ' \u00b7 AIF Excel: ' + esc(tip) : ''}">${n}</span>`).join('') +
+    notes.map(x => `<div class="rd-now" title="${x[0]} remark from the AIF Excel"><b>${x[0]}</b> \u00b7 ${esc(x[3])}</div>`).join('');
 }
 const RD_CLIENT = {partial: ['Partially received', 'warn'], ready: ['Material received', 'ok'], eta_ok: ['Material received', 'ok'], none: ['No material needed', 'faint'], waiting: ['Bought — waiting delivery', 'info'],
   surplus: ['Material received', 'ok'], blocked: ['Not bought yet', 'bad'], eta_no: ['Not received yet', 'warn'], pre: ['Preparation in progress', 'info'], unknown: ['Not assessed yet', 'faint']};
