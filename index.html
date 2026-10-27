@@ -2340,6 +2340,12 @@ function drawingGroups(){
   if(DATA.aif) DATA.aif.records.forEach(r => { const t = r.raw && r.raw.surveyRem, me = String(r.notif || '').trim(); if(me && t && /SAME\s+(DRAWING|DWG)/i.test(t)) nums(t).forEach(b => { if(b !== me) uni(me, b); }); });
   return n => { n = String(n || '').trim(); return n in par ? find(n) : ''; };
 }
+/* findings on the same drawing share the material: when their stages are identical, show the Stages once for the whole block */
+function rdStgCell(g, x, i){
+  const t0 = stageTxt(g[0].r);
+  if(g.length > 1 && g.every(y => stageTxt(y.r) === t0)) return i ? '' : `<td rowspan="${g.length}" style="white-space:nowrap;vertical-align:top">${t0}</td>`;
+  return `<td style="white-space:nowrap">${stageTxt(x.r)}</td>`;
+}
 /* rows of the same drawing with the same material status are shown as one block */
 function rdGroupRows(list, extra){
   const out = [], at = {};
@@ -2447,7 +2453,7 @@ function renderReadiness(){
         return g.map((x, i) => { const r = x.r; return `<tr class="xrow${i ? ' rd-same' : ''}${i < n - 1 ? ' rd-join' : ''}" data-rdo="${esc(x0.r.uid)}"><td style="white-space:nowrap">${i ? '<span style="visibility:hidden">▸ </span>' : open ? '▾ ' : '▸ '}${aifBtn(r)}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(OPS ? r.view : areaOf(r.view))}</div>${n > 1 && !i ? `<div class="rd-sd" title="These notifications are on the same drawing, so they use the same material">⛓ same drawing × ${n}</div>` : ''}</td>
         <td style="min-width:260px">${esc(clean(r.finding || r.desc).slice(0, 160))}<div class="faint" style="font-size:11.5px">${esc([r.equip, r.module].filter(v => !blank(v)).join(' · '))}</div></td>
         <td style="white-space:nowrap">${pkgCell(x)}</td>
-        <td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
+        <td>${esc(r.priority || '—')}</td>${rdStgCell(g, x, i)}
         ${i ? '' : `<td rowspan="${n}" class="n" style="vertical-align:top">${x0.rd.tot ? `${x0.rd.rec} / ${x0.rd.tot}` : '<span class="faint">—</span>'}</td>`}</tr>`; }).join('') +
         (open ? `<tr class="detail"><td colspan="6">${xchk(x0)}${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
       </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No finding in this group' + (Object.values(RDQ).some(Boolean) ? ' with these column filters' : '') + '.</div>' : ''}
@@ -2469,7 +2475,7 @@ function renderReadiness(){
       <div class="box"><div class="tw"><table class="grid rd-t"><thead><tr><th>Why</th><th>Notification</th><th>Finding</th><th>Package</th><th>Pri</th><th>Due</th><th>Stages</th><th class="n">${OPS ? 'MTO lines received' : 'Items received'}</th></tr>${rdQRow(base, ['why', 'notif', 'find', 'pkg', 'pri', 'due', 'stg', 'mto'])}</thead><tbody>
       ${rdGroupRows(list, x => x.cause).map(g => { const x0 = g[0], n = g.length, open = RD_OPEN.has(x0.r.uid), R = rdLab(x0.rd), C = OCL()[x0.cause], via = g.find(x => x.rd.via);
         return g.map((x, i) => { const r = x.r; return `<tr class="xrow${i ? ' rd-same' : ''}${i < n - 1 ? ' rd-join' : ''}" data-rdo="${esc(x0.r.uid)}">${i ? '' : `<td rowspan="${n}" style="white-space:nowrap;vertical-align:top"><span class="mto-st ${C[1]}" title="${esc(C[2])}">${C[0]}</span></td>`}<td style="white-space:nowrap">${i ? '<span style="visibility:hidden">▸ </span>' : open ? '▾ ' : '▸ '}${aifBtn(r)}${n > 1 && !i ? `<div class="rd-sd" title="These notifications are on the same drawing, so they use the same material">⛓ same drawing × ${n}</div>` : ''}</td>
-        <td style="min-width:240px">${esc(clean(r.finding || r.desc).slice(0, 150))}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(OPS ? r.view : areaOf(r.view))}</div></td><td style="white-space:nowrap">${pkgCell(x)}</td><td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td><td style="white-space:nowrap">${stageTxt(r)}</td>
+        <td style="min-width:240px">${esc(clean(r.finding || r.desc).slice(0, 150))}<div class="faint" style="font-size:11.5px">${esc(r.cat)} · ${esc(OPS ? r.view : areaOf(r.view))}</div></td><td style="white-space:nowrap">${pkgCell(x)}</td><td>${esc(r.priority || '—')}</td><td style="white-space:nowrap">${due(r)}</td>${rdStgCell(g, x, i)}
         ${i ? '' : `<td rowspan="${n}" class="n" style="vertical-align:top">${x0.rd.tot ? `${x0.rd.rec} / ${x0.rd.tot}` : '<span class="faint">—</span>'}</td>`}</tr>`; }).join('') +
         (open ? `<tr class="detail"><td colspan="8">${xchk(x0)}${via ? `<div class="rd-lines faint">Same drawing as <b>${esc(via.rd.via)}</b> — it uses that notification’s MTO items.</div>` : ''}${lineList(x0)}</td></tr>` : ''); }).join('')}
       </tbody></table></div>${rdQBar(list.length, base.length)}${!list.length ? '<div class="note">No overdue finding in this group.</div>' : ''}</div>`;
