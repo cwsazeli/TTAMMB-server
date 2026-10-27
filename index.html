@@ -924,6 +924,14 @@ function askPassword(why){
 let SAVE_Q = Promise.resolve();
 function confirmSave(app, ch){
   const run = () => new Promise(resolve => {
+    /* Password already entered this session (and a name is set): no dialog, just an alert of what is being saved. */
+    const pw0 = getPw(), nm0 = hubUser();
+    if(pw0 && nm0 && String(nm0).trim()){
+      const lb = (MODS[app] && MODS[app].label) || app;
+      const sm = ch.unknown ? 'changes' : `${ch.chg || 0} changed · ${ch.add || 0} added · ${ch.del || 0} removed`;
+      toast('💾 Saving ' + lb + ' — ' + sm + ' (by ' + String(nm0).trim() + ')', 5000);
+      return resolve({name: String(nm0).trim(), pw: pw0});
+    }
     const d = $('#dlgSave'), err = $('#svErr'), nm = $('#svName'), pw = $('#svPw');
     const lbl = (MODS[app] && MODS[app].label) || app;
     $('#svTitle').textContent = '💾 Save changes — ' + lbl;
