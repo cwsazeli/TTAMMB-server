@@ -2342,8 +2342,8 @@ function drawingGroups(){
 }
 /* findings on the same drawing share the material: when their stages are identical, show the Stages once for the whole block */
 function rdStgCell(g, x, i){
-  const t0 = stageTxt(g[0].r);
-  if(g.length > 1 && g.every(y => stageTxt(y.r) === t0)) return i ? '' : `<td rowspan="${g.length}" style="white-space:nowrap;vertical-align:top">${t0}</td>`;
+  const sig = y => stageList(y.r).map(v => v[0] + ':' + v[1] + ':' + (v[3] || '')).join('|'), t0 = stageTxt(g[0].r), s0 = sig(g[0]);   // compare what is shown (stage states + remarks), not the per-finding hover text
+  if(g.length > 1 && g.every(y => sig(y) === s0)) return i ? '' : `<td rowspan="${g.length}" style="white-space:nowrap;vertical-align:top">${t0}</td>`;
   return `<td style="white-space:nowrap">${stageTxt(x.r)}</td>`;
 }
 /* rows of the same drawing with the same material status are shown as one block */
