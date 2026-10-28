@@ -1145,8 +1145,9 @@ $('#pvExit').addEventListener('click', () => setPreview(''));
 $('#btnStaff').addEventListener('click', () => (LEVEL !== 'client' || PREVIEW) ? staffLogout() : staffLogin().then(ok => { if(ok) go(VIEW); }));
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
 const MD_KEY = 'ttammhub_mddr';
-const MD_FIELDS = ['id','ord','disc','no','docNo','desc','pic','psp','jst','subDate','target','rev','blocks','remark','importedAt','fileName'];
-let MDDR = {recs: [], loaded: false, busy: false, f: {disc: 'ALL', col: '', q: ''}};
+const MD_FIELDS = ['id','ord','disc','no','docNo','desc','pic','psp','jst','subDate','target','rev','blocks','remark','flag','importedAt','fileName'];
+let MDDR = {recs: [], loaded: false, busy: false, f: {disc: 'ALL', col: '', q: '', doc: '', desc: '', pic: '', psp: '', rev: '', sub: '', rep: '', st: ''}};
+const mdF0 = () => ({disc: 'ALL', col: '', q: '', doc: '', desc: '', pic: '', psp: '', rev: '', sub: '', rep: '', st: ''});
 const mdS = v => v == null ? '' : String(v).trim();
 const mdRevN = v => { v = mdS(v).toUpperCase().replace(/\s+/g, ''); if(!v) return ''; const m = /^REV\.?(.+)$/.exec(v); return 'REV.' + (m ? m[1] : v); };
 
@@ -1162,8 +1163,10 @@ function mdD(v){
   if(x){ let y = +x[3]; if(y < 100) y += 2000; return y + '-' + String(+x[2]).padStart(2, '0') + '-' + String(+x[1]).padStart(2, '0'); }
   x = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); return x ? s.slice(0, 10) : s;
 }
-const mdF = s => { const x = /^(\d{4})-(\d{2})-(\d{2})$/.exec(mdS(s)); return x ? x[3] + '-' + MD_MON[+x[2] - 1] + '-' + x[1] : mdS(s); };
+const mdF = s => { s = mdS(s); let x = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); if(x) return x[3] + '-' + MD_MON[+x[2] - 1] + '-' + x[1];
+  x = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(s); return x && +x[2] >= 1 && +x[2] <= 12 ? String(+x[1]).padStart(2, '0') + '-' + MD_MON[+x[2] - 1] + '-' + (+x[3] < 100 ? 2000 + +x[3] : x[3]) : s; };   // older saved text dates (d/m/yyyy)
 const mdN = v => mdS(v).replace(/[\u00a0\s]+/g, ' ').toLowerCase();
+const mdAutoFlag = a => { const t = a.join(' | '); return /\bcancel/i.test(t) ? 'CANCEL' : /(^|[^A-Za-z])KIV([^A-Za-z]|$)/i.test(t) ? 'KIV' : ''; };
 function mdParse(X, wb, fileName){
   let best = null; const diag = [];
   for(const name of wb.SheetNames){
@@ -1188,7 +1191,7 @@ function mdParse(X, wb, fileName){
     const bl = []; blocks.forEach(b => { const v = [0, 1, 2, 3, 4].map(i => (i === 0 || i === 2) ? mdD(row[b.c + i]) : mdS(row[b.c + i])); if(v.some(Boolean)) bl.push([b.rev].concat(v)); });
     const psp = mdS(row[cPsp]);
     recs.push({id: 'mddr:' + (psp || C + ':' + r), ord: String(++ord).padStart(4, '0'), disc: cur || 'OTHER', no: A, docNo: C, desc: D, pic: mdS(row[cPic]), psp, jst: mdS(row[cJst]),
-      subDate: mdD(row[cSub]), target: cTgt >= 0 ? mdD(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', importedAt: new Date().toISOString(), fileName});
+      subDate: mdD(row[cSub]), target: cTgt >= 0 ? mdD(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', flag: mdAutoFlag([mdS(row[cPic]), cRem >= 0 ? mdS(row[cRem]) : '', D, mdS(row[cJst])]), importedAt: new Date().toISOString(), fileName});
   }
   if(!recs.length) throw new Error('The register sheet was found but has no document rows.');
   return {recs, sheet: best.name};
@@ -1196,8 +1199,11 @@ function mdParse(X, wb, fileName){
 
 /* ---- where is each document right now? ---- */
 function mdBlocks(d){ if(d._b) return d._b; try{ d._b = JSON.parse(d.blocks || '[]'); }catch(e){ d._b = []; } return d._b; }
+function mdReply(d){ const sub = mdBlocks(d).filter(b => b[1]); for(let i = sub.length - 1; i >= 0; i--){ if(sub[i][3] || sub[i][5]) return {date: sub[i][3], st: sub[i][5]}; } return {date: '', st: ''}; }
+const mdMon = s => { const x = /^(\d{4})-(\d{2})/.exec(mdS(s)); return x ? MD_MON[+x[2] - 1] + '-' + x[1] : ''; };
 function mdState(d){
   if(d._s) return d._s;
+  if(d.flag) return d._s = {k: 'X', col: 'X', txt: d.flag === 'CANCEL' ? 'Cancelled' : 'KIV'};
   const bl = mdBlocks(d), sub = bl.filter(b => b[1]);      // [rev, zneDate, zneTrn, pcsbDate, pcsbTrn, status]
   let s;
   if(bl.some(b => /APPROVED/i.test(b[5]))) s = {k: 'AP', col: 'AP', txt: 'Approved'};
@@ -1221,24 +1227,34 @@ async function mdLoad(force){
   MDDR.recs = (recs || []).filter(r => r && r.id && r.id !== '__meta').sort((a, b) => String(a.ord).localeCompare(String(b.ord)));
   MDDR.loaded = true;
 }
-async function mdSaveAll(recs, fileName){
-  FORCE_PW = Date.now() + 10 * 60 * 1000;   // an import always re-confirms the password
-  const ok = await confirmSave('MDDR', {chg: 0, add: recs.length, del: 0, count: 1, lines: ['Imported the MDDR register — ' + recs.length + ' documents (' + fileName + ')']});
+async function mdSaveAll(recs, fileName, line){
+  if(!line) FORCE_PW = Date.now() + 10 * 60 * 1000;   // an import always re-confirms the password
+  line = line || 'Imported the MDDR register — ' + recs.length + ' documents (' + fileName + ')';
+  const ok = await confirmSave('MDDR', {chg: fileName ? 0 : 1, add: fileName ? recs.length : 0, del: 0, count: 1, lines: [line]});
   if(!ok) return false;
   const url = hubUrl();
   if(url){
-    await gsCall(url, 'wop', null, {action: 'replaceAll', module: 'mddr', fields: MD_FIELDS, records: recs, pw: ok.pw, zbUser: ok.name, zbChanges: ['Imported the MDDR register — ' + recs.length + ' documents (' + fileName + ')'], zbChangeCount: 1});
+    await gsCall(url, 'wop', null, {action: 'replaceAll', module: 'mddr', fields: MD_FIELDS, records: recs, pw: ok.pw, zbUser: ok.name, zbChanges: [line], zbChangeCount: 1});
   }
   try{ localStorage.setItem(MD_KEY, JSON.stringify(recs)); }catch(e){}
   return true;
+}
+async function mdMark(id, val){
+  const d = MDDR.recs.find(x => x.id === id); if(!d) return;
+  const prev = d.flag || ''; d.flag = val; delete d._s;
+  const ok = await mdSaveAll(MDDR.recs, '', 'Marked ' + d.docNo + ' as ' + (val || 'active') + ' (MDDR)').catch(e => { toast('Not saved: ' + e.message, 8000); return false; });
+  if(!ok){ d.flag = prev; delete d._s; }
+  else toast(val ? '🏷 ' + d.docNo + ' marked ' + (val === 'CANCEL' ? 'Cancelled' : 'KIV') : '🏷 ' + d.docNo + ' back to active', 4000);
+  renderMddr();
 }
 async function mdImport(file){
   let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
   try{
     const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array', cellDates: true});
     const out = mdParse(X, wb, file.name);
+    const old = {}; MDDR.recs.forEach(d => { old[d.id] = d; }); out.recs.forEach(d => { if(old[d.id]) d.flag = old[d.id].flag || ''; });   // Cancel / KIV marks survive a new import
     toast('Reading “' + out.sheet + '” — ' + out.recs.length + ' documents…', 3000);
-    if(await mdSaveAll(out.recs, file.name)){ MDDR.recs = out.recs; MDDR.loaded = true; MDDR.f = {disc: 'ALL', col: '', q: ''}; toast('MDDR imported ✓ ' + out.recs.length + ' documents', 5000); renderMddr(); }
+    if(await mdSaveAll(out.recs, file.name)){ MDDR.recs = out.recs; MDDR.loaded = true; MDDR.f = mdF0(); toast('MDDR imported ✓ ' + out.recs.length + ' documents', 5000); renderMddr(); }
   }catch(e){ toast('MDDR import failed: ' + e.message, 9000); }
 }
 
@@ -1258,7 +1274,7 @@ table.md{border-collapse:separate;border-spacing:0;width:100%;min-width:900px;fo
 table.md th,table.md td{border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:8px 8px;text-align:center}
 table.md tr>*:last-child{border-right:0}table.md tbody tr:last-child td{border-bottom:0}
 table.md thead th{background:linear-gradient(#9db8e3,#86a5d8);color:#10243f;font-weight:800;font-size:12px;letter-spacing:.03em}
-table.md thead th.md-zne{background:#f3c9c9;color:#9b1111}table.md thead th.md-pcsb{background:#f6dfb4;color:#7a4a00}table.md thead th.md-ap{background:#bfe3c8;color:#116a2c}
+table.md thead th.md-zne{background:#f3c9c9;color:#9b1111}table.md thead th.md-pcsb{background:#f6dfb4;color:#7a4a00}table.md thead th.md-x{background:#d9d9e0;color:#444}table.md thead th.md-ap{background:#bfe3c8;color:#116a2c}
 table.md thead tr:nth-child(3) th{font-weight:700;background:#c9d8f0}
 table.md thead tr:nth-child(3) th.s{background:#f9e3e3;color:#9b1111}table.md thead tr:nth-child(3) th.p{background:#fbefd3;color:#7a4a00}
 table.md td.md-d{text-align:left;font-weight:700;white-space:nowrap;position:sticky;left:0;background:var(--panel);z-index:1}
@@ -1269,6 +1285,7 @@ table.md td.md-n{cursor:pointer;font-variant-numeric:tabular-nums;font-weight:70
 table.md td.md-n:hover{filter:brightness(.94);box-shadow:inset 0 0 0 1px var(--accent)}
 table.md td.gs:not(.z){background:color-mix(in srgb,var(--bad) 13%,transparent)!important;color:var(--bad)}
 table.md td.gp:not(.z){background:color-mix(in srgb,var(--warn) 15%,transparent)!important;color:var(--warn)}
+table.md td.gx:not(.z){background:color-mix(in srgb,var(--text-faint) 18%,transparent)!important;color:var(--text-dim)}
 table.md td.ga:not(.z){background:color-mix(in srgb,var(--ok) 15%,transparent)!important;color:var(--ok)}
 table.md td.md-sel{box-shadow:inset 0 0 0 2px var(--accent)!important}
 table.md td.md-t{font-weight:800;background:color-mix(in srgb,var(--accent) 8%,transparent)}
@@ -1279,7 +1296,9 @@ table.md.md-list td{padding:7px 8px}
 .md-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 .md-top h3{margin:0;font-size:15px;font-weight:800;letter-spacing:.02em}.md-asof{font-size:12px;color:var(--text-dim);background:var(--panel2,var(--panel));border:1px solid var(--border);padding:3px 10px;border-radius:999px}
 .md-pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid var(--border)}
-.md-pill.zne{color:var(--bad);background:var(--bad-bg);border-color:var(--bad-bd)}.md-pill.pcsb{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-bd)}.md-pill.ap{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-bd)}
+.md-pill.zne{color:var(--bad);background:var(--bad-bg);border-color:var(--bad-bd)}.md-pill.pcsb{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-bd)}.md-pill.x{color:var(--text-dim);background:var(--panel2,var(--panel));border-color:var(--border)}.md-pill.ap{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-bd)}
+.md-frow th{background:#d6e1f4!important;padding:4px 5px!important}.md-frow .md-f{width:100%;min-width:64px;font:inherit;font-size:12px;font-weight:400;padding:4px 5px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}.md-frow .md-f[data-on]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.md-mk{font:inherit;font-size:12px;padding:3px 4px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}
 .md-fl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0 8px}.md-fl select,.md-fl input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text)}
 </style>`;
 function renderMddr(){
@@ -1291,35 +1310,46 @@ function renderMddr(){
     <div class="box"><div class="note">No MDDR data yet. Press <b>Import Excel</b> and choose the MDDR file (sheet <b>MDDR PSP_WO15</b> is read).${MDDR.err ? '<br>' + esc(MDDR.err) : ''}</div></div>`; mdWire(el); return; }
   const discs = []; R.forEach(d => { if(!discs.includes(d.disc)) discs.push(d.disc); });
   const revs = mdRevCols(), hasO = R.some(d => mdState(d).k === 'O');
-  const cols = ['S:REV.A', 'S:CODE 1', 'S:CODE 2', 'S:CODE 3'].concat(revs.map(r => 'P:' + r), ['AP'], hasO ? ['O'] : []);
+  const cols = ['S:REV.A', 'S:CODE 1', 'S:CODE 2', 'S:CODE 3'].concat(revs.map(r => 'P:' + r), ['AP', 'X'], hasO ? ['O'] : []);
   const cnt = {}; R.forEach(d => { const s = mdState(d), k = d.disc + '|' + s.col; cnt[k] = (cnt[k] || 0) + 1; cnt['ALL|' + s.col] = (cnt['ALL|' + s.col] || 0) + 1; });
   const tot = {}; R.forEach(d => { tot[d.disc] = (tot[d.disc] || 0) + 1; }); tot.ALL = R.length;
   const f = MDDR.f, cell = (disc, col) => { const n = cnt[disc + '|' + col] || 0, sel = f.disc === disc && f.col === col;
-    const g = col[0] === 'S' ? 'gs' : col[0] === 'P' ? 'gp' : col === 'AP' ? 'ga' : '';
+    const g = col[0] === 'S' ? 'gs' : col[0] === 'P' ? 'gp' : col === 'AP' ? 'ga' : col === 'X' ? 'gx' : '';
     return `<td class="md-n ${g}${n ? '' : ' z'}${sel ? ' md-sel' : ''}" data-mdd="${esc(disc)}" data-mdc="${esc(col)}">${n}</td>`; };
   const line = disc => `<td class="md-d">${esc(disc === 'ALL' ? 'Total' : disc)}</td><td class="md-t md-n${f.disc === disc && f.col === '' ? ' md-sel' : ''}" data-mdd="${esc(disc)}" data-mdc="">${tot[disc] || 0}</td>${cols.map(c => cell(disc, c)).join('')}`;
   const at = R[0].importedAt ? new Date(R[0].importedAt) : null, asOf = at ? String(at.getDate()).padStart(2, '0') + '-' + MD_MON[at.getMonth()] + '-' + at.getFullYear() : '';
-  const list = R.filter(d => (f.disc === 'ALL' || d.disc === f.disc) && (!f.col || mdState(d).col === f.col) && (!f.q || (d.docNo + ' ' + d.desc + ' ' + d.pic + ' ' + d.psp + ' ' + d.remark).toLowerCase().includes(f.q.toLowerCase())));
-  const nS = R.filter(d => mdState(d).k === 'S').length, nP = R.filter(d => mdState(d).k === 'P').length, nA = R.filter(d => mdState(d).k === 'AP').length, nO = R.length - nS - nP - nA, nNew = R.filter(d => mdState(d).col === 'S:REV.A').length;
-  const kpi = [['Total procedures', R.length, 'in the register', 'var(--accent)'], ['Submitted to PCSB', R.length - nNew, ((R.length - nNew) / R.length * 100).toFixed(1) + '% of total', 'var(--info,var(--accent))'],
-    ['Pending ZNE', nS, 'not submitted · Code 1/2/3 to resubmit', 'var(--bad)'], ['Pending PCSB review', nP, 'waiting for PCSB reply', 'var(--warn)'], ['Approved', nA, (nA / R.length * 100).toFixed(1) + '% of total', 'var(--ok)']];
-  const segs = [['Pending ZNE', nS, 'var(--bad)'], ['Pending PCSB', nP, 'var(--warn)'], ['Approved', nA, 'var(--ok)']].concat(nO ? [['Other', nO, 'var(--text-faint)']] : []);
-  const pill = s => `<span class="md-pill ${s.k === 'AP' ? 'ap' : s.k === 'P' ? 'pcsb' : 'zne'}">${esc(s.txt)}</span>`;
+  const has = (a, b) => !b || String(a || '').toLowerCase().includes(b.toLowerCase().trim());
+  const list = R.filter(d => (f.disc === 'ALL' || d.disc === f.disc) && (!f.col || mdState(d).col === f.col) && (!f.q || (d.docNo + ' ' + d.desc + ' ' + d.pic + ' ' + d.psp + ' ' + d.remark).toLowerCase().includes(f.q.toLowerCase()))
+    && has(d.docNo, f.doc) && has(d.desc, f.desc) && has(d.psp, f.psp) && (!f.pic || d.pic === f.pic) && (!f.rev || d.rev === f.rev) && (!f.sub || mdMon(d.subDate) === f.sub)
+    && (!f.rep || mdMon(mdReply(d).date) === f.rep) && (!f.st || mdState(d).txt === f.st));
+  const uniq = fn => [...new Set(R.map(fn).filter(Boolean))];
+  const fsel = (k, opts) => `<select class="md-f" data-mdf="${k}"${f[k] ? ' data-on="1"' : ''}><option value="">All</option>${opts.map(o => `<option value="${esc(o)}"${f[k] === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  const ftxt = (k, ph) => `<input class="md-f" data-mdf="${k}" type="search" placeholder="${ph}" value="${esc(f[k])}"${f[k] ? ' data-on="1"' : ''}>`;
+  const monKey = s => { const x = /^(\w{3})-(\d{4})$/.exec(s); return x ? x[2] + String(MD_MON.indexOf(x[1])).padStart(2, '0') : s; };
+  const anyF = f.disc !== 'ALL' || f.col || f.q || ['doc', 'desc', 'pic', 'psp', 'rev', 'sub', 'rep', 'st'].some(k => f[k]);
+  const nS = R.filter(d => mdState(d).k === 'S').length, nP = R.filter(d => mdState(d).k === 'P').length, nA = R.filter(d => mdState(d).k === 'AP').length, nX = R.filter(d => mdState(d).k === 'X').length, nO = R.length - nS - nP - nA - nX, nNew = R.filter(d => mdState(d).col === 'S:REV.A').length, act = R.length - nX;
+  const kpi = [['Total procedures', R.length, nX ? act + ' active · ' + nX + ' cancel / KIV' : 'in the register', 'var(--accent)'], ['Submitted to PCSB', act - nNew, ((act - nNew) / (act || 1) * 100).toFixed(1) + '% of active', 'var(--info,var(--accent))'],
+    ['Pending ZNE', nS, 'not submitted · Code 1/2/3 to resubmit', 'var(--bad)'], ['Pending PCSB review', nP, 'waiting for PCSB reply', 'var(--warn)'], ['Approved', nA, (nA / (act || 1) * 100).toFixed(1) + '% of active', 'var(--ok)']];
+  const segs = [['Pending ZNE', nS, 'var(--bad)'], ['Pending PCSB', nP, 'var(--warn)'], ['Approved', nA, 'var(--ok)']].concat(nX ? [['Cancel / KIV', nX, 'var(--text-faint)']] : [], nO ? [['Other', nO, 'var(--text-faint)']] : []);
+  const pill = s => `<span class="md-pill ${s.k === 'AP' ? 'ap' : s.k === 'P' ? 'pcsb' : s.k === 'X' ? 'x' : 'zne'}">${esc(s.txt)}</span>`;
+  const legacy = R.some(d => (mdS(d.subDate) && !/^\d{4}-\d{2}-\d{2}$/.test(mdS(d.subDate))) || mdBlocks(d).some(b => (b[1] && !/^\d{4}-\d{2}-\d{2}$/.test(b[1])) || (b[3] && !/^\d{4}-\d{2}-\d{2}$/.test(b[3]))));
   el.innerHTML = MD_CSS + `<div class="head"><div><h2>MDDR Status</h2><p>Master Deliverable Document Register — read from the Excel file; click any number to list those documents.</p></div><div class="row-btns" style="margin:0">${importBtn}</div></div>
+  ${legacy ? '<div class="note" style="margin-bottom:12px">⚠ Some dates were saved by an older version of this page and may show wrongly (day/month swapped). Press <b>Import Excel</b> and choose the MDDR file again to correct them — your Cancel / KIV marks are kept.</div>' : ''}
   <div class="md-kpis">${kpi.map(k => `<div class="md-kpi" style="--kc:${k[3]}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="md-bar" title="Where the documents are">${segs.map(s => `<i style="width:${s[1] / R.length * 100}%;background:${s[2]}" title="${esc(s[0])}: ${s[1]}"></i>`).join('')}</div>
   <div class="md-leg">${segs.map(s => `<span><b style="background:${s[2]}"></b>${esc(s[0])} ${s[1]} (${(s[1] / R.length * 100).toFixed(0)}%)</span>`).join('')}</div>
   <div class="md-card"><div class="md-top"><h3>TTAMM — MASTER DELIVERABLE DOCUMENT REGISTER (MDDR)</h3><div class="md-asof">As of : ${esc(asOf)}${R[0].fileName ? ' · ' + esc(R[0].fileName) : ''}</div></div>
   <div class="md-wrap"><table class="md"><thead>
     <tr><th rowspan="3">DISCIPLINE</th><th colspan="${cols.length + 1}">TTAMM</th></tr>
-    <tr><th rowspan="2">TOTAL PROCEDURE</th><th colspan="4" class="md-zne">PENDING SUBMISSION FROM ZNE</th><th colspan="${revs.length}" class="md-pcsb">PENDING REVIEWED BY PCSB</th><th rowspan="2" class="md-ap">APPROVED</th>${hasO ? '<th rowspan="2">OTHER</th>' : ''}</tr>
+    <tr><th rowspan="2">TOTAL PROCEDURE</th><th colspan="4" class="md-zne">PENDING SUBMISSION FROM ZNE</th><th colspan="${revs.length}" class="md-pcsb">PENDING REVIEWED BY PCSB</th><th rowspan="2" class="md-ap">APPROVED</th><th rowspan="2" class="md-x">CANCEL / KIV</th>${hasO ? '<th rowspan="2">OTHER</th>' : ''}</tr>
     <tr><th class="s">REV.A</th><th class="s">CODE 1</th><th class="s">CODE 2</th><th class="s">CODE 3</th>${revs.map(r => `<th class="p">${esc(r)}</th>`).join('')}</tr></thead>
     <tbody>${discs.map(d => `<tr>${line(d)}</tr>`).join('')}<tr class="md-tot">${line('ALL')}</tr></tbody></table></div></div>
-  <div class="md-fl"><b>${list.length}</b> of ${R.length} documents${f.disc !== 'ALL' || f.col ? ` · <button class="linkish" id="mdClr">✕ Clear filter</button>` : ''}
-    <select id="mdDisc"><option value="ALL">All disciplines</option>${discs.map(d => `<option value="${esc(d)}"${f.disc === d ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select>
+  <div class="md-fl"><b>${list.length}</b> of ${R.length} documents${anyF ? ` · <button class="linkish" id="mdClr">✕ Clear all filters</button>` : ''}
     <input id="mdQ" type="search" placeholder="Search doc no, description, PIC…" value="${esc(f.q)}"></div>
-  <div class="md-card" style="overflow-x:auto;padding:8px"><table class="md md-list" style="min-width:1000px"><thead><tr><th>#</th><th>Discipline</th><th>Document No.</th><th>Description</th><th>PIC</th><th>PSP No.</th><th>Latest rev.</th><th>Submitted</th><th>Where it stands</th></tr></thead><tbody>
-    ${list.map(d => `<tr><td>${esc(d.no)}</td><td style="text-align:left">${esc(d.disc)}</td><td style="text-align:left">${esc(d.docNo)}</td><td style="text-align:left">${esc(d.desc)}</td><td>${esc(d.pic)}</td><td>${esc(d.psp)}</td><td>${esc(d.rev)}</td><td style="white-space:nowrap">${esc(mdF(d.subDate))}</td><td style="text-align:left">${pill(mdState(d))}</td></tr>`).join('') || '<tr><td colspan="9" style="padding:18px">No document matches.</td></tr>'}
+  <div class="md-card" style="overflow-x:auto;padding:8px"><table class="md md-list" style="min-width:1000px"><thead><tr><th>#</th><th>Discipline</th><th>Document No.</th><th>Description</th><th>PIC</th><th>PSP No.</th><th>Latest rev.</th><th>Submitted</th><th>PCSB reply</th><th>Where it stands</th><th>Mark</th></tr>
+    <tr class="md-frow"><th></th><th>${fsel('disc', discs)}</th><th>${ftxt('doc', 'Doc no…')}</th><th>${ftxt('desc', 'Description…')}</th><th>${fsel('pic', uniq(d => d.pic).sort())}</th><th>${ftxt('psp', 'PSP…')}</th><th>${fsel('rev', uniq(d => d.rev).sort())}</th>
+      <th>${fsel('sub', uniq(d => mdMon(d.subDate)).sort((a, b) => monKey(a).localeCompare(monKey(b))))}</th><th>${fsel('rep', uniq(d => mdMon(mdReply(d).date)).sort((a, b) => monKey(a).localeCompare(monKey(b))))}</th><th>${fsel('st', uniq(d => mdState(d).txt).sort())}</th><th></th></tr></thead><tbody>
+    ${list.map(d => `<tr><td>${esc(d.no)}</td><td style="text-align:left">${esc(d.disc)}</td><td style="text-align:left">${esc(d.docNo)}</td><td style="text-align:left">${esc(d.desc)}</td><td>${esc(d.pic)}</td><td>${esc(d.psp)}</td><td>${esc(d.rev)}</td><td style="white-space:nowrap">${esc(mdF(d.subDate))}</td><td style="white-space:nowrap">${esc(mdF(mdReply(d).date))}${mdReply(d).st ? '<div style="font-size:11px;color:var(--text-dim)">' + esc(mdReply(d).st) + '</div>' : ''}</td><td style="text-align:left">${pill(mdState(d))}</td><td><select class="md-mk" data-mdmk="${esc(d.id)}"><option value="">—</option><option value="CANCEL"${d.flag === 'CANCEL' ? ' selected' : ''}>Cancel</option><option value="KIV"${d.flag === 'KIV' ? ' selected' : ''}>KIV</option></select></td></tr>`).join('') || '<tr><td colspan="11" style="padding:18px">No document matches.</td></tr>'}
   </tbody></table></div>`;
   mdWire(el);
 }
@@ -1327,8 +1357,10 @@ function mdWire(el){
   const imp = el.querySelector('#mdImp'), fi = el.querySelector('#mdFile');
   if(imp && fi){ imp.onclick = () => fi.click(); fi.onchange = () => { const x = fi.files[0]; fi.value = ''; if(x) mdImport(x); }; }
   el.querySelectorAll('[data-mdd]').forEach(td => td.onclick = () => { const d = td.dataset.mdd, c = td.dataset.mdc, same = MDDR.f.disc === d && MDDR.f.col === c; MDDR.f.disc = same ? 'ALL' : d; MDDR.f.col = same ? '' : c; renderMddr(); const l = $('.md-fl'); if(l) l.scrollIntoView({block: 'start', behavior: 'smooth'}); });
-  const c = el.querySelector('#mdClr'); if(c) c.onclick = () => { MDDR.f = {disc: 'ALL', col: '', q: MDDR.f.q}; renderMddr(); };
-  const s = el.querySelector('#mdDisc'); if(s) s.onchange = () => { MDDR.f.disc = s.value; renderMddr(); };
+  const c = el.querySelector('#mdClr'); if(c) c.onclick = () => { MDDR.f = mdF0(); renderMddr(); };
+  el.querySelectorAll('select.md-mk').forEach(s => s.onchange = () => mdMark(s.dataset.mdmk, s.value));
+  el.querySelectorAll('select.md-f').forEach(s => s.onchange = () => { const k = s.dataset.mdf; MDDR.f[k] = k === 'disc' ? (s.value || 'ALL') : s.value; if(k === 'disc') MDDR.f.col = ''; renderMddr(); });
+  el.querySelectorAll('input.md-f').forEach(i => i.oninput = () => { const k = i.dataset.mdf; MDDR.f[k] = i.value; clearTimeout(mdWire.t); mdWire.t = setTimeout(() => { const p = i.selectionStart; renderMddr(); const n = document.querySelector('#mddr input[data-mdf="' + k + '"]'); if(n){ n.focus(); try{ n.setSelectionRange(p, p); }catch(e){} } }, 250); });
   const q = el.querySelector('#mdQ'); if(q) q.oninput = () => { MDDR.f.q = q.value; clearTimeout(mdWire.t); mdWire.t = setTimeout(() => { const p = q.selectionStart; renderMddr(); const n = $('#mdQ'); if(n){ n.focus(); try{ n.setSelectionRange(p, p); }catch(e){} } }, 250); };
 }
 
