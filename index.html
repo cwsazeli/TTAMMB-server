@@ -1151,26 +1151,28 @@ const mdS = v => v == null ? '' : String(v).trim();
 const mdRevN = v => { v = mdS(v).toUpperCase().replace(/\s+/g, ''); if(!v) return ''; const m = /^REV\.?(.+)$/.exec(v); return 'REV.' + (m ? m[1] : v); };
 
 /* ---- read the Excel (sheet with “ZNE to PCSB” columns) ---- */
+const mdN = v => mdS(v).replace(/[\u00a0\s]+/g, ' ').toLowerCase();
 function mdParse(X, wb, fileName){
-  let best = null;
+  let best = null; const diag = [];
   for(const name of wb.SheetNames){
-    const rows = X.utils.sheet_to_json(wb.Sheets[name], {header: 1, raw: false, defval: ''});
-    const h = rows.findIndex(r => r.some(c => /description of documents/i.test(mdS(c))) && r.some(c => /to\s+PCSB$/i.test(mdS(c))) && r.some(c => /^PCSB\s+to\s+/i.test(mdS(c))));
-    if(h < 0) continue;
-    const hasZne = rows[h].some(c => /^ZNE\s+to\s+PCSB$/i.test(mdS(c)));
-    if(!best || (hasZne && !best.hasZne)) best = {name, rows, h, hasZne};
+    let rows; try{ rows = X.utils.sheet_to_json(wb.Sheets[name], {header: 1, raw: false, defval: ''}); }catch(e){ diag.push(name + ': unreadable'); continue; }
+    const isDesc = c => /description\s*of\s*doc/.test(mdN(c)), isTo = c => /(^|\s)to\s*pcsb$/.test(mdN(c)), isFrom = c => /^pcsb\s*to\s/.test(mdN(c));
+    const h = rows.findIndex(r => r.some(isDesc) && r.some(isTo) && r.some(isFrom));
+    if(h < 0){ const hd = rows.findIndex(r => r.some(isDesc)); diag.push(name + ' (' + rows.length + ' rows' + (hd >= 0 ? ', header found at row ' + (hd + 1) + ' but no “… to PCSB” columns' : ', no “Description of Documents” header') + ')'); continue; }
+    const hasZne = rows[h].some(c => /^zne\s*to\s*pcsb$/.test(mdN(c)));
+    if(!best || (hasZne && !best.hasZne)) best = {name, rows, h, hasZne, isTo, isFrom};
   }
-  if(!best) throw new Error('Could not find the MDDR register in this file (a sheet with “Description of Documents” and “ZNE to PCSB” columns).');
+  if(!best) throw new Error('Could not find the MDDR register in this file. Sheets checked: ' + (diag.join(' · ') || wb.SheetNames.join(', ') || 'none') + '.');
   const {rows, h} = best, hd = rows[h].map(mdS), lab = (rows[h - 1] || []).map(mdS);
-  const col = re => hd.findIndex(c => re.test(c));
-  const cDoc = 2, cDesc = col(/description of documents/i), cPsp = col(/^PSP No/i), cJst = col(/^Status$/i), cSub = col(/^Submission Date/i), cTgt = col(/^Target Submission/i),
-        cRev = col(/^Latest Revision/i), cRem = col(/^Remark/i), cPic = hd.indexOf('PIC');
-  const blocks = []; hd.forEach((c, i) => { if(/to\s+PCSB$/i.test(c) && /^PCSB\s+to\s+/i.test(hd[i + 2] || '')){ const m = /Rev\s*\.?\s*([0-9A-Za-z]+)/i.exec(lab[i] || ''); blocks.push({c: i, rev: m ? 'REV.' + m[1].toUpperCase() : ''}); } });
+  const col = re => hd.findIndex(c => re.test(mdN(c)));
+  const cDoc = 2, cDesc = col(/description\s*of\s*doc/), cPsp = col(/^psp\s*no/), cJst = col(/^status$/), cSub = col(/^submission date/), cTgt = col(/^target submission/),
+        cRev = col(/^latest revision/), cRem = col(/^remark/), cPic = hd.findIndex(c => mdN(c) === 'pic');
+  const blocks = []; hd.forEach((c, i) => { if(best.isTo(c) && best.isFrom(hd[i + 2] || '')){ const m = /Rev\s*\.?\s*([0-9A-Za-z]+)/i.exec(lab[i] || ''); blocks.push({c: i, rev: m ? 'REV.' + m[1].toUpperCase() : ''}); } });
   const recs = []; let parent = '', cur = '', ord = 0;
   for(let r = h + 2; r < rows.length; r++){
     const row = rows[r], A = mdS(row[0]), B = mdS(row[1]), C = mdS(row[2]), D = mdS(row[cDesc]);
     if(!B && C && !D){ if(/^[A-Z]$/.test(A)){ parent = C; cur = C; } else if(!A && parent && /^(PIPING|STRUCTURE)$/i.test(C)) cur = parent.replace(/\s+$/, '') + ' - ' + C.toUpperCase(); continue; }
-    if(!(B && C)) continue;
+    if(!(C && D)) continue;
     const bl = []; blocks.forEach(b => { const v = [0, 1, 2, 3, 4].map(i => mdS(row[b.c + i])); if(v.some(Boolean)) bl.push([b.rev].concat(v)); });
     const psp = mdS(row[cPsp]);
     recs.push({id: 'mddr:' + (psp || C + ':' + r), ord: String(++ord).padStart(4, '0'), disc: cur || 'OTHER', no: A, docNo: C, desc: D, pic: mdS(row[cPic]), psp, jst: mdS(row[cJst]),
