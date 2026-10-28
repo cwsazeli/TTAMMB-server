@@ -1402,9 +1402,9 @@ table.md.md-list td{padding:7px 8px}
 .md-mk{font:inherit;font-size:12px;padding:3px 4px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}
 .md-fl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0 8px}.md-fl select,.md-fl input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text)}
 ${MD_TB_CSS}
-table.md.mx{border-collapse:separate;border-spacing:5px;width:calc(100% + 10px);margin:-5px;min-width:940px;font-size:13px}
+table.md.mx{border-collapse:separate;border-spacing:3px;width:calc(100% + 6px);margin:-3px;min-width:820px;font-size:13px}
 table.md.mx th,table.md.mx td{border:0;padding:0;background:transparent!important;text-align:center}
-table.md.mx thead th{background:transparent!important;color:var(--text-dim)!important;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:8px 6px;line-height:1.35}
+table.md.mx thead th{background:transparent!important;color:var(--text-dim)!important;font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;padding:6px 4px;line-height:1.3}
 table.md.mx thead th.mx-l{text-align:left;padding-left:12px;vertical-align:bottom}
 table.md.mx thead th.mx-h{border-radius:10px 10px 0 0;font-weight:700}
 table.md.mx thead th.mx-t{color:var(--accent)!important;background:color-mix(in srgb,var(--accent) 9%,transparent)!important}
@@ -1414,9 +1414,9 @@ table.md.mx thead th.mx-ap{color:var(--ok)!important;background:color-mix(in srg
 table.md.mx thead th.mx-x{color:var(--text-dim)!important;background:color-mix(in srgb,var(--text-faint) 14%,transparent)!important}
 table.md.mx thead th.mx-s{font-size:10.5px;padding:6px 4px;border-bottom:2px solid var(--border)}
 table.md.mx thead th.mx-s.zne{border-bottom-color:color-mix(in srgb,var(--bad) 40%,transparent)}table.md.mx thead th.mx-s.pcsb{border-bottom-color:color-mix(in srgb,var(--warn) 45%,transparent)}
-table.md.mx tbody td.md-d{position:static;text-align:left;padding:0 12px;font-weight:800;font-size:13px;white-space:nowrap;color:var(--text)}
-table.md.mx tbody td.md-n{height:46px;border-radius:10px;border:1.5px solid var(--border);font-size:15px;font-weight:700;background:color-mix(in srgb,var(--c,var(--text-faint)) 9%,var(--panel))!important;color:var(--c,var(--text))!important;box-shadow:none}
-table.md.mx tbody td.md-t{--c:var(--accent);border:2px solid color-mix(in srgb,var(--accent) 70%,transparent);font-size:16px}
+table.md.mx tbody td.md-d{position:static;text-align:left;padding:0 10px;font-weight:800;font-size:12.5px;white-space:nowrap;color:var(--text);width:1%}
+table.md.mx tbody td.md-n{height:32px;min-width:44px;border-radius:8px;border:1.5px solid var(--border);font-size:14px;font-weight:700;background:color-mix(in srgb,var(--c,var(--text-faint)) 9%,var(--panel))!important;color:var(--c,var(--text))!important;box-shadow:none}
+table.md.mx tbody td.md-t{--c:var(--accent);border:2px solid color-mix(in srgb,var(--accent) 70%,transparent);font-size:15px}
 table.md.mx tbody td.gs{--c:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
 table.md.mx tbody td.gp{--c:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
 table.md.mx tbody td.ga{--c:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
@@ -1424,10 +1424,10 @@ table.md.mx tbody td.gx{--c:var(--text-dim);border-color:var(--border)}
 table.md.mx tbody td.z{opacity:.5;font-weight:500}
 table.md.mx tbody td.md-n:hover{filter:none;box-shadow:0 0 0 2px var(--accent)}
 table.md.mx tbody td.md-sel{box-shadow:0 0 0 2px var(--accent)!important}
-table.md.mx tr.md-tot td.md-n{border-top-width:2px;font-size:16px;font-weight:800}
+table.md.mx tr.md-tot td.md-n{border-top-width:2px;font-size:15px;font-weight:800}
 table.md.mx tr.md-tot td{border-top:0}
 table.md.mx tr.md-tot td.md-d{background:transparent!important;font-size:13px}
-.md-wrap:has(table.mx){border:0;border-radius:0;overflow-x:auto;padding:5px}
+.md-wrap:has(table.mx){border:0;border-radius:0;overflow-x:auto;padding:3px}
 </style>`;
 function mdHead(R){
   const logo = (document.querySelector('.brand .logo img') || {}).src || '', url = hubUrl(), r0 = R[0] || {};
