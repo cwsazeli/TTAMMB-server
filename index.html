@@ -122,8 +122,8 @@ details.box2 summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--t
 .inner{max-width:1480px;margin:0 auto;padding:22px 22px 70px;}
 
 .head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px;}
-.head h2{font-size:22px;margin:0 0 4px;font-weight:700;}
-.head p{margin:0;color:var(--text-dim);font-size:13.5px;max-width:70ch;line-height:1.5;}
+.head h2{font-size:21px;line-height:26px;margin:0 0 4px;font-weight:700;letter-spacing:.01em;}
+.head p{margin:0;color:var(--text-dim);font-size:12.5px;max-width:80ch;line-height:19px;}
 .stamp{font-family:var(--mono);font-size:11.5px;color:var(--text-faint);}
 
 /* module columns */
@@ -491,8 +491,8 @@ body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
 .vas-b button[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent-bd);color:var(--accent);}
 
 /* headings */
-.head h2{font-size:26px;font-weight:650;letter-spacing:-.018em;margin:0 0 6px;}
-.head p{color:var(--text-dim);line-height:1.55;max-width:74ch;}
+.head h2{font-size:21px;line-height:26px;font-weight:700;letter-spacing:.01em;margin:0 0 4px;}
+.head p{color:var(--text-dim);font-size:12.5px;line-height:19px;max-width:80ch;}
 @keyframes ttIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
 .panel.on{animation:ttIn .28s var(--ease);}
 
@@ -1145,7 +1145,7 @@ $('#pvExit').addEventListener('click', () => setPreview(''));
 $('#btnStaff').addEventListener('click', () => (LEVEL !== 'client' || PREVIEW) ? staffLogout() : staffLogin().then(ok => { if(ok) go(VIEW); }));
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
 const MD_KEY = 'ttammhub_mddr';
-const MD_FIELDS = ['id','ord','disc','no','docNo','desc','pic','psp','jst','subDate','target','rev','blocks','remark','flag','importedAt','fileName'];
+const MD_FIELDS = ['id','ord','disc','no','docNo','desc','pic','psp','jst','subDate','target','rev','blocks','remark','flag','importedAt','importedBy','fileName'];
 let MDDR = {recs: [], loaded: false, busy: false, f: {disc: 'ALL', col: '', q: '', doc: '', desc: '', pic: '', psp: '', rev: '', sub: '', rep: '', st: ''}};
 const mdF0 = () => ({disc: 'ALL', col: '', q: '', doc: '', desc: '', pic: '', psp: '', rev: '', sub: '', rep: '', st: ''});
 const mdS = v => v == null ? '' : String(v).trim();
@@ -1166,8 +1166,30 @@ function mdD(v){
 const mdF = s => { s = mdS(s); let x = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); if(x) return x[3] + '-' + MD_MON[+x[2] - 1] + '-' + x[1];
   x = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(s); return x && +x[2] >= 1 && +x[2] <= 12 ? String(+x[1]).padStart(2, '0') + '-' + MD_MON[+x[2] - 1] + '-' + (+x[3] < 100 ? 2000 + +x[3] : x[3]) : s; };   // older saved text dates (d/m/yyyy)
 const mdN = v => mdS(v).replace(/[\u00a0\s]+/g, ' ').toLowerCase();
+/* Rows whose Document No / Description is struck through in Excel = cancelled (the register has no CANCEL text for them) */
+function mdStrikeRows(wb, sheetName){
+  const out = new Set();
+  try{
+    const F = wb.files; if(!F) return out;
+    const txt = p => { const e = F[p]; if(!e || !e.content) return ''; const c = e.content; return typeof c === 'string' ? c : new TextDecoder('utf-8').decode(c instanceof Uint8Array ? c : new Uint8Array(c)); };
+    const unent = s => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    let rid = ''; (txt('xl/workbook.xml').match(/<sheet\b[^>]*>/g) || []).forEach(t => { const n = /name="([^"]*)"/.exec(t), i = /r:id="([^"]*)"/.exec(t); if(n && i && unent(n[1]) === sheetName) rid = i[1]; });
+    let target = ''; (txt('xl/_rels/workbook.xml.rels').match(/<Relationship\b[^>]*>/g) || []).forEach(t => { const i = /\bId="([^"]*)"/.exec(t), g = /Target="([^"]*)"/.exec(t); if(i && g && i[1] === rid) target = g[1]; });
+    if(!target) return out;
+    const sheet = txt('xl/' + target.replace(/^\/?(xl\/)?/, ''));
+    const st = txt('xl/styles.xml');
+    const fonts = (/<fonts\b[\s\S]*?<\/fonts>/.exec(st) || [''])[0].match(/<font\b[^>]*\/>|<font\b[\s\S]*?<\/font>/g) || [];
+    const fStrike = fonts.map(f => /<strike\b/.test(f) && !/<strike\b[^>]*val="(0|false)"/.test(f));
+    const xfBlock = (/<cellXfs\b[\s\S]*?<\/cellXfs>/.exec(st) || [''])[0];
+    const xfs = xfBlock.match(/<xf\b[^>]*\/>|<xf\b[\s\S]*?<\/xf>/g) || [];
+    const xStrike = xfs.map(x => { const f = /fontId="(\d+)"/.exec(x); return f ? !!fStrike[+f[1]] : false; });
+    (sheet.match(/<c\b[^>]*>/g) || []).forEach(t => { const a = /\br="([A-Z]+)(\d+)"/.exec(t), s = /\bs="(\d+)"/.exec(t); if(a && s && (a[1] === 'C' || a[1] === 'D') && xStrike[+s[1]]) out.add(+a[2]); });
+  }catch(e){ console.warn('strike-through check failed', e); }
+  return out;
+}
 const mdAutoFlag = a => { const t = a.join(' | '); return /\bcancel/i.test(t) ? 'CANCEL' : /(^|[^A-Za-z])KIV([^A-Za-z]|$)/i.test(t) ? 'KIV' : ''; };
 function mdParse(X, wb, fileName){
+  const T0 = {};
   let best = null; const diag = [];
   for(const name of wb.SheetNames){
     let rows; try{ rows = X.utils.sheet_to_json(wb.Sheets[name], {header: 1, raw: true, defval: ''}); }catch(e){ diag.push(name + ': unreadable'); continue; }
@@ -1183,6 +1205,7 @@ function mdParse(X, wb, fileName){
   const cDoc = 2, cDesc = col(/description\s*of\s*doc/), cPsp = col(/^psp\s*no/), cJst = col(/^status$/), cSub = col(/^submission date/), cTgt = col(/^target submission/),
         cRev = col(/^latest revision/), cRem = col(/^remark/), cPic = hd.findIndex(c => mdN(c) === 'pic');
   const blocks = []; hd.forEach((c, i) => { if(best.isTo(c) && best.isFrom(hd[i + 2] || '')){ const m = /Rev\s*\.?\s*([0-9A-Za-z]+)/i.exec(lab[i] || ''); blocks.push({c: i, rev: m ? 'REV.' + m[1].toUpperCase() : ''}); } });
+  const r0 = (X.utils.decode_range(wb.Sheets[best.name]['!ref'] || 'A1').s.r) || 0, struck = mdStrikeRows(wb, best.name);
   const recs = []; let parent = '', cur = '', ord = 0;
   for(let r = h + 2; r < rows.length; r++){
     const row = rows[r], A = mdS(row[0]), B = mdS(row[1]), C = mdS(row[2]), D = mdS(row[cDesc]);
@@ -1191,7 +1214,7 @@ function mdParse(X, wb, fileName){
     const bl = []; blocks.forEach(b => { const v = [0, 1, 2, 3, 4].map(i => (i === 0 || i === 2) ? mdD(row[b.c + i]) : mdS(row[b.c + i])); if(v.some(Boolean)) bl.push([b.rev].concat(v)); });
     const psp = mdS(row[cPsp]);
     recs.push({id: 'mddr:' + (psp || C + ':' + r), ord: String(++ord).padStart(4, '0'), disc: cur || 'OTHER', no: A, docNo: C, desc: D, pic: mdS(row[cPic]), psp, jst: mdS(row[cJst]),
-      subDate: mdD(row[cSub]), target: cTgt >= 0 ? mdD(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', flag: mdAutoFlag([mdS(row[cPic]), cRem >= 0 ? mdS(row[cRem]) : '', D, mdS(row[cJst])]), importedAt: new Date().toISOString(), fileName});
+      subDate: mdD(row[cSub]), target: cTgt >= 0 ? mdD(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', flag: struck.has(r + 1 + r0) ? 'CANCEL' : mdAutoFlag([mdS(row[cPic]), cRem >= 0 ? mdS(row[cRem]) : '', D, mdS(row[cJst])]), importedAt: new Date().toISOString(), importedBy: String(hubUser() || '').trim(), fileName});
   }
   if(!recs.length) throw new Error('The register sheet was found but has no document rows.');
   return {recs, sheet: best.name};
@@ -1239,6 +1262,17 @@ async function mdSaveAll(recs, fileName, line){
   try{ localStorage.setItem(MD_KEY, JSON.stringify(recs)); }catch(e){}
   return true;
 }
+async function mdExport(){
+  let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
+  const R = MDDR.recs, revs = mdRevCols(), discs = []; R.forEach(d => { if(!discs.includes(d.disc)) discs.push(d.disc); });
+  const cols = ['S:REV.A', 'S:CODE 1', 'S:CODE 2', 'S:CODE 3'].concat(revs.map(r => 'P:' + r), ['AP', 'X']);
+  const head = ['DISCIPLINE', 'TOTAL PROCEDURE', 'Pending ZNE · REV.A', 'Pending ZNE · CODE 1', 'Pending ZNE · CODE 2', 'Pending ZNE · CODE 3'].concat(revs.map(r => 'Pending PCSB · ' + r), ['APPROVED', 'CANCEL / KIV']);
+  const row = (name, L) => [name, L.length].concat(cols.map(c => L.filter(d => mdState(d).col === c).length));
+  const w1 = X.utils.aoa_to_sheet([head].concat(discs.map(n => row(n, R.filter(d => d.disc === n))), [row('Total', R)]));
+  const w2 = X.utils.aoa_to_sheet([['#', 'Discipline', 'Document No.', 'Description', 'PIC', 'PSP No.', 'Latest rev.', 'Submitted', 'PCSB reply', 'PCSB reply code', 'Where it stands', 'Remark']].concat(R.map(d => [d.no, d.disc, d.docNo, d.desc, d.pic, d.psp, d.rev, mdF(d.subDate), mdF(mdReply(d).date), mdReply(d).st, mdState(d).txt, d.remark])));
+  const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, w1, 'Summary'); X.utils.book_append_sheet(wb, w2, 'Register');
+  X.writeFile(wb, 'MDDR_Status_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.xlsx'); toast('MDDR exported ✓');
+}
 async function mdMark(id, val){
   const d = MDDR.recs.find(x => x.id === id); if(!d) return;
   const prev = d.flag || ''; d.flag = val; delete d._s;
@@ -1250,15 +1284,35 @@ async function mdMark(id, val){
 async function mdImport(file){
   let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
   try{
-    const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array', cellDates: true});
+    const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array', cellDates: true, bookFiles: true});
     const out = mdParse(X, wb, file.name);
-    const old = {}; MDDR.recs.forEach(d => { old[d.id] = d; }); out.recs.forEach(d => { if(old[d.id]) d.flag = old[d.id].flag || ''; });   // Cancel / KIV marks survive a new import
+    const old = {}; MDDR.recs.forEach(d => { old[d.id] = d; }); out.recs.forEach(d => { if(old[d.id] && old[d.id].flag) d.flag = old[d.id].flag; });   // Cancel / KIV marks survive a new import
     toast('Reading “' + out.sheet + '” — ' + out.recs.length + ' documents…', 3000);
     if(await mdSaveAll(out.recs, file.name)){ MDDR.recs = out.recs; MDDR.loaded = true; MDDR.f = mdF0(); toast('MDDR imported ✓ ' + out.recs.length + ' documents', 5000); renderMddr(); }
   }catch(e){ toast('MDDR import failed: ' + e.message, 9000); }
 }
 
 /* ---- the screen ---- */
+const MD_TB_CSS = `
+#mddr .titleblock{border:1px solid var(--border);background:linear-gradient(180deg,var(--panel),var(--panel2));border-radius:4px;padding:18px 22px;margin:0 0 14px;position:relative;overflow:hidden;font-size:14px}
+#mddr .titleblock::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent)}
+#mddr .tb-top{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+#mddr .tb-brand{display:flex;align-items:center;gap:16px;min-width:0}
+#mddr .logo-mark{box-sizing:border-box;width:156px;height:52px;flex:0 0 156px;padding:6px 10px;background:#fff;border-radius:6px;display:flex;align-items:center;justify-content:center}
+#mddr .logo-mark img{width:100%;height:100%;object-fit:contain;display:block}
+#mddr .tb-eyebrow{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);line-height:16px;margin:0 0 4px}
+#mddr .tb-title{font-family:var(--sans);font-size:21px;font-weight:700;letter-spacing:.01em;line-height:26px;color:var(--text);margin:0 0 4px}
+#mddr .tb-sub{font-family:var(--sans);font-size:12.5px;line-height:19px;color:var(--text-dim);margin:0}
+#mddr .zb-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:14px 0 0}
+#mddr .zb-bar .zb-btn{box-sizing:border-box;flex:1 1 0;min-width:104px;height:34px;padding:0 10px;font-family:var(--sans);font-size:12.5px;font-weight:600;border-radius:3px;border:1px solid var(--border);background:var(--panel2);color:var(--text-dim);cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+#mddr .zb-bar .zb-btn:hover{border-color:var(--text-dim);color:var(--text)}
+#mddr .zb-bar .zb-btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+#mddr .zb-bar .sync-pill{box-sizing:border-box;flex:0 0 172px;width:172px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0 12px;border-radius:17px;border:1px solid var(--border);font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mddr .zb-bar .sync-pill.ok{color:var(--ok);border-color:var(--ok-bd)}
+#mddr .tb-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 20px;margin:12px 0 0;font-family:var(--mono);font-size:11.5px;line-height:16px;color:var(--text-faint)}
+#mddr .tb-meta b{color:var(--text-dim);font-weight:600}
+#mddr .md-help{margin:0 0 14px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:var(--panel);font-size:13px;line-height:1.6;color:var(--text-dim)}
+`;
 const MD_CSS = `<style>
 .md-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
 .md-kpi{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 14px;border-left:4px solid var(--kc,var(--accent))}
@@ -1300,13 +1354,27 @@ table.md.md-list td{padding:7px 8px}
 .md-frow th{background:#d6e1f4!important;padding:4px 5px!important}.md-frow .md-f{width:100%;min-width:64px;font:inherit;font-size:12px;font-weight:400;padding:4px 5px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}.md-frow .md-f[data-on]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .md-mk{font:inherit;font-size:12px;padding:3px 4px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}
 .md-fl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0 8px}.md-fl select,.md-fl input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text)}
-</style>`;
+${MD_TB_CSS}</style>`;
+function mdHead(R){
+  const logo = (document.querySelector('.brand .logo img') || {}).src || '', url = hubUrl(), r0 = R[0] || {};
+  const dt = s => { const d = new Date(s); return isNaN(d) ? '' : String(d.getDate()).padStart(2, '0') + ' ' + MD_MON[d.getMonth()] + ' ' + d.getFullYear() + ', ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  return `<div class="titleblock"><div class="tb-top"><div class="tb-brand">${logo ? `<div class="logo-mark"><img src="${logo}" alt="ZNESB"></div>` : ''}<div>
+    <div class="tb-eyebrow">ZULKIFLI NGAH ENGINEERING SDN BHD</div><h1 class="tb-title">TTAMM Package B — MDDR Status</h1>
+    <div class="tb-sub">Master Deliverable Document Register — where each document stands between ZNE and PCSB. Click any number to list those documents.</div></div></div></div>
+    <div class="zb-bar"><span class="sync-pill${url ? ' ok' : ''}">${url ? '☁ Google Sheets · synced' : '⌂ This device only'}</span>
+      <button class="zb-btn primary" id="mdImp">📥 Import Excel</button><input type="file" id="mdFile" accept=".xlsx,.xlsm,.xls" style="display:none">
+      <button class="zb-btn" id="mdExp"${R.length ? '' : ' disabled'}>⤓ Export</button><button class="zb-btn" id="mdHelp">? Help</button></div>
+    <div class="tb-meta">${R.length ? `<span>Records <b>${R.length}</b></span>` : ''}${r0.importedAt ? `<span>Updated <b>${esc(dt(r0.importedAt))}</b></span><span>Last import <b>${esc(r0.fileName || '')}</b>${r0.importedBy ? ' · by ' + esc(r0.importedBy) : ''}</span>` : '<span>No import yet</span>'}</div></div>
+    <div class="md-help" id="mdHelpBox" style="display:none"><b>How each document is placed</b> (read from the revision blocks of the register):<br>
+      <b>Approved</b> — a review status says APPROVED. · <b>Cancel / KIV</b> — struck through in Excel, or “KIV / Cancel” in PIC / Remark, or set with the <b>Mark</b> dropdown. · <b>Pending submission from ZNE</b> — not yet submitted (REV.A), or PCSB replied with Code 1 / 2 / 3 and ZNE has not resubmitted. · <b>Pending reviewed by PCSB</b> — ZNE submitted and PCSB has not replied yet, shown by revision.<br>
+      Importing again replaces the register and keeps your Cancel / KIV marks. Dates are shown as DD-Mon-YYYY.</div>`;
+}
 function renderMddr(){
   const el = $('#mddr'); if(!el) return;
-  const importBtn = `<button class="btn" id="mdImp">⤒ Import Excel</button><input type="file" id="mdFile" accept=".xlsx,.xlsm,.xls" style="display:none">`;
-  if(!MDDR.loaded){ el.innerHTML = MD_CSS + `<div class="head"><div><h2>MDDR Status</h2><p>Loading…</p></div></div>`; mdLoad().then(renderMddr); return; }
+  const importBtn = mdHead(MDDR.recs);
+  if(!MDDR.loaded){ el.innerHTML = MD_CSS + `${mdHead([])}<div class="note">Loading…</div>`; mdLoad().then(renderMddr); return; }
   const R = MDDR.recs;
-  if(!R.length){ el.innerHTML = MD_CSS + `<div class="head"><div><h2>MDDR Status</h2><p>Master Deliverable Document Register — where each document stands between ZNE and PCSB.</p></div><div class="row-btns" style="margin:0">${importBtn}</div></div>
+  if(!R.length){ el.innerHTML = MD_CSS + `${importBtn}
     <div class="box"><div class="note">No MDDR data yet. Press <b>Import Excel</b> and choose the MDDR file (sheet <b>MDDR PSP_WO15</b> is read).${MDDR.err ? '<br>' + esc(MDDR.err) : ''}</div></div>`; mdWire(el); return; }
   const discs = []; R.forEach(d => { if(!discs.includes(d.disc)) discs.push(d.disc); });
   const revs = mdRevCols(), hasO = R.some(d => mdState(d).k === 'O');
@@ -1333,7 +1401,7 @@ function renderMddr(){
   const segs = [['Pending ZNE', nS, 'var(--bad)'], ['Pending PCSB', nP, 'var(--warn)'], ['Approved', nA, 'var(--ok)']].concat(nX ? [['Cancel / KIV', nX, 'var(--text-faint)']] : [], nO ? [['Other', nO, 'var(--text-faint)']] : []);
   const pill = s => `<span class="md-pill ${s.k === 'AP' ? 'ap' : s.k === 'P' ? 'pcsb' : s.k === 'X' ? 'x' : 'zne'}">${esc(s.txt)}</span>`;
   const legacy = R.some(d => (mdS(d.subDate) && !/^\d{4}-\d{2}-\d{2}$/.test(mdS(d.subDate))) || mdBlocks(d).some(b => (b[1] && !/^\d{4}-\d{2}-\d{2}$/.test(b[1])) || (b[3] && !/^\d{4}-\d{2}-\d{2}$/.test(b[3]))));
-  el.innerHTML = MD_CSS + `<div class="head"><div><h2>MDDR Status</h2><p>Master Deliverable Document Register — read from the Excel file; click any number to list those documents.</p></div><div class="row-btns" style="margin:0">${importBtn}</div></div>
+  el.innerHTML = MD_CSS + `${importBtn}
   ${legacy ? '<div class="note" style="margin-bottom:12px">⚠ Some dates were saved by an older version of this page and may show wrongly (day/month swapped). Press <b>Import Excel</b> and choose the MDDR file again to correct them — your Cancel / KIV marks are kept.</div>' : ''}
   <div class="md-kpis">${kpi.map(k => `<div class="md-kpi" style="--kc:${k[3]}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="md-bar" title="Where the documents are">${segs.map(s => `<i style="width:${s[1] / R.length * 100}%;background:${s[2]}" title="${esc(s[0])}: ${s[1]}"></i>`).join('')}</div>
@@ -1354,6 +1422,8 @@ function renderMddr(){
   mdWire(el);
 }
 function mdWire(el){
+  const hb = el.querySelector('#mdHelp'), hx = el.querySelector('#mdHelpBox'); if(hb && hx) hb.onclick = () => { hx.style.display = hx.style.display === 'none' ? '' : 'none'; };
+  const eb = el.querySelector('#mdExp'); if(eb) eb.onclick = mdExport;
   const imp = el.querySelector('#mdImp'), fi = el.querySelector('#mdFile');
   if(imp && fi){ imp.onclick = () => fi.click(); fi.onchange = () => { const x = fi.files[0]; fi.value = ''; if(x) mdImport(x); }; }
   el.querySelectorAll('[data-mdd]').forEach(td => td.onclick = () => { const d = td.dataset.mdd, c = td.dataset.mdc, same = MDDR.f.disc === d && MDDR.f.col === c; MDDR.f.disc = same ? 'ALL' : d; MDDR.f.col = same ? '' : c; renderMddr(); const l = $('.md-fl'); if(l) l.scrollIntoView({block: 'start', behavior: 'smooth'}); });
