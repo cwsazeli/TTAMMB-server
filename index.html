@@ -1223,7 +1223,7 @@ async function mdSaveAll(recs, fileName){
 async function mdImport(file){
   let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
   try{
-    const wb = X.read(await file.arrayBuffer(), {type: 'array'});
+    const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array'});
     const out = mdParse(X, wb, file.name);
     toast('Reading “' + out.sheet + '” — ' + out.recs.length + ' documents…', 3000);
     if(await mdSaveAll(out.recs, file.name)){ MDDR.recs = out.recs; MDDR.loaded = true; MDDR.f = {disc: 'ALL', col: '', q: ''}; toast('MDDR imported ✓ ' + out.recs.length + ' documents', 5000); renderMddr(); }
