@@ -1151,11 +1151,23 @@ const mdS = v => v == null ? '' : String(v).trim();
 const mdRevN = v => { v = mdS(v).toUpperCase().replace(/\s+/g, ''); if(!v) return ''; const m = /^REV\.?(.+)$/.exec(v); return 'REV.' + (m ? m[1] : v); };
 
 /* ---- read the Excel (sheet with “ZNE to PCSB” columns) ---- */
+const MD_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+/* Dates → ISO yyyy-mm-dd.  Typed text ("22/6/2026", "24/6/26") is day/month/year.  A real Excel date cell here was read
+   by Excel as month/day (the register is typed day/month), so day and month are swapped back. */
+function mdD(v){
+  if(Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v)){ v = new Date(v.getTime() + 6e4);   /* SheetJS gives 23:59:35 of the previous day */
+    const y = v.getFullYear(), mo = v.getMonth() + 1, d = v.getDate(); const day = mo, mon = d; return mon <= 12 && day <= 31 ? y + '-' + String(mon).padStart(2, '0') + '-' + String(day).padStart(2, '0') : ''; }
+  const s = mdS(v); if(!s) return '';
+  let x = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/.exec(s);
+  if(x){ let y = +x[3]; if(y < 100) y += 2000; return y + '-' + String(+x[2]).padStart(2, '0') + '-' + String(+x[1]).padStart(2, '0'); }
+  x = /^(\d{4})-(\d{2})-(\d{2})/.exec(s); return x ? s.slice(0, 10) : s;
+}
+const mdF = s => { const x = /^(\d{4})-(\d{2})-(\d{2})$/.exec(mdS(s)); return x ? x[3] + '-' + MD_MON[+x[2] - 1] + '-' + x[1] : mdS(s); };
 const mdN = v => mdS(v).replace(/[\u00a0\s]+/g, ' ').toLowerCase();
 function mdParse(X, wb, fileName){
   let best = null; const diag = [];
   for(const name of wb.SheetNames){
-    let rows; try{ rows = X.utils.sheet_to_json(wb.Sheets[name], {header: 1, raw: false, defval: ''}); }catch(e){ diag.push(name + ': unreadable'); continue; }
+    let rows; try{ rows = X.utils.sheet_to_json(wb.Sheets[name], {header: 1, raw: true, defval: ''}); }catch(e){ diag.push(name + ': unreadable'); continue; }
     const isDesc = c => /description\s*of\s*doc/.test(mdN(c)), isTo = c => /(^|\s)to\s*pcsb$/.test(mdN(c)), isFrom = c => /^pcsb\s*to\s/.test(mdN(c));
     const h = rows.findIndex(r => r.some(isDesc) && r.some(isTo) && r.some(isFrom));
     if(h < 0){ const hd = rows.findIndex(r => r.some(isDesc)); diag.push(name + ' (' + rows.length + ' rows' + (hd >= 0 ? ', header found at row ' + (hd + 1) + ' but no “… to PCSB” columns' : ', no “Description of Documents” header') + ')'); continue; }
@@ -1173,10 +1185,10 @@ function mdParse(X, wb, fileName){
     const row = rows[r], A = mdS(row[0]), B = mdS(row[1]), C = mdS(row[2]), D = mdS(row[cDesc]);
     if(!B && C && !D){ if(/^[A-Z]$/.test(A)){ parent = C; cur = C; } else if(!A && parent && /^(PIPING|STRUCTURE)$/i.test(C)) cur = parent.replace(/\s+$/, '') + ' - ' + C.toUpperCase(); continue; }
     if(!(C && D)) continue;
-    const bl = []; blocks.forEach(b => { const v = [0, 1, 2, 3, 4].map(i => mdS(row[b.c + i])); if(v.some(Boolean)) bl.push([b.rev].concat(v)); });
+    const bl = []; blocks.forEach(b => { const v = [0, 1, 2, 3, 4].map(i => (i === 0 || i === 2) ? mdD(row[b.c + i]) : mdS(row[b.c + i])); if(v.some(Boolean)) bl.push([b.rev].concat(v)); });
     const psp = mdS(row[cPsp]);
     recs.push({id: 'mddr:' + (psp || C + ':' + r), ord: String(++ord).padStart(4, '0'), disc: cur || 'OTHER', no: A, docNo: C, desc: D, pic: mdS(row[cPic]), psp, jst: mdS(row[cJst]),
-      subDate: mdS(row[cSub]), target: cTgt >= 0 ? mdS(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', importedAt: new Date().toISOString(), fileName});
+      subDate: mdD(row[cSub]), target: cTgt >= 0 ? mdD(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', importedAt: new Date().toISOString(), fileName});
   }
   if(!recs.length) throw new Error('The register sheet was found but has no document rows.');
   return {recs, sheet: best.name};
@@ -1223,7 +1235,7 @@ async function mdSaveAll(recs, fileName){
 async function mdImport(file){
   let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
   try{
-    const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array'});
+    const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array', cellDates: true});
     const out = mdParse(X, wb, file.name);
     toast('Reading “' + out.sheet + '” — ' + out.recs.length + ' documents…', 3000);
     if(await mdSaveAll(out.recs, file.name)){ MDDR.recs = out.recs; MDDR.loaded = true; MDDR.f = {disc: 'ALL', col: '', q: ''}; toast('MDDR imported ✓ ' + out.recs.length + ' documents', 5000); renderMddr(); }
@@ -1232,22 +1244,43 @@ async function mdImport(file){
 
 /* ---- the screen ---- */
 const MD_CSS = `<style>
-.md-wrap{overflow-x:auto}
-table.md{border-collapse:collapse;width:100%;min-width:900px;font-size:13px}
-table.md th,table.md td{border:1px solid var(--border);padding:7px 8px;text-align:center}
-table.md thead th{background:#8eaadb;color:#10243f;font-weight:700}
-table.md thead th.md-zne{color:#b00000}table.md thead th.md-pcsb{color:#7a0000}table.md thead th.md-ap{color:#0a2fc4}
-table.md td.md-d{text-align:left;font-weight:700;white-space:nowrap}
-table.md td.z{color:var(--text-faint)}
-table.md td.md-n{cursor:pointer;font-variant-numeric:tabular-nums}table.md td.md-n:hover{background:var(--accent-bg,rgba(80,140,220,.15))}
-table.md td.md-sel{outline:2px solid var(--accent);outline-offset:-2px;background:var(--accent-bg,rgba(80,140,220,.15))}
-table.md td.md-t{font-weight:700}
-table.md tr.md-tot td{background:var(--panel2,var(--panel));font-weight:800;font-style:italic;border-top:2px solid var(--border)}
-.md-top{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:8px;margin-bottom:10px}
-.md-top h3{margin:0;font-style:italic}.md-asof{font-style:italic;font-size:13px;color:var(--text-dim)}
-.md-pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid var(--border)}
+.md-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
+.md-kpi{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 14px;border-left:4px solid var(--kc,var(--accent))}
+.md-kpi .l{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);font-weight:700}
+.md-kpi .v{font-size:28px;font-weight:800;line-height:1.15;color:var(--kc,var(--text));font-variant-numeric:tabular-nums}
+.md-kpi .s{font-size:12px;color:var(--text-dim)}
+.md-bar{display:flex;height:12px;border-radius:999px;overflow:hidden;background:var(--border);margin:2px 0 6px}
+.md-bar i{display:block;height:100%}.md-leg{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-dim);margin-bottom:14px}
+.md-leg b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.md-card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 14px 10px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.md-wrap{overflow-x:auto;border-radius:10px;border:1px solid var(--border)}
+table.md{border-collapse:separate;border-spacing:0;width:100%;min-width:900px;font-size:13px}
+table.md th,table.md td{border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:8px 8px;text-align:center}
+table.md tr>*:last-child{border-right:0}table.md tbody tr:last-child td{border-bottom:0}
+table.md thead th{background:linear-gradient(#9db8e3,#86a5d8);color:#10243f;font-weight:800;font-size:12px;letter-spacing:.03em}
+table.md thead th.md-zne{background:#f3c9c9;color:#9b1111}table.md thead th.md-pcsb{background:#f6dfb4;color:#7a4a00}table.md thead th.md-ap{background:#bfe3c8;color:#116a2c}
+table.md thead tr:nth-child(3) th{font-weight:700;background:#c9d8f0}
+table.md thead tr:nth-child(3) th.s{background:#f9e3e3;color:#9b1111}table.md thead tr:nth-child(3) th.p{background:#fbefd3;color:#7a4a00}
+table.md td.md-d{text-align:left;font-weight:700;white-space:nowrap;position:sticky;left:0;background:var(--panel);z-index:1}
+table.md tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--panel) 94%,var(--text) 6%)}
+table.md tbody tr:nth-child(even) td.md-d{background:color-mix(in srgb,var(--panel) 94%,var(--text) 6%)}
+table.md td.z{color:var(--text-faint);font-weight:400;opacity:.55}
+table.md td.md-n{cursor:pointer;font-variant-numeric:tabular-nums;font-weight:700;transition:background .12s}
+table.md td.md-n:hover{filter:brightness(.94);box-shadow:inset 0 0 0 1px var(--accent)}
+table.md td.gs:not(.z){background:color-mix(in srgb,var(--bad) 13%,transparent)!important;color:var(--bad)}
+table.md td.gp:not(.z){background:color-mix(in srgb,var(--warn) 15%,transparent)!important;color:var(--warn)}
+table.md td.ga:not(.z){background:color-mix(in srgb,var(--ok) 15%,transparent)!important;color:var(--ok)}
+table.md td.md-sel{box-shadow:inset 0 0 0 2px var(--accent)!important}
+table.md td.md-t{font-weight:800;background:color-mix(in srgb,var(--accent) 8%,transparent)}
+table.md tr.md-tot td{background:color-mix(in srgb,var(--accent) 14%,var(--panel))!important;font-weight:800;border-top:2px solid var(--accent);font-size:14px}
+table.md tr.md-tot td.gs,table.md tr.md-tot td.gp,table.md tr.md-tot td.ga{color:inherit}
+table.md.md-list tbody tr:hover td{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+table.md.md-list td{padding:7px 8px}
+.md-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.md-top h3{margin:0;font-size:15px;font-weight:800;letter-spacing:.02em}.md-asof{font-size:12px;color:var(--text-dim);background:var(--panel2,var(--panel));border:1px solid var(--border);padding:3px 10px;border-radius:999px}
+.md-pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid var(--border)}
 .md-pill.zne{color:var(--bad);background:var(--bad-bg);border-color:var(--bad-bd)}.md-pill.pcsb{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-bd)}.md-pill.ap{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-bd)}
-.md-fl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 8px}.md-fl select,.md-fl input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}
+.md-fl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0 8px}.md-fl select,.md-fl input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text)}
 </style>`;
 function renderMddr(){
   const el = $('#mddr'); if(!el) return;
@@ -1262,23 +1295,31 @@ function renderMddr(){
   const cnt = {}; R.forEach(d => { const s = mdState(d), k = d.disc + '|' + s.col; cnt[k] = (cnt[k] || 0) + 1; cnt['ALL|' + s.col] = (cnt['ALL|' + s.col] || 0) + 1; });
   const tot = {}; R.forEach(d => { tot[d.disc] = (tot[d.disc] || 0) + 1; }); tot.ALL = R.length;
   const f = MDDR.f, cell = (disc, col) => { const n = cnt[disc + '|' + col] || 0, sel = f.disc === disc && f.col === col;
-    return `<td class="md-n${n ? '' : ' z'}${sel ? ' md-sel' : ''}" data-mdd="${esc(disc)}" data-mdc="${esc(col)}">${n}</td>`; };
+    const g = col[0] === 'S' ? 'gs' : col[0] === 'P' ? 'gp' : col === 'AP' ? 'ga' : '';
+    return `<td class="md-n ${g}${n ? '' : ' z'}${sel ? ' md-sel' : ''}" data-mdd="${esc(disc)}" data-mdc="${esc(col)}">${n}</td>`; };
   const line = disc => `<td class="md-d">${esc(disc === 'ALL' ? 'Total' : disc)}</td><td class="md-t md-n${f.disc === disc && f.col === '' ? ' md-sel' : ''}" data-mdd="${esc(disc)}" data-mdc="">${tot[disc] || 0}</td>${cols.map(c => cell(disc, c)).join('')}`;
-  const at = R[0].importedAt ? new Date(R[0].importedAt) : null, asOf = at ? at.toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'}).toUpperCase() : '';
+  const at = R[0].importedAt ? new Date(R[0].importedAt) : null, asOf = at ? String(at.getDate()).padStart(2, '0') + '-' + MD_MON[at.getMonth()] + '-' + at.getFullYear() : '';
   const list = R.filter(d => (f.disc === 'ALL' || d.disc === f.disc) && (!f.col || mdState(d).col === f.col) && (!f.q || (d.docNo + ' ' + d.desc + ' ' + d.pic + ' ' + d.psp + ' ' + d.remark).toLowerCase().includes(f.q.toLowerCase())));
+  const nS = R.filter(d => mdState(d).k === 'S').length, nP = R.filter(d => mdState(d).k === 'P').length, nA = R.filter(d => mdState(d).k === 'AP').length, nO = R.length - nS - nP - nA, nNew = R.filter(d => mdState(d).col === 'S:REV.A').length;
+  const kpi = [['Total procedures', R.length, 'in the register', 'var(--accent)'], ['Submitted to PCSB', R.length - nNew, ((R.length - nNew) / R.length * 100).toFixed(1) + '% of total', 'var(--info,var(--accent))'],
+    ['Pending ZNE', nS, 'not submitted · Code 1/2/3 to resubmit', 'var(--bad)'], ['Pending PCSB review', nP, 'waiting for PCSB reply', 'var(--warn)'], ['Approved', nA, (nA / R.length * 100).toFixed(1) + '% of total', 'var(--ok)']];
+  const segs = [['Pending ZNE', nS, 'var(--bad)'], ['Pending PCSB', nP, 'var(--warn)'], ['Approved', nA, 'var(--ok)']].concat(nO ? [['Other', nO, 'var(--text-faint)']] : []);
   const pill = s => `<span class="md-pill ${s.k === 'AP' ? 'ap' : s.k === 'P' ? 'pcsb' : 'zne'}">${esc(s.txt)}</span>`;
   el.innerHTML = MD_CSS + `<div class="head"><div><h2>MDDR Status</h2><p>Master Deliverable Document Register — read from the Excel file; click any number to list those documents.</p></div><div class="row-btns" style="margin:0">${importBtn}</div></div>
-  <div class="box"><div class="md-top"><h3>TTAMM — MASTER DELIVERABLE DOCUMENT REGISTER (MDDR)</h3><div class="md-asof">As of : ${esc(asOf)}${R[0].fileName ? ' · ' + esc(R[0].fileName) : ''}</div></div>
+  <div class="md-kpis">${kpi.map(k => `<div class="md-kpi" style="--kc:${k[3]}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
+  <div class="md-bar" title="Where the documents are">${segs.map(s => `<i style="width:${s[1] / R.length * 100}%;background:${s[2]}" title="${esc(s[0])}: ${s[1]}"></i>`).join('')}</div>
+  <div class="md-leg">${segs.map(s => `<span><b style="background:${s[2]}"></b>${esc(s[0])} ${s[1]} (${(s[1] / R.length * 100).toFixed(0)}%)</span>`).join('')}</div>
+  <div class="md-card"><div class="md-top"><h3>TTAMM — MASTER DELIVERABLE DOCUMENT REGISTER (MDDR)</h3><div class="md-asof">As of : ${esc(asOf)}${R[0].fileName ? ' · ' + esc(R[0].fileName) : ''}</div></div>
   <div class="md-wrap"><table class="md"><thead>
     <tr><th rowspan="3">DISCIPLINE</th><th colspan="${cols.length + 1}">TTAMM</th></tr>
     <tr><th rowspan="2">TOTAL PROCEDURE</th><th colspan="4" class="md-zne">PENDING SUBMISSION FROM ZNE</th><th colspan="${revs.length}" class="md-pcsb">PENDING REVIEWED BY PCSB</th><th rowspan="2" class="md-ap">APPROVED</th>${hasO ? '<th rowspan="2">OTHER</th>' : ''}</tr>
-    <tr><th>REV.A</th><th>CODE 1</th><th>CODE 2</th><th>CODE 3</th>${revs.map(r => `<th>${esc(r)}</th>`).join('')}</tr></thead>
+    <tr><th class="s">REV.A</th><th class="s">CODE 1</th><th class="s">CODE 2</th><th class="s">CODE 3</th>${revs.map(r => `<th class="p">${esc(r)}</th>`).join('')}</tr></thead>
     <tbody>${discs.map(d => `<tr>${line(d)}</tr>`).join('')}<tr class="md-tot">${line('ALL')}</tr></tbody></table></div></div>
   <div class="md-fl"><b>${list.length}</b> of ${R.length} documents${f.disc !== 'ALL' || f.col ? ` · <button class="linkish" id="mdClr">✕ Clear filter</button>` : ''}
     <select id="mdDisc"><option value="ALL">All disciplines</option>${discs.map(d => `<option value="${esc(d)}"${f.disc === d ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select>
     <input id="mdQ" type="search" placeholder="Search doc no, description, PIC…" value="${esc(f.q)}"></div>
-  <div class="box" style="overflow-x:auto"><table class="md" style="min-width:1000px"><thead><tr><th>#</th><th>Discipline</th><th>Document No.</th><th>Description</th><th>PIC</th><th>PSP No.</th><th>Latest rev.</th><th>Submitted</th><th>Where it stands</th></tr></thead><tbody>
-    ${list.map(d => `<tr><td>${esc(d.no)}</td><td style="text-align:left">${esc(d.disc)}</td><td style="text-align:left">${esc(d.docNo)}</td><td style="text-align:left">${esc(d.desc)}</td><td>${esc(d.pic)}</td><td>${esc(d.psp)}</td><td>${esc(d.rev)}</td><td>${esc(d.subDate)}</td><td style="text-align:left">${pill(mdState(d))}</td></tr>`).join('') || '<tr><td colspan="9" style="padding:18px">No document matches.</td></tr>'}
+  <div class="md-card" style="overflow-x:auto;padding:8px"><table class="md md-list" style="min-width:1000px"><thead><tr><th>#</th><th>Discipline</th><th>Document No.</th><th>Description</th><th>PIC</th><th>PSP No.</th><th>Latest rev.</th><th>Submitted</th><th>Where it stands</th></tr></thead><tbody>
+    ${list.map(d => `<tr><td>${esc(d.no)}</td><td style="text-align:left">${esc(d.disc)}</td><td style="text-align:left">${esc(d.docNo)}</td><td style="text-align:left">${esc(d.desc)}</td><td>${esc(d.pic)}</td><td>${esc(d.psp)}</td><td>${esc(d.rev)}</td><td style="white-space:nowrap">${esc(mdF(d.subDate))}</td><td style="text-align:left">${pill(mdState(d))}</td></tr>`).join('') || '<tr><td colspan="9" style="padding:18px">No document matches.</td></tr>'}
   </tbody></table></div>`;
   mdWire(el);
 }
