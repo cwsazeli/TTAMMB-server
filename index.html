@@ -216,6 +216,7 @@ button.rd-tile{cursor:pointer;} button.rd-tile:hover{border-color:var(--accent);
 .rd-tile.ok{border-left-color:var(--ok);} .rd-tile.ok b{color:var(--ok);} .rd-tile.bad{border-left-color:var(--bad);} .rd-tile.bad b{color:var(--bad);}
 .rd-tile.warn{border-left-color:var(--warn);} .rd-tile.warn b{color:var(--warn);} .rd-tile.info{border-left-color:var(--info);} .rd-tile.info b{color:var(--info);}
 .rd-tile.acc{border-left-color:var(--accent);} .rd-tile.acc b{color:var(--accent);} .rd-tile.faint b{color:var(--text-faint);}
+.rd-msth{position:relative!important}.rd-msb{text-align:left;cursor:pointer}.rd-msp{position:absolute;top:100%;left:0;z-index:50;min-width:190px;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:6px;display:flex;flex-direction:column;gap:2px;font-weight:400;font-size:12px}.rd-msp label{padding:3px 6px;cursor:pointer;white-space:nowrap;text-align:left}.rd-msp label:hover{background:var(--panel2,var(--border))}
 .rd-fr th{padding:4px 6px!important;background:var(--panel2,var(--panel));position:static;} .rd-q{width:100%;min-width:70px;font:inherit;font-size:12px;font-weight:400;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);text-transform:none;letter-spacing:0;} .rd-q[data-on]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);} .rd-qbar{padding:8px 14px;font-size:12.5px;color:var(--text-dim);border-top:1px solid var(--border);}
 .rd-t tr.rd-join > td:not([rowspan]){border-bottom:0;padding-bottom:4px;} .rd-t tr.rd-same > td{padding-top:4px;} .rd-sd{display:inline-block;margin-top:3px;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:8px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);}
 .mto-vb{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--border);} .mto-gh > td{background:color-mix(in srgb,var(--accent) 9%,var(--panel));border-top:2px solid var(--border);padding:8px 14px!important;} .mto-ghf{color:var(--text-dim);font-size:12.5px;margin-left:6px;} .mto-ghc{margin-left:14px;font-size:12px;color:var(--text-dim);white-space:nowrap;} .mto-ghn .mto-n{font-weight:700;}
@@ -2265,7 +2266,7 @@ function stageList(r){
   ].filter(Boolean).map(e => { if(e[1] === 'done') e[3] = ''; return e; });      // a finished stage has nothing left to say
 }
 /* ---- column filters for the Work Readiness tables ---- */
-let RDQ = {notif: '', find: '', pkg: '', pri: '', due: '', stg: '', mat: '', mto: ''};
+let RDQ = {notif: '', find: '', pkg: '', pri: '', due: '', stg: [], mat: '', mto: ''};
 function rdPkg(x){ return clean(x.r.packageTag) || [...new Set((x.rd.lines || []).map(l => l.sheet))].join(', ') || ''; }   // AIF package tag, else the MTO sheet(s)
 function rdQApply(list, skip){
   const q = RDQ, T = dayN(todayISO()), low = x => String(x || '').toLowerCase();
@@ -2275,11 +2276,13 @@ function rdQApply(list, skip){
     if(q.pkg && (q.pkg === '(none)' ? rdPkg(x) !== '' : rdPkg(x) !== q.pkg)) return false;
     if(q.pri && String(prioN(r.priority)) !== q.pri) return false;
     if(q.due){ const d = dayN(r.due); if(q.due === 'none' ? d !== null : d === null || (q.due === 'late' ? !(d < T) : q.due === '30' ? !(d >= T && d - T <= 30) : !(d - T > 30))) return false; }
-    if(q.stg){ const [n, ok] = q.stg.split(':'), st = stageList(r).find(s => s[0] === n); if(!st || (ok === '1' ? st[1] !== 'done' : ok === '2' ? st[1] !== 'on' : st[1] === 'done')) return false; }
+    if(q.stg && q.stg.length){ const by = {}; q.stg.forEach(v => { const [n, ok] = v.split(':'); (by[n] = by[n] || []).push(ok); });
+      for(const n in by){ const st = stageList(r).find(s => s[0] === n); if(!st) return false; const state = st[1] === 'done' ? '1' : st[1] === 'on' ? '2' : '0'; if(!by[n].includes(state)) return false; } }
     if(q.mat && skip !== 'mat' && rdLab(x.rd)[0] !== q.mat) return false;
     if(q.mto){ const t = x.rd.tot || 0, rc = x.rd.rec || 0; if(q.mto === 'none' ? t > 0 : !t || (q.mto === 'full' ? rc < t : q.mto === 'part' ? !(rc > 0 && rc < t) : rc > 0)) return false; }
     return true; });
 }
+let RDMS_OPEN = false;
 function rdQRow(base, cols){
   const q = RDQ, sel = (k, opts) => `<select class="rd-q" data-rdq="${k}"${q[k] ? ' data-on="1"' : ''}><option value="">All</option>${opts.map(([v, l]) => `<option value="${esc(v)}"${q[k] === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
   const txt = (k, ph) => `<input class="rd-q" type="search" data-rdq="${k}" placeholder="${ph}" value="${esc(q[k])}"${q[k] ? ' data-on="1"' : ''}>`;
@@ -2289,11 +2292,11 @@ function rdQRow(base, cols){
   const pkgs = {}; base.forEach(x => { const k = rdPkg(x) || '(none)'; pkgs[k] = (pkgs[k] || 0) + 1; });
   const cell = {why: '<th></th>', pkg: `<th>${sel('pkg', Object.keys(pkgs).sort((a, b) => (a === '(none)') - (b === '(none)') || a.localeCompare(b, undefined, {numeric: true})).map(k => [k, (k === '(none)' ? 'No package' : k) + ' (' + pkgs[k] + ')']))}</th>`, notif: `<th>${txt('notif', 'Search…')}</th>`, find: `<th>${txt('find', 'Search finding / area…')}</th>`,
     pri: `<th>${sel('pri', pris.map(p => [String(p), 'P' + p]))}</th>`, due: `<th>${sel('due', [['late', 'Overdue'], ['30', 'Due ≤ 30 days'], ['later', 'Due later'], ['none', 'No due date']])}</th>`,
-    stg: `<th>${sel('stg', stg)}</th>`, mat: `<th>${sel('mat', Object.entries(mats).sort((a, b) => b[1] - a[1]).map(([l, n]) => [l, l + ' (' + n + ')']))}</th>`,
+    stg: `<th class="rd-msth"><button type="button" class="rd-q rd-msb" data-rdms${q.stg.length ? ' data-on="1"' : ''}>${q.stg.length ? q.stg.length + ' selected' : 'All'} ▾</button>${RDMS_OPEN ? `<div class="rd-msp">${stg.map(([v, l]) => `<label><input type="checkbox" data-rdmsv="${esc(v)}"${q.stg.includes(v) ? ' checked' : ''}> ${esc(l)}</label>`).join('')}${q.stg.length ? '<button type="button" class="linkish" data-rdmsclr>Clear</button>' : ''}</div>` : ''}</th>`, mat: `<th>${sel('mat', Object.entries(mats).sort((a, b) => b[1] - a[1]).map(([l, n]) => [l, l + ' (' + n + ')']))}</th>`,
     mto: `<th>${sel('mto', [['full', 'All received'], ['part', 'Partly received'], ['zero', 'None received'], ['none', 'No MTO lines']])}</th>`};
   return `<tr class="rd-fr">${cols.map(c => cell[c]).join('')}</tr>`;
 }
-function rdQBar(n, of){ const on = Object.values(RDQ).some(Boolean); return on ? `<div class="rd-qbar">Showing <b>${n}</b> of ${of} · <button class="linkish" data-rdqclear>✕ Clear column filters</button></div>` : ''; }
+function rdQBar(n, of){ const on = Object.values(RDQ).some(v => Array.isArray(v) ? v.length : v); return on ? `<div class="rd-qbar">Showing <b>${n}</b> of ${of} · <button class="linkish" data-rdqclear>✕ Clear column filters</button></div>` : ''; }
 function stageTxt(r){
   const L = stageList(r), word = {done: 'done', on: 'in progress', todo: 'not done'};
   // remarks come from the AIF Excel remark columns; every stage in progress is listed, else the furthest unfinished stage that has one
@@ -2493,10 +2496,14 @@ function rdWire(el){
   el.querySelectorAll('[data-rdm]').forEach(b => b.onclick = () => { const [k, sd] = b.dataset.rdm.split('|'); RD_F = k; RD_SD = sd; renderReadiness(); });
   el.querySelectorAll('[data-rdf]').forEach(b => b.onclick = () => { RD_F = b.dataset.rdf; renderReadiness(); });
   el.querySelectorAll('[data-ocf]').forEach(b => b.onclick = () => { OC_F = b.dataset.ocf; renderReadiness(); });
+  el.querySelectorAll('[data-rdms]').forEach(b => b.onclick = e => { e.stopPropagation(); RDMS_OPEN = !RDMS_OPEN; renderReadiness(); });
+  el.querySelectorAll('[data-rdmsv]').forEach(c => c.onchange = () => { const v = c.dataset.rdmsv, a = RDQ.stg; RDQ.stg = c.checked ? [...a, v] : a.filter(x => x !== v); renderReadiness(); });
+  el.querySelectorAll('[data-rdmsclr]').forEach(b => b.onclick = () => { RDQ.stg = []; renderReadiness(); });
+  el.querySelectorAll('.rd-msp').forEach(p => p.onclick = e => e.stopPropagation());
   el.querySelectorAll('select[data-rdq]').forEach(s => s.onchange = () => { RDQ[s.dataset.rdq] = s.value; renderReadiness(); });
   el.querySelectorAll('input[data-rdq]').forEach(i => i.oninput = () => { RDQ[i.dataset.rdq] = i.value; clearTimeout(rdWire.t); rdWire.t = setTimeout(() => { const k = i.dataset.rdq, pos = i.selectionStart; renderReadiness();
     const n = $('#rdy').querySelector(`input[data-rdq="${k}"]`); if(n){ n.focus(); try{ n.setSelectionRange(pos, pos); }catch(e){} } }, 250); });
-  el.querySelectorAll('[data-rdqclear]').forEach(b => b.onclick = () => { Object.keys(RDQ).forEach(k => RDQ[k] = ''); renderReadiness(); });
+  el.querySelectorAll('[data-rdqclear]').forEach(b => b.onclick = () => { Object.keys(RDQ).forEach(k => RDQ[k] = Array.isArray(RDQ[k]) ? [] : ''); RDMS_OPEN = false; renderReadiness(); });
   el.querySelectorAll('.rd-fr').forEach(tr => tr.onclick = e => e.stopPropagation());
   el.querySelectorAll('tr[data-rdo]').forEach(tr => tr.onclick = () => { const k = tr.dataset.rdo; RD_OPEN.has(k) ? RD_OPEN.delete(k) : RD_OPEN.add(k); renderReadiness(); });
   el.querySelectorAll('[data-aif]').forEach(b => b.onclick = e => { e.stopPropagation(); openRecord('aif', ...JSON.parse(b.dataset.aif)); });
@@ -3023,6 +3030,7 @@ $('#q').addEventListener('keydown', e => {
   else if(e.key === 'Enter'){ e.preventDefault(); pick(SEL >= 0 ? +items[SEL].dataset.hit : 0); }
   else if(e.key === 'Escape'){ $('#results').classList.remove('open'); $('#q').blur(); }
 });
+document.addEventListener('click', e => { if(RDMS_OPEN && !e.target.closest('.rd-msth')){ RDMS_OPEN = false; renderReadiness(); } });
 document.addEventListener('click', e => { if(!e.target.closest('.search')) $('#results').classList.remove('open'); });
 document.addEventListener('keydown', e => { if(e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)){ e.preventDefault(); $('#q').focus(); } });
 
