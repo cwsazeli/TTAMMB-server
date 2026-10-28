@@ -1162,7 +1162,7 @@ function mdParse(X, wb, fileName){
     const hasZne = rows[h].some(c => /^zne\s*to\s*pcsb$/.test(mdN(c)));
     if(!best || (hasZne && !best.hasZne)) best = {name, rows, h, hasZne, isTo, isFrom};
   }
-  if(!best) throw new Error('Could not find the MDDR register in this file. Sheets checked: ' + (diag.join(' · ') || wb.SheetNames.join(', ') || 'none') + '.');
+  if(!best) throw new Error('Could not find the MDDR register in “' + fileName + '” (' + wb.SheetNames.length + ' sheet' + (wb.SheetNames.length === 1 ? '' : 's') + '). Sheets checked: ' + (diag.join(' · ') || wb.SheetNames.join(', ') || 'none') + '.');
   const {rows, h} = best, hd = rows[h].map(mdS), lab = (rows[h - 1] || []).map(mdS);
   const col = re => hd.findIndex(c => re.test(mdN(c)));
   const cDoc = 2, cDesc = col(/description\s*of\s*doc/), cPsp = col(/^psp\s*no/), cJst = col(/^status$/), cSub = col(/^submission date/), cTgt = col(/^target submission/),
