@@ -127,7 +127,8 @@ details.box2 summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--t
 .stamp{font-family:var(--mono);font-size:11.5px;color:var(--text-faint);}
 
 /* module columns */
-.mods{display:grid;grid-template-columns:calc((100% - 14px)*.31132 - 7px) calc((100% - 14px)*.31132 - 7px) minmax(0,1fr);gap:14px;margin-bottom:14px;}   /* 3rd card = same width as the 'By area' box below */
+.mods{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:14px;}   /* 3 equal cards; the boxes below follow them (2/3 + 1/3) */
+.mods:not(.two)+.split{grid-template-columns:calc((100% - 28px)*2/3 + 14px) minmax(0,1fr);}
 .mods.two{grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);}   /* PCSB: WOP + AIF fill the width, lined up with the boxes below */
 .mod{background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--mc);border-radius:4px;padding:16px 18px;display:flex;flex-direction:column;gap:14px;min-width:0;}
 .mod-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
@@ -4179,7 +4180,7 @@ function renderActivity(){
       ${vch('days', [['all', 'All time'], [1, 'Today'], [7, '7 days'], [30, '30 days']])}
       <input id="visQ" type="search" placeholder="Search name or browser…" value="${esc(vf.q)}" style="min-width:220px;font:inherit;font-size:12.5px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel2,var(--panel));color:var(--text)"></div>`;
   const body = ACT_TAB === 'visit'
-    ? `<div class="head"><div><h2>Visitor log</h2><p>Who opened the page and when — the level (Admin / Management/Operation / PCSB), the device and the name if the person filled in <i>Set name</i>. Same person and level are logged once per 20 minutes. Admin / Management previewing as PCSB are not logged. IP addresses are not recorded.</p></div>
+    ? `<div class="head"><div><h2>Visitor log</h2><p>Who opened the page and when — the level (Admin / Management/Operation / PCSB), the device and the name if the person filled in <i>Set name</i>. The same browser and level is logged once per day (refreshing does not add rows). Admin / Management previewing as PCSB are not logged. IP addresses are not recorded.</p></div>
         <div class="row-btns" style="margin:0"><button class="btn" id="actReload">↻ Refresh</button></div></div>
       <div class="box">${err}${ACT ? `${visFilters}
       <div class="tw"><table class="grid"><thead><tr><th>When</th><th>Opened as</th><th>Device</th><th>Name</th></tr></thead><tbody id="visRows">
@@ -4859,12 +4860,12 @@ window.__HUB.checkFresh = r => { FRESH.last = 0; return checkFresh(r || 'force')
 window.__HUB.freshInfo = () => ({view: VIEW, revs: Object.fromEntries(Object.keys(MODS).map(k => [k, localRev(k)])), stale: Object.assign({}, FRESH.stale)});
 window.__HUB.freshBanner = freshBanner; window.__HUB.go = go; window.__HUB.staffLogin = () => STAFF && STAFF_NEEDED; window.__HUB.login = need => staffLogin(need).then(ok => { if(ok) go(VIEW); return ok; }); window.__HUB.isClient = () => LEVEL !== 'ops'; window.__HUB.level = () => LEVEL; window.__HUB.weeklyText = weeklyText;
 setInterval(() => checkFresh('timer'), 180000);
-/* quiet visit log: one row in Hub_Log when someone opens the page (not for Admin/Management previewing as PCSB; at most once per 30 min per browser and level) */
+/* quiet visit log: one row in Hub_Log when someone opens the page (not for Admin/Management previewing as PCSB; at most once per day per browser and level) */
 function logVisit(){
   try{
     if(PREVIEW) return; const url = hubUrl(); if(!url) return;
     const key = 'ttammhub_visit_' + LEVEL, now = Date.now(); let last = 0; try{ last = Number(localStorage.getItem(key)) || 0; }catch(e){}
-    if(now - last < 1800000) return;
+    const day = d => new Date(d).toDateString(); if(last && day(last) === day(now)) return;     // one row per device, level and day
     try{ localStorage.setItem(key, String(now)); }catch(e){}
     const ua = navigator.userAgent || '', dev = (/Mobi|Android|iPhone|iPad/i.test(ua) ? 'Mobile' : 'Desktop') + ' ' + (/Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'browser');
     gsCall(url, 'hub', {action: 'visit', name: hubUser(), dev}).catch(() => {});
