@@ -3746,7 +3746,7 @@ async function loadActivity(){
   catch(e){ ACT_ERR = /Unknown action/.test(e.message) ? 'The Code.gs on the Sheet is an older version. Deploy the new Code.gs (Health & backups → Code.gs) as a new version.' : 'Could not load: ' + e.message; }
   renderActivity();
 }
-let ACT_TAB = 'act';
+let ACT_TAB = 'act', VIS_F = {lv: 'all', dev: 'all', days: 'all', q: ''};
 function renderActivity(){
   const el = $('#act');
   const all = ACT || [], isV = x => x.module === 'Visit';
@@ -3756,13 +3756,27 @@ function renderActivity(){
   const fmt = s => { try{ return window.__zbFmtHub(s); }catch(e){ return s; } };
   const tabs = `<div class="subtabs" role="tablist" aria-label="Logs"><button class="subtab" role="tab" data-at="act" aria-selected="${ACT_TAB === 'act'}">📝 Activity log ${ACT ? `<span>${L.length} entries</span>` : ''}</button><button class="subtab" role="tab" data-at="visit" aria-selected="${ACT_TAB === 'visit'}">👁 Visitor log ${ACT ? `<span>${V.length} visits</span>` : ''}</button></div>`;
   const err = ACT_ERR ? `<div class="note ${/Loading/.test(ACT_ERR) ? '' : 'warn'}">${esc(ACT_ERR)}</div>` : '';
-  const visRow = x => { const m = /^opened as (.+?)(?: · (.+))?$/.exec(String(x.action || '')) || [], lv = m[1] || '', dv = m[2] || ''; return `<tr><td class="mono" style="white-space:nowrap">${esc(fmt(x.at))}</td><td>${esc(lv) || '<span class="faint">—</span>'}</td><td>${esc(dv) || '<span class="faint">—</span>'}</td><td>${esc(x.by) || '<span class="faint">not given</span>'}</td></tr>`; };
+  const parse = x => { const m = /^opened as (.+?)(?: · (.+))?$/.exec(String(x.action || '')) || []; return {lv: m[1] || '', dv: m[2] || ''}; };
+  const visRow = x => { const {lv, dv} = parse(x); return `<tr><td class="mono" style="white-space:nowrap">${esc(fmt(x.at))}</td><td>${esc(lv) || '<span class="faint">—</span>'}</td><td>${esc(dv) || '<span class="faint">—</span>'}</td><td>${esc(x.by) || '<span class="faint">not given</span>'}</td></tr>`; };
+  const vf = VIS_F, now = Date.now();
+  const VS = V.filter(x => { const {lv, dv} = parse(x); const t = Date.parse(x.at);
+    if(vf.lv !== 'all' && lv !== vf.lv) return false;
+    if(vf.dev !== 'all' && !dv.startsWith(vf.dev)) return false;
+    if(vf.days !== 'all' && !(t >= now - vf.days * 86400000)) return false;
+    if(vf.q.trim() && !(x.by || 'not given').toLowerCase().includes(vf.q.trim().toLowerCase()) && !dv.toLowerCase().includes(vf.q.trim().toLowerCase())) return false;
+    return true; });
+  const vch = (k, opts) => `<div class="chips">${opts.map(([v, l]) => `<button class="chip" data-vf="${k}" data-v="${esc(v)}" aria-pressed="${String(vf[k]) === String(v)}">${esc(l)}</button>`).join('')}</div>`;
+  const visFilters = `<div class="box-h" style="flex-wrap:wrap;gap:10px 18px"><div><p id="visCount">${VS.length} of ${V.length} visits</p></div>
+      ${vch('lv', [['all', 'All levels'], ['Admin', 'Admin'], ['Management/Operation', 'Management/Operation'], ['PCSB', 'PCSB']])}
+      ${vch('dev', [['all', 'All devices'], ['Desktop', 'Desktop'], ['Mobile', 'Mobile']])}
+      ${vch('days', [['all', 'All time'], [1, 'Today'], [7, '7 days'], [30, '30 days']])}
+      <input id="visQ" type="search" placeholder="Search name or browser…" value="${esc(vf.q)}" style="min-width:220px;font:inherit;font-size:12.5px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel2,var(--panel));color:var(--text)"></div>`;
   const body = ACT_TAB === 'visit'
     ? `<div class="head"><div><h2>Visitor log</h2><p>Who opened the page and when — the level (Admin / Management/Operation / PCSB), the device and the name if the person filled in <i>Set name</i>. Same person and level are logged once per 20 minutes. Admin / Management previewing as PCSB are not logged. IP addresses are not recorded.</p></div>
         <div class="row-btns" style="margin:0"><button class="btn" id="actReload">↻ Refresh</button></div></div>
-      <div class="box">${err}${ACT ? `<div class="box-h"><div><p>${V.length} visits</p></div></div>
-      <div class="tw"><table class="grid"><thead><tr><th>When</th><th>Opened as</th><th>Device</th><th>Name</th></tr></thead><tbody>
-      ${V.length ? V.map(visRow).join('') : '<tr><td colspan="4" class="faint" style="padding:16px">No visits recorded yet.</td></tr>'}
+      <div class="box">${err}${ACT ? `${visFilters}
+      <div class="tw"><table class="grid"><thead><tr><th>When</th><th>Opened as</th><th>Device</th><th>Name</th></tr></thead><tbody id="visRows">
+      ${VS.length ? VS.map(visRow).join('') : '<tr><td colspan="4" class="faint" style="padding:16px">' + (V.length ? 'No visits match these filters.' : 'No visits recorded yet.') + '</td></tr>'}
       </tbody></table></div>` : (!ACT_ERR ? `<div class="note">Press Refresh to load the log.</div>` : '')}</div>`
     : `<div class="head"><div><h2>Activity log</h2><p>Every save, import, backup and setting change made through the app, newest first. Kept in the <span class="mono">Hub_Log</span> tab of the Google Sheet (last 1,000 entries).</p></div>
         <div class="row-btns" style="margin:0"><button class="btn" id="actReload">↻ Refresh</button></div></div>
@@ -3776,6 +3790,8 @@ function renderActivity(){
   $('#actReload').onclick = loadActivity;
   el.querySelectorAll('[data-at]').forEach(b => b.onclick = () => { ACT_TAB = b.dataset.at; renderActivity(); });
   el.querySelectorAll('[data-af]').forEach(b => b.onclick = () => { ACT_F = b.dataset.af; renderActivity(); });
+  el.querySelectorAll('[data-vf]').forEach(b => b.onclick = () => { const k = b.dataset.vf, v = b.dataset.v; VIS_F[k] = (k === 'days' && v !== 'all') ? Number(v) : v; renderActivity(); });
+  const vq = $('#visQ'); if(vq) vq.oninput = () => { VIS_F.q = vq.value; clearTimeout(renderActivity.t); renderActivity.t = setTimeout(() => { const p = vq.selectionStart; renderActivity(); const n = $('#visQ'); if(n){ n.focus(); try{ n.setSelectionRange(p, p); }catch(e){} } }, 200); };
   if(ACT === null && !ACT_ERR && hubUrl()) loadActivity();
 }
 window.__zbFmtHub = s => { const d = new Date(s); if(isNaN(d)) return String(s || '—'); return String(d.getDate()).padStart(2,'0') + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear() + ', ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); };
