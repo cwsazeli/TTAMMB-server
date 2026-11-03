@@ -4444,7 +4444,11 @@ function rdGroupRows(list, extra){
 const prioN = p => { const n = parseInt(String(p || '').replace(/\D/g, ''), 10); return isFinite(n) ? n : 9; };
 
 /* ---- page: Work Readiness ---- */
-let RD_TAB = 'ready', RD_F = 'all', RD_OPEN = new Set(), OC_F = 'all', RD_AREA = 'all', RD_CAT = 'TBR', RD_BATCH = 'ALL', RD_SD = 'all';
+let RD_TAB = 'ready', RD_F = 'all', RD_OPEN = new Set(), OC_F = 'all', RD_AREA = 'all', RD_CAT = 'TBR', RD_BATCH = 'ALL', RD_SD = 'all', RD_SDREF = 'ALL';
+/* Under SD: the shutdown named in the AIF Excel column EXECUTION_REMARKS — same rule as the Under SD filter in the AIF module */
+function rdSdRef(r){ const t = String((r && r.raw && r.raw.exeRem) || '').replace(/\s+/g, ' ').trim();
+  if(!t || /^(completed|done|replacement|drop|cleaning)\b/i.test(t)) return '';
+  return /\bMSD\b|\bSD\b|shut ?down|change ?out|\bTrain\s*[A-Z]\b/i.test(t) ? t : ''; }
 const LO = {missing: 0, partial: 1, surplus: 1, ordered: 2, spavail: 3, received: 4, remark: 5};
 // "short" is not "not bought": say how much of the line was bought and received, and how much is still to buy
 const part = m => (m.st === 'missing' || m.st === 'spavail') && m.l.it && !m.l.fromSurplus && (+m.l.bought || 0) > 0;
@@ -4491,6 +4495,13 @@ function renderReadiness(){
   const batches = [...new Set(rows.map(x => x.r.planYear).filter(Boolean))].sort();
   if(RD_BATCH !== 'ALL' && !batches.includes(RD_BATCH)) RD_BATCH = 'ALL';
   if(RD_BATCH !== 'ALL') rows = rows.filter(x => x.r.planYear === RD_BATCH);
+  const srCnt = {}, srName = {}, srOpen = rows.filter(x => !x.r.executionDone);
+  srOpen.forEach(x => { const t = rdSdRef(x.r); if(!t) return; const k = t.toLowerCase(); srCnt[k] = (srCnt[k] || 0) + 1; if(!srName[k]) srName[k] = t; });
+  rows.forEach(x => { const t = rdSdRef(x.r); if(t && !srName[t.toLowerCase()]){ srName[t.toLowerCase()] = t; srCnt[t.toLowerCase()] = 0; } });
+  const srKeys = Object.keys(srName).sort((a, b) => srCnt[b] - srCnt[a] || a.localeCompare(b));
+  if(RD_SDREF !== 'ALL' && !srName[RD_SDREF.toLowerCase()]) RD_SDREF = 'ALL';
+  if(RD_SDREF !== 'ALL') rows = rows.filter(x => rdSdRef(x.r).toLowerCase() === RD_SDREF.toLowerCase());
+  const srChips = srKeys.length ? `<div class="rd-frow"><span class="rd-flab" title="Shutdown stated in the AIF Excel column EXECUTION_REMARKS"><i class="fi">🚧</i>Under SD</span><div class="chips"><button class="chip" data-rdsr="ALL" aria-pressed="${RD_SDREF === 'ALL'}">All <span class="faint">${srOpen.length}</span></button>${srKeys.map(k => `<button class="chip" data-rdsr="${esc(srName[k])}" aria-pressed="${RD_SDREF.toLowerCase() === k}" title="AIF Excel column EXECUTION_REMARKS">${esc(srName[k])} <span class="faint">${srCnt[k]}</span></button>`).join('')}</div></div>` : '';
   // SD requirement category (same grouping as the AIF Package Overview): SD + UNIT SD / NSD / not assigned
   const SD_CATS = [['SD_UNITSD', 'SD + UNIT SD'], ['NSD', 'NSD'], ['NONE', 'Not assigned']];
   const sdOf = x => (x.r.sdCategory === 'SD' || x.r.sdCategory === 'UNIT SD') ? 'SD_UNITSD' : x.r.sdCategory === 'NSD' ? 'NSD' : 'NONE';
@@ -4498,15 +4509,16 @@ function renderReadiness(){
   if(RD_SD !== 'all') rows = rows.filter(x => sdOf(x) === RD_SD);
   const sdChips = `<div class="rd-frow"><span class="rd-flab"><i class="fi">🧩</i>SD category</span><div class="chips"><button class="chip" data-rdsd="all" aria-pressed="${RD_SD === 'all'}">All <span class="faint">${sdOpen('all')}</span></button>${SD_CATS.map(([k, l]) => `<button class="chip" data-rdsd="${k}" aria-pressed="${RD_SD === k}"><i class="sdd" style="--c:${k === 'NSD' ? 'var(--ok)' : k === 'SD_UNITSD' ? 'var(--bad)' : 'var(--text-faint)'}"></i>${l} <span class="faint">${sdOpen(k)}</span></button>`).join('')}</div></div>`;
   const CAT_LBL = {TBR: '🔧 To Be Replace (TBR)', TBP: '🎨 To Be Paint (TBP)'};
-  const fDirty = RD_BATCH !== 'ALL' || RD_SD !== 'all' || RD_F !== 'all';
+  const fDirty = RD_BATCH !== 'ALL' || RD_SD !== 'all' || RD_SDREF !== 'ALL' || RD_F !== 'all';
   const areaChips = `<div class="rd-cats">${cats.map(c => `<button data-rdc="${esc(c)}" aria-selected="${RD_CAT === c}">${esc(CAT_LBL[c] || c)}</button>`).join('')}</div>
     <div class="rd-fbar">
       <div class="rd-frow"><span class="rd-flab"><i class="fi">📍</i>Area</span><div class="chips">${areasP.length > 1 ? `<button class="chip" data-rda="all" aria-pressed="${RD_AREA === 'all'}">All</button>` : ''}${areasP.map(a => `<button class="chip" data-rda="${esc(a)}" aria-pressed="${RD_AREA === a}">${esc(a)}</button>`).join('')}</div></div>
       ${batches.length > 1 ? `<div class="rd-frow"><span class="rd-flab"><i class="fi">📅</i>Batch</span><div class="chips"><button class="chip" data-rdb="ALL" aria-pressed="${RD_BATCH === 'ALL'}">All</button>${batches.map((b, i) => `<button class="chip" data-rdb="${esc(b)}" aria-pressed="${RD_BATCH === b}">Batch ${i + 1} <span class="faint">(${esc(b)})</span></button>`).join('')}</div></div>` : ''}
       ${sdChips}
+      ${srChips}
       ${fDirty ? `<div class="rd-fsum"><button class="linkish" id="rdReset" type="button">↺ Reset filters</button></div>` : ''}
     </div>`;
-  const scope = [RD_CAT, RD_AREA !== 'all' ? RD_AREA : (areasP.length > 1 ? 'All areas' : areasP.join('')), RD_BATCH !== 'ALL' ? 'Batch ' + (batches.indexOf(RD_BATCH) + 1) : '', RD_SD !== 'all' ? (SD_CATS.find(c => c[0] === RD_SD) || [])[1] : ''].filter(Boolean).join(' · ');
+  const scope = [RD_CAT, RD_AREA !== 'all' ? RD_AREA : (areasP.length > 1 ? 'All areas' : areasP.join('')), RD_BATCH !== 'ALL' ? 'Batch ' + (batches.indexOf(RD_BATCH) + 1) : '', RD_SD !== 'all' ? (SD_CATS.find(c => c[0] === RD_SD) || [])[1] : '', RD_SDREF !== 'ALL' ? 'Under SD: ' + RD_SDREF : ''].filter(Boolean).join(' · ');
   const noMto = MTO && OPS && mtoOldImport() ? `<div class="note warn" style="margin-bottom:14px">⚠ The survey MTO was imported by an older version that did not read the <b>Remarks</b> column — lines with a remark (RE-USE, third party, surplus…) are still counted as missing. Re-import it under <b>Procurement → Material Reconciliation</b> and Save to Sheet.</div>` : !MTO && OPS ? `<div class="note warn" style="margin-bottom:14px">No survey MTO loaded — readiness falls back to the AIF ETA column. Import the MTO under <b>Procurement → Material Reconciliation</b> for item-by-item readiness.</div>` : '';
   const aifBtn = r => `<button class="linkish mono" data-aif='${esc(JSON.stringify([r.cat, r.view, r.uid]))}'>${esc(r.notif || r.report || '—')}</button>`;
   const due = r => { const d = dayN(r.due), t = dayN(todayISO()); if(d === null) return '<span class="faint">—</span>'; const late = t - d; return `<span${late > 0 ? ' style="color:var(--bad);font-weight:600"' : ''}>${fmtD(r.due)}${late > 0 ? ` · ${late}d late` : ''}</span>`; };
@@ -4577,7 +4589,8 @@ function rdWire(el){
   el.querySelectorAll('[data-rdc]').forEach(b => b.onclick = () => { RD_CAT = b.dataset.rdc; RD_BATCH = 'ALL'; renderReadiness(); });
   el.querySelectorAll('[data-rdb]').forEach(b => b.onclick = () => { RD_BATCH = b.dataset.rdb; renderReadiness(); });
   el.querySelectorAll('[data-rdsd]').forEach(b => b.onclick = () => { RD_SD = b.dataset.rdsd; renderReadiness(); });
-  const rst = el.querySelector('#rdReset'); if(rst) rst.onclick = () => { RD_BATCH = 'ALL'; RD_SD = 'all'; RD_F = 'all'; renderReadiness(); };
+  el.querySelectorAll('[data-rdsr]').forEach(b => b.onclick = () => { RD_SDREF = b.dataset.rdsr; renderReadiness(); });
+  const rst = el.querySelector('#rdReset'); if(rst) rst.onclick = () => { RD_BATCH = 'ALL'; RD_SD = 'all'; RD_SDREF = 'ALL'; RD_F = 'all'; renderReadiness(); };
   el.querySelectorAll('[data-rdm]').forEach(b => b.onclick = () => { const [k, sd] = b.dataset.rdm.split('|'); RD_F = k; RD_SD = sd; renderReadiness(); });
   el.querySelectorAll('[data-rdf]').forEach(b => b.onclick = () => { RD_F = b.dataset.rdf; renderReadiness(); });
   el.querySelectorAll('[data-ocf]').forEach(b => b.onclick = () => { OC_F = b.dataset.ocf; renderReadiness(); });
