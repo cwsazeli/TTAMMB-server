@@ -840,7 +840,6 @@ body.ex-pres .ex-nav{display:flex;position:fixed;left:50%;bottom:20px;transform:
     <div class="sec">Project Controls</div>
     <button class="nav" data-view="rdy" title="Which open findings can be executed now, and why overdue ones are still open"><span class="glyph">▶</span>Work Readiness</button>
     <button class="nav" data-view="proc" title="Supplier performance, material reconciliation (MTO), receiving documents and the surplus ledger"><span class="glyph">⛟</span>Procurement</button>
-    <button class="nav ops-only" data-view="plc" title="Admin only for now — One record per job package: MRF → store check → PSR 3-tier → RFQ 3-bid matrix → management LOA → official PO"><span class="glyph">✓</span>Procurement Lifecycle</button>
     <button class="nav" data-view="clm" title="Which WOPs can be claimed now, and what blocks the rest"><span class="glyph">＄</span>Claim Readiness</button>
     <button class="nav" data-view="recon" title="Work traceability and data quality"><span class="glyph">⇄</span>Data Integrity</button>
     <div class="sec">Modules</div>
@@ -848,6 +847,7 @@ body.ex-pres .ex-nav{display:flex;position:fixed;left:50%;bottom:20px;transform:
     <button class="nav" data-view="aif" style="--nav-c:var(--c-aif)"><span class="sw">🔍</span>Construction AIF Findings<span class="st" data-st="aif">…</span></button>
     <button class="nav" data-view="mat" style="--nav-c:var(--c-mat)"><span class="sw">📦</span>Materials Status<span class="st" data-st="mat">…</span></button>
     <button class="nav" data-view="mddr" style="--nav-c:#2aa5a0" title="Master Deliverable Document Register"><span class="sw">📑</span>MDDR Status</button>
+    <button class="nav ops-only" data-view="plc" style="--nav-c:#E07B39" title="Admin only for now — One record per job package: MRF → store check → PSR 3-tier → RFQ 3-bid matrix → management LOA → official PO"><span class="sw">✓</span>Procurement Lifecycle</button>
     <div class="sec">Admin</div>
     <button class="nav" data-view="activity"><span class="glyph">≡</span>Activity log</button>
     <div class="vas" id="viewAs" style="display:none"><div class="vas-l">View as</div><div class="vas-b"><button type="button" id="vasReal" data-vas="real" aria-pressed="true">Admin</button><button type="button" id="vasStaff" data-vas="staff" aria-pressed="false">Management/Operation</button><button type="button" id="vasClient" data-vas="client" aria-pressed="false">PCSB</button></div></div>
@@ -1565,54 +1565,111 @@ function plcMatch(r, st){
   if(st === 'all') return true; if(st === 'done') return r.stage >= 6 && r.status !== 'cancelled'; if(st === 'closed') return r.status === 'cancelled' || r.status === 'fromStore';
   if(plcClosed(r)) return false; if(st === 'active') return true; return 's' + r.stage === st;
 }
+/* Tabs — same pattern as the other modules (header block + tab bar). Each tab is one part of the lifecycle. */
+const PLC_VIEWS = [
+  {k: 'dash', ic: '📊', t: 'Dashboard & Status'},
+  {k: 'mrf', ic: '📝', t: 'Material Requisitions (MRF)', note: 'Every requisition raised, at any stage. Use the filter to narrow down.'},
+  {k: 'psr', ic: '🏬', t: 'Store & PSR 3-Tier', note: 'Waiting for the store stock check, or for the PSR review by PE → CC → PM.', m: r => !plcClosed(r) && (r.stage === 1 || r.stage === 2)},
+  {k: 'rfq', ic: '⚖️', t: 'RFQ 3-Supplier Sourcing', note: 'PSR approved — collect at least three quotations and recommend a supplier.', m: r => !plcClosed(r) && r.stage === 3},
+  {k: 'loa', ic: '✍️', t: 'Management LOA', note: 'Recommended supplier and amount waiting for management sign-off.', m: r => !plcClosed(r) && r.stage === 4},
+  {k: 'po', ic: '📄', t: 'Purchase Order (Official)', note: 'LOA signed — PO to be issued, and every PO already issued.', m: r => r.status !== 'cancelled' && r.stage >= 5}
+];
+try{ const v = localStorage.getItem('ttammhub_plc_view'); if(PLC_VIEWS.some(x => x.k === v)) PLC.view = v; }catch(e){}
+if(!PLC.view) PLC.view = 'dash';
+function plcTabCount(k){
+  const R = PLC.recs;
+  if(k === 'mrf') return R.filter(r => !plcClosed(r)).length;
+  if(k === 'po') return R.filter(r => r.status !== 'cancelled' && r.stage >= 5).length;
+  const v = PLC_VIEWS.find(x => x.k === k); return v && v.m ? R.filter(v.m).length : 0;
+}
 function plcHead(){
-  const url = hubUrl(), c = PLC.cfg;
-  return `<div class="pl-head"><div class="pl-hl"><div class="pl-eye">${esc(c.company || '')}</div><h1>Procurement Lifecycle</h1>
-    <div class="pl-flow">MRF<i>→</i>Store Check<i>→</i>PSR 3-Tier<i>→</i>RFQ 3-Bid Matrix<i>→</i>LOA Sign-off<i>→</i>PO</div></div>
-    <div class="pl-acts"><span class="pl-sync${url ? ' ok' : ''}" title="${url ? 'Saved to the shared Google Sheet, tab WOP_plc' : 'Not connected — kept on this device only'}">${url ? '☁ Google Sheets' : '⌂ This device only'}</span>
-      <button class="btn sm" data-pa="reload" title="Read the latest from the Google Sheet">↻ Reload</button><button class="btn sm" data-pa="xlsx">📊 Excel</button>
-      ${OPS ? '<button class="btn sm" data-pa="cfg">⚙ Settings</button><button class="btn primary" data-pa="new">＋ Raise New MRF</button>' : ''}</div></div>`;
+  const url = hubUrl(), c = PLC.cfg, R = PLC.recs, logo = (document.querySelector('.brand .logo img') || {}).src || '';
+  const last = R.reduce((m, r) => !m || String(r.updatedAt || '') > String(m.updatedAt || '') ? r : m, null);
+  const dt = s => { const d = new Date(s); return isNaN(d) ? '' : String(d.getDate()).padStart(2, '0') + ' ' + MON[d.getMonth()] + ' ' + d.getFullYear() + ', ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const tabs = PLC_VIEWS.map(v => { const n = v.k === 'dash' ? 0 : plcTabCount(v.k), hot = n && ['psr', 'rfq', 'loa'].includes(v.k);
+    return `<button class="tab-btn${PLC.view === v.k ? ' active' : ''}" data-pview="${v.k}">${v.ic} ${esc(v.t)}${v.k === 'dash' ? '' : ` <span class="tab-count${hot ? ' hot' : ''}">${n}</span>`}</button>`; }).join('');
+  return `<div class="titleblock"><div class="tb-top"><div class="tb-brand">${logo ? `<div class="logo-mark"><img src="${logo}" alt="ZNESB"></div>` : ''}<div>
+      <div class="tb-eyebrow">${esc(c.company || '')}</div><h1 class="tb-title">TTAMM Package B — Procurement Lifecycle</h1>
+      <div class="tb-sub">MRF → Store Check → PSR 3-Tier → RFQ 3-Bid Matrix → LOA Sign-off → PO</div></div></div></div>
+    <div class="zb-bar"><span class="sync-pill${url ? ' ok' : ''}" title="${url ? 'Saved to the shared Google Sheet, tab WOP_plc' : 'Not connected — kept on this device only'}">${url ? '☁ Google Sheets · synced' : '⌂ This device only'}</span>
+      ${OPS ? '<button class="zb-btn primary" data-pa="new">＋ Raise New MRF</button>' : ''}
+      <div class="zb-menu"><button class="zb-btn" data-pmenu="1"${R.length ? '' : ' disabled'}>⤓ Export ▾</button><div class="zb-panel"><button data-pa="xlsx">📊 Export to Excel</button><button data-pa="copy">📋 Copy summary</button></div></div>
+      <button class="zb-btn" data-pa="reload">↻ Reload</button>
+      ${OPS ? '<button class="zb-btn" data-pa="cfg">⚙ Settings</button>' : ''}<button class="zb-btn" data-pa="help">❓ Help</button></div>
+    <div class="tb-meta"><span>📦 Records <b>${R.length}</b></span>${last && last.updatedAt ? `<span>🕐 Updated <b>${esc(dt(last.updatedAt))}</b>${last.updatedBy ? ' · by <b>' + esc(last.updatedBy) + '</b>' : ''}</span>` : '<span>No records yet</span>'}<span>🗂 Storage <b>${url ? 'Google Sheets · WOP_plc' : 'this device only'}</b></span><span>🔒 <b>Admin only</b> for now</span></div></div>
+  ${PLC.help ? `<div class="pl-help"><b>How a package moves</b><br>
+    <b>1 MRF</b> — site raises what is needed, charge code and need-by date. · <b>2 Store</b> — store enters what is in stock; only the balance is bought (all in stock → closed, issued from store). ·
+    <b>3 PSR 3-Tier</b> — PE prepares, Cost Control checks budget / charge code, PM approves, in turn. · <b>4 RFQ</b> — at least ${num(c.minBids) || 3} quotations; the lowest compliant bid is marked L1, any other award needs a justification. ·
+    <b>5 LOA</b> — management signs (or rejects back to RFQ). · <b>6 PO</b> — official PO with running number, print or save as PDF.<br>
+    Any step can be returned to the requester with a reason. Every change asks for your name and the access password and is written to the Activity log.</div>` : ''}
+  <div class="tabs">${tabs}</div>`;
+}
+const PLC_COLS = '<tr><th>Job package / material description</th><th>MRF ref</th><th>Charge code / site</th><th>Stage</th><th>Supplier</th><th>Need by</th><th class="n">Value</th><th></th></tr>';
+function plcRow(r){
+  const td = todayISO(), a = plcAward(r), d = plcDays(r.stageAt || r.updatedAt), lateR = !plcClosed(r) && r.needBy && r.needBy < td, po = r.stage >= 6 && r.status !== 'cancelled';
+  return `<tr data-popen="${esc(r.id)}"><td class="pl-pk"><b>${esc(r.title || '(untitled)')}</b>${r.priority && r.priority !== 'Normal' ? ` <span class="pl-pri ${r.priority === 'Critical' ? 'c' : ''}">${esc(r.priority)}</span>` : ''}<span>${esc((r.desc || r.items.map(i => i.desc).filter(Boolean).join(', ')).slice(0, 140))}</span></td>
+    <td class="mono">${esc(r.mrfNo || '—')}${r.wopNo ? `<span class="pl-sub">WOP ${esc(r.wopNo)}</span>` : ''}${po ? `<span class="pl-sub mono">PO ${esc(r.po.no)}</span>` : ''}</td>
+    <td>${r.charge || r.site ? `<span class="pl-cc">${esc([r.charge, r.site].filter(Boolean).join(' · '))}</span>` : '<span class="faint">—</span>'}</td>
+    <td>${plcPill(r)}${!plcClosed(r) && d !== null ? `<span class="pl-sub">${d} day${d === 1 ? '' : 's'} at this step</span>` : ''}</td>
+    <td>${a ? esc(a.supplier) + (a.ref ? `<span class="pl-sub mono">${esc(a.ref)}</span>` : '') : '<span class="faint">—</span>'}</td>
+    <td class="${lateR ? 'pl-late' : ''}">${r.needBy ? fmtD(r.needBy) : '—'}${lateR ? '<span class="pl-sub">overdue</span>' : ''}</td>
+    <td class="n">${plcValue(r) ? plcRM(plcValue(r)) : '<span class="faint">—</span>'}</td>
+    <td><button class="btn sm${po ? ' primary' : ''}" data-${po ? 'ppo' : 'popen'}="${esc(r.id)}">${po ? 'View PO' : 'Open'}</button></td></tr>`;
+}
+const plcSort = (a, b) => (plcClosed(a) - plcClosed(b)) || (({Critical: 0, Urgent: 1}[a.priority] ?? 2) - ({Critical: 0, Urgent: 1}[b.priority] ?? 2)) || String(a.needBy || '9').localeCompare(String(b.needBy || '9')) || String(b.updatedAt).localeCompare(String(a.updatedAt));
+const plcQ = r => { const q = PLC.f.q.trim().toLowerCase(); return !q || [r.mrfNo, r.title, r.desc, r.wopNo, r.site, r.charge, r.reqBy, r.psr.no, r.rfq.no, r.po.no, (plcAward(r) || {}).supplier, r.items.map(i => i.desc).join(' ')].join(' ').toLowerCase().includes(q); };
+function plcTable(list, empty){
+  return list.length ? `<div class="pl-tw"><table class="pl-t"><thead>${PLC_COLS}</thead><tbody>${list.map(plcRow).join('')}</tbody></table></div>`
+    : `<div class="note empty-st"><span class="es-i">🧾</span><b>${empty}</b>${!PLC.recs.length ? (OPS ? 'Press <b>＋ Raise New MRF</b> to start the first job package.' : 'Packages appear here once an MRF is raised.') : ''}</div>`;
 }
 function renderPlc(){
   const el = $('#plc'); if(!el) return;
   if(!viewAllowed('plc')){ el.innerHTML = ''; return; }
   el.onclick = plcClick; el.oninput = plcInput; el.onchange = plcInput;
+  if(!plcClick._doc){ plcClick._doc = true; document.addEventListener('click', e => { if(!e.target.closest('#plc .zb-menu')) document.querySelectorAll('#plc .zb-menu.open').forEach(x => x.classList.remove('open')); }); }
   if(!PLC.loaded){ el.innerHTML = PLC_CSS + plcHead() + '<div class="box"><div class="note">Loading…</div></div>'; plcLoad().then(renderPlc); return; }
   if(PLC.sel){ plcDetail(el); return; }
-  const R = PLC.recs, act = R.filter(r => !plcClosed(r)), td = todayISO();
-  const at = i => act.filter(r => r.stage === i).length;
-  const done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled'), commit = done.reduce((s, r) => s + plcPoCalc(r).sub, 0);
-  const loaV = act.filter(r => r.stage === 4).reduce((s, r) => s + plcValue(r), 0), late = act.filter(r => r.needBy && r.needBy < td);
-  const nDraft = act.filter(r => r.stage === 0 && r.status === 'draft').length, nRet = act.filter(r => r.status === 'returned').length;
-  const kpi = (ic, cls, l, v, s, f) => `<button class="pl-kpi" data-pf="${f}"><span class="pl-ki ${cls}">${ic}</span><span><span class="l">${l}</span><span class="v">${v}</span><span class="s">${s}</span></span></button>`;
-  const pipe = PLC_STEPS.map((s, i) => { const n = at(i); return `<button class="pl-pstep${n ? ' has' : ''}${PLC.f.st === 's' + i ? ' sel' : ''}" data-pf="s${i}"><span class="c">${n}</span><b>${i + 1}. ${s.t}</b><small>${i === 0 ? (nDraft + nRet ? nDraft + ' draft · ' + nRet + ' returned' : 'Site / Workshop') : s.s}</small></button>`; }).join('');
-  const q = PLC.f.q.trim().toLowerCase();
-  const list = R.filter(r => plcMatch(r, PLC.f.st) && (!q || [r.mrfNo, r.title, r.desc, r.wopNo, r.site, r.charge, r.reqBy, r.psr.no, r.rfq.no, r.po.no, (plcAward(r) || {}).supplier, r.items.map(i => i.desc).join(' ')].join(' ').toLowerCase().includes(q)))
-    .sort((a, b) => (plcClosed(a) - plcClosed(b)) || (({Critical: 0, Urgent: 1}[a.priority] ?? 2) - ({Critical: 0, Urgent: 1}[b.priority] ?? 2)) || String(a.needBy || '9').localeCompare(String(b.needBy || '9')) || String(b.updatedAt).localeCompare(String(a.updatedAt)));
-  const cnt = k => R.filter(r => plcMatch(r, k)).length;
-  const row = r => { const a = plcAward(r), d = plcDays(r.stageAt || r.updatedAt), lateR = !plcClosed(r) && r.needBy && r.needBy < td;
-    return `<tr data-popen="${esc(r.id)}"><td class="pl-pk"><b>${esc(r.title || '(untitled)')}</b>${r.priority && r.priority !== 'Normal' ? ` <span class="pl-pri ${r.priority === 'Critical' ? 'c' : ''}">${esc(r.priority)}</span>` : ''}<span>${esc(r.desc || r.items.map(i => i.desc).filter(Boolean).join(', ')).slice(0, 140)}</span></td>
-      <td class="mono">${esc(r.mrfNo || '—')}${r.wopNo ? `<span class="pl-sub">WOP ${esc(r.wopNo)}</span>` : ''}</td>
-      <td>${r.charge || r.site ? `<span class="pl-cc">${esc([r.charge, r.site].filter(Boolean).join(' · '))}</span>` : '<span class="faint">—</span>'}</td>
-      <td>${plcPill(r)}${!plcClosed(r) && d !== null ? `<span class="pl-sub">${d} day${d === 1 ? '' : 's'} at this step</span>` : ''}</td>
-      <td>${a ? esc(a.supplier) + (a.ref ? `<span class="pl-sub mono">${esc(a.ref)}</span>` : '') : '<span class="faint">—</span>'}</td>
-      <td class="${lateR ? 'pl-late' : ''}">${r.needBy ? fmtD(r.needBy) : '—'}${lateR ? '<span class="pl-sub">overdue</span>' : ''}</td>
-      <td class="n">${plcValue(r) ? plcRM(plcValue(r)) : '<span class="faint">—</span>'}</td>
-      <td><button class="btn sm${r.stage >= 6 && r.status !== 'cancelled' ? ' primary' : ''}" data-${r.stage >= 6 && r.status !== 'cancelled' ? 'ppo' : 'popen'}="${esc(r.id)}">${r.stage >= 6 && r.status !== 'cancelled' ? 'View PO' : 'Open'}</button></td></tr>`; };
-  el.innerHTML = PLC_CSS + plcHead() + (PLC.err ? `<div class="note warn" style="margin-bottom:12px">⚠ Could not read the Google Sheet (${esc(PLC.err)}). Showing the copy saved on this device.</div>` : '') + `
-  <div class="pl-pipe">${pipe}</div>
-  <div class="pl-kpis">
-    ${kpi('▤', 'b', 'Active requisitions', act.length + ' MRF' + (act.length === 1 ? '' : 's'), nDraft + nRet ? nDraft + ' draft · ' + nRet + ' returned' : 'in progress', 'active')}
-    ${kpi('⧗', 'y', 'Pending verification', at(1) + at(2) + ' package' + (at(1) + at(2) === 1 ? '' : 's'), at(1) + ' store check · ' + at(2) + ' PSR review', 's2')}
-    ${kpi('✍', 'o', 'Awaiting LOA', at(4) + ' package' + (at(4) === 1 ? '' : 's'), loaV ? plcRM(loaV) + ' to sign' : 'nothing to sign', 's4')}
-    ${kpi('RM', 'g', 'PO commitment (net)', plcRM(commit), done.length + ' PO' + (done.length === 1 ? '' : 's') + ' issued', 'done')}
-    ${kpi('!', 'r', 'Past need-by date', late.length + ' package' + (late.length === 1 ? '' : 's'), 'still open', 'active')}
-  </div>
-  <div class="box pl-box"><div class="pl-bh"><h3>Work packages</h3><input type="search" class="pl-q" id="plQ" placeholder="Search MRF, PSR, PO, supplier, item…" value="${esc(PLC.f.q)}"></div>
-    <div class="chips pl-chips">${PLC_FILTERS.map(([k, l]) => `<button class="chip${PLC.f.st === k ? ' on' : ''}" data-pf="${k}" aria-pressed="${PLC.f.st === k}">${l} <b>${cnt(k)}</b></button>`).join('')}</div>
-    ${list.length ? `<div class="pl-tw"><table class="pl-t"><thead><tr><th>Job package / material description</th><th>MRF ref</th><th>Charge code / site</th><th>Stage</th><th>Supplier</th><th>Need by</th><th class="n">Value</th><th></th></tr></thead><tbody>${list.map(row).join('')}</tbody></table></div>`
-      : `<div class="note empty-st"><span class="es-i">🧾</span><b>${R.length ? 'Nothing matches this filter' : 'No requisitions yet'}</b>${R.length ? '' : OPS ? 'Press <b>＋ Raise New MRF</b> to start the first job package.' : 'Packages appear here once an MRF is raised.'}</div>`}
-  </div>`;
+  const R = PLC.recs, act = R.filter(r => !plcClosed(r)), td = todayISO(), V = PLC_VIEWS.find(v => v.k === PLC.view) || PLC_VIEWS[0];
+  const err = PLC.err ? `<div class="note warn" style="margin-bottom:12px">⚠ Could not read the Google Sheet (${esc(PLC.err)}). Showing the copy saved on this device.</div>` : '';
+  const search = `<input type="search" class="pl-q" id="plQ" placeholder="Search MRF, PSR, PO, supplier, item…" value="${esc(PLC.f.q)}">`;
+  let body;
+  if(V.k === 'dash'){
+    const at = i => act.filter(r => r.stage === i).length;
+    const done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled'), commit = done.reduce((s, r) => s + plcPoCalc(r).sub, 0);
+    const loaV = act.filter(r => r.stage === 4).reduce((s, r) => s + plcValue(r), 0), late = act.filter(r => r.needBy && r.needBy < td);
+    const nDraft = act.filter(r => r.stage === 0 && r.status === 'draft').length, nRet = act.filter(r => r.status === 'returned').length;
+    const goV = i => ['mrf', 'psr', 'psr', 'rfq', 'loa', 'po'][i];
+    const kpi = (ic, cls, l, v, s, go) => `<button class="pl-kpi" data-pview="${go}"><span class="pl-ki ${cls}">${ic}</span><span><span class="l">${l}</span><span class="v">${v}</span><span class="s">${s}</span></span></button>`;
+    const pipe = PLC_STEPS.map((s, i) => { const n = at(i); return `<button class="pl-pstep${n ? ' has' : ''}" data-pview="${goV(i)}"><span class="c">${n}</span><b>${i + 1}. ${s.t}</b><small>${i === 0 ? (nDraft + nRet ? nDraft + ' draft · ' + nRet + ' returned' : 'Site / Workshop') : s.s}</small></button>`; }).join('');
+    const pr = act.filter(plcQ).sort(plcSort);
+    body = `<div class="pl-pipe">${pipe}</div>
+    <div class="pl-kpis">
+      ${kpi('▤', 'b', 'Active requisitions', act.length + ' MRF' + (act.length === 1 ? '' : 's'), nDraft + nRet ? nDraft + ' draft · ' + nRet + ' returned' : 'in progress', 'mrf')}
+      ${kpi('⧗', 'y', 'Pending verification', at(1) + at(2) + ' package' + (at(1) + at(2) === 1 ? '' : 's'), at(1) + ' store check · ' + at(2) + ' PSR review', 'psr')}
+      ${kpi('✍', 'o', 'Awaiting LOA', at(4) + ' package' + (at(4) === 1 ? '' : 's'), loaV ? plcRM(loaV) + ' to sign' : 'nothing to sign', 'loa')}
+      ${kpi('RM', 'g', 'PO commitment (net)', plcRM(commit), done.length + ' PO' + (done.length === 1 ? '' : 's') + ' issued', 'po')}
+      ${kpi('!', 'r', 'Past need-by date', late.length + ' package' + (late.length === 1 ? '' : 's'), 'still open', 'mrf')}
+    </div>
+    <div class="box pl-box"><div class="pl-bh"><h3>☰ Priority work packages in progress</h3>${search}</div>${plcTable(pr, R.length ? 'Nothing in progress' : 'No requisitions yet')}</div>`;
+  } else if(V.k === 'mrf'){
+    const cnt = k => R.filter(r => plcMatch(r, k)).length, list = R.filter(r => plcMatch(r, PLC.f.st) && plcQ(r)).sort(plcSort);
+    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p></div>${search}</div>
+      <div class="chips pl-chips">${PLC_FILTERS.map(([k, l]) => `<button class="chip${PLC.f.st === k ? ' on' : ''}" data-pf="${k}" aria-pressed="${PLC.f.st === k}">${l} <b>${cnt(k)}</b></button>`).join('')}</div>
+      ${plcTable(list, R.length ? 'Nothing matches this filter' : 'No requisitions yet')}</div>`;
+  } else {
+    const list = R.filter(r => V.m(r) && plcQ(r)).sort(V.k === 'po' ? (a, b) => (a.stage >= 6) - (b.stage >= 6) || String(b.po.date || '').localeCompare(String(a.po.date || '')) : plcSort);
+    const sum = V.k === 'po' ? (() => { const iss = list.filter(r => r.stage >= 6), net = iss.reduce((s, r) => s + plcPoCalc(r).sub, 0); return `<p class="pl-bn">${list.length - iss.length} to issue · ${iss.length} issued · <b>${plcRM(net)}</b> committed (net)</p>`; })()
+      : V.k === 'loa' ? `<p class="pl-bn">${list.length} package${list.length === 1 ? '' : 's'} · <b>${plcRM(list.reduce((s, r) => s + plcValue(r), 0))}</b> to sign</p>` : '';
+    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p>${sum}</div>${search}</div>
+      ${plcTable(list, PLC.f.q ? 'Nothing matches the search' : 'Nothing waiting here')}</div>`;
+  }
+  el.innerHTML = PLC_CSS + plcHead() + err + body;
+}
+function plcCopy(){
+  const R = PLC.recs, act = R.filter(r => !plcClosed(r)), at = i => act.filter(r => r.stage === i).length, done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled');
+  const t = ['Procurement Lifecycle — ' + todayISO(), 'Active MRFs: ' + act.length, 'Store check: ' + at(1) + ' · PSR review: ' + at(2), 'RFQ: ' + at(3), 'Awaiting LOA: ' + at(4), 'PO to issue: ' + at(5),
+    'POs issued: ' + done.length + ' — ' + plcRM(done.reduce((s, r) => s + plcPoCalc(r).sub, 0)) + ' (net)'].join('\n');
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Summary copied ✓')).catch(() => prompt('Copy the summary:', t));
 }
 
 /* ---------- one package ---------- */
@@ -1629,7 +1686,7 @@ function plcDetail(el){
     return `<button class="pl-step${dn ? ' done' : ''}${now ? ' now' : ''}${now && r.status === 'returned' ? ' ret' : ''}${tab === i ? ' sel' : ''}" data-ptab="${i}"><span class="c">${dn ? '✓' : i + 1}</span><b>${i + 1}. ${s.t}</b><small>${esc(plcStepSub(r, i))}</small></button>`; }).join('');
   const body = [plcS0, plcS1, plcS2, plcS3, plcS4, plcS5][tab](r, plcCanEdit(r, tab));
   const a = plcAward(r), wopList = (DATA.wop && DATA.wop.records || []).filter(w => w.wopNo).slice(0, 800);
-  el.innerHTML = PLC_CSS + `<div class="pl-dh"><button class="btn sm" data-pa="back">← All packages</button>
+  el.innerHTML = PLC_CSS + plcHead() + `<div class="pl-dh"><button class="btn sm" data-pa="back">← Back to list</button>
     <div class="pl-dt"><span class="mono">${esc(r.mrfNo || 'New MRF')}</span><h2>${esc(r.title || 'New material requisition')}</h2></div>${r.id ? plcPill(r) : ''}
     <div class="pl-acts">${r.stage >= 5 && r.status !== 'cancelled' ? `<button class="btn sm" data-ppo="${esc(r.id)}">📄 ${r.stage >= 6 ? 'PO document' : 'Preview PO'}</button>` : ''}${OPS && r.id && !plcClosed(r) ? '<button class="btn sm danger" data-pa="cancel">Cancel MRF</button>' : ''}</div></div>
   ${r.status === 'returned' && r.retNote ? `<div class="note warn pl-ret">↩ <b>Returned:</b> ${esc(r.retNote)}</div>` : ''}
@@ -1798,6 +1855,10 @@ function plcInput(e){
 async function plcClick(e){
   const b = e.target.closest('button, tr[data-popen]'); if(!b || b.disabled) return;
   const d = b.dataset;
+  if(d.pmenu){ e.stopPropagation(); const m = b.closest('.zb-menu'), was = m.classList.contains('open'); document.querySelectorAll('#plc .zb-menu.open').forEach(x => x.classList.remove('open')); if(!was) m.classList.add('open'); return; }
+  document.querySelectorAll('#plc .zb-menu.open').forEach(x => x.classList.remove('open'));
+  if(d.pview){ if(PLC.sel === '__new' && PLC.draft && plcReadMrf(PLC.draft).title && !confirm('Leave without saving this MRF?')) return;
+    PLC.view = d.pview; PLC.sel = null; PLC.tab = null; PLC.draft = null; try{ localStorage.setItem('ttammhub_plc_view', d.pview); }catch(x){} renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(d.pf){ PLC.f.st = d.pf; renderPlc(); return; }
   if(d.ppo){ e.stopPropagation(); plcPoShow(d.ppo); return; }
   if(d.popen){ PLC.sel = d.popen; PLC.tab = null; renderPlc(); $('#p-plc').scrollTop = 0; return; }
@@ -1808,6 +1869,8 @@ async function plcClick(e){
   const a = d.pa; if(!a) return;
   if(a === 'back'){ if(PLC.sel === '__new' && PLC.draft && PLC.draft.title && !confirm('Leave without saving this MRF?')) return; PLC.sel = null; PLC.tab = null; PLC.draft = null; renderPlc(); return; }
   if(a === 'reload'){ PLC.loaded = false; renderPlc(); return; }
+  if(a === 'help'){ PLC.help = !PLC.help; renderPlc(); return; }
+  if(a === 'copy'){ plcCopy(); return; }
   if(a === 'xlsx'){ plcExcel(); return; }
   if(a === 'cfg'){ plcSettings(); return; }
   if(a === 'new'){ PLC.draft = plcBlank(); PLC.sel = '__new'; PLC.tab = 0; renderPlc(); return; }
@@ -2156,6 +2219,66 @@ const PLC_CSS = `<style>
 .po-doc .po-f{margin-top:20px;font-size:10px;color:#888;border-top:1px solid #ddd;padding-top:6px}
 @media print{ #printArea .po-doc{box-shadow:none;padding:0;max-width:none} #printArea .po-doc .po-l th{background:#0B1420;color:#fff;border:0} #printArea .po-doc .po-l td{border:0;border-bottom:1px solid #ccc} #printArea .po-doc .po-l tfoot td{border:0} #printArea .po-doc .po-l tfoot tr.tot td{border-top:2px solid #0B1420} #printArea .po-doc .po-ti th,#printArea .po-doc .po-ti td{border:0;background:none} #printArea .po-doc *{-webkit-print-color-adjust:exact;print-color-adjust:exact} }
 @media (max-width:640px){.po-doc{padding:16px}.po-doc .po-h{flex-direction:column}.po-doc .po-ti{text-align:left}.po-doc .po-ti table{margin-left:0}.po-doc .po-2{grid-template-columns:1fr}.po-doc .po-sigs{grid-template-columns:1fr 1fr}.po-wrap{padding:6px}}
+#plc .titleblock{border:1px solid var(--border);background:linear-gradient(180deg,var(--panel),var(--panel2));border-radius:4px;padding:18px 22px;margin:2px 0 14px;position:relative;overflow:hidden;font-size:14px}
+#plc .titleblock::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent)}
+#plc .tb-top{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+#plc .tb-brand{display:flex;align-items:center;gap:16px;min-width:0}
+[data-theme="light"] #plc .logo-mark{box-shadow:0 0 0 1px var(--border)}
+#plc .logo-mark{box-sizing:border-box;width:156px;height:52px;flex:0 0 156px;padding:6px 10px;background:#fff;border-radius:6px;display:flex;align-items:center;justify-content:center}
+#plc .logo-mark img{width:100%;height:100%;object-fit:contain;display:block}
+#plc .tb-eyebrow{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);line-height:16px;margin:0 0 4px}
+#plc .tb-title{font-family:var(--sans);font-size:21px;font-weight:700;letter-spacing:.01em;line-height:26px;color:var(--text);margin:0 0 4px}
+#plc .tb-sub{font-family:var(--sans);font-size:12.5px;line-height:19px;color:var(--text-dim);margin:0}
+#plc .zb-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:14px 0 0}
+#plc .zb-bar .zb-btn{box-sizing:border-box;flex:1 1 0;min-width:104px;max-width:190px;height:34px;padding:0 10px;font-family:var(--sans);font-size:12.5px;font-weight:600;border-radius:3px;border:1px solid var(--border);background:var(--panel2);color:var(--text-dim);cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+#plc .zb-bar .zb-btn:hover{border-color:var(--text-dim);color:var(--text)}
+#plc .zb-bar .zb-btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+#plc .zb-bar .sync-pill{box-sizing:border-box;flex:0 0 172px;width:172px;height:34px;display:inline-flex;align-items:center;justify-content:center;padding:0 12px;border-radius:17px;border:1px solid var(--border);font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#plc .zb-bar .sync-pill.ok{color:var(--ok);border-color:var(--ok-bd)}
+#plc .tb-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 20px;margin:12px 0 0;font-family:var(--sans);font-size:12px;line-height:16px;color:var(--text-faint)}
+#plc .tb-meta b{color:var(--text-dim);font-weight:600}
+#plc .zb-menu{position:relative;display:inline-block;flex:1 1 0;min-width:104px;max-width:190px}
+#plc .zb-menu > .zb-btn{width:100%}
+#plc .zb-panel{display:none;position:absolute;left:0;top:calc(100% + 4px);min-width:230px;background:var(--panel);border:1px solid var(--border);border-radius:4px;box-shadow:0 12px 34px rgba(0,0,0,.4);z-index:1000;padding:4px}
+#plc .zb-menu.right .zb-panel{left:auto;right:0}#plc .zb-menu.open .zb-panel{display:block}
+#plc .zb-panel button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);font-family:var(--sans);font-size:13px;padding:9px 10px;border-radius:3px;cursor:pointer}
+#plc .zb-panel button:hover{background:var(--hover)}#plc .zb-panel button.danger{color:var(--bad)}
+#plc .zb-bar .zb-btn:disabled{opacity:.5;cursor:default}
+#plc .tabs{display:flex;gap:4px;margin:0 0 8px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+#plc .tab-btn{font-family:var(--sans);font-size:14px;font-weight:600;letter-spacing:0;background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-1px;color:var(--text-faint);padding:12px 18px 13px;cursor:pointer;border-radius:10px 10px 0 0;white-space:nowrap}
+#plc .tab-btn:hover:not(.active){color:var(--text-dim);background:var(--hover)}#plc .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+#plc .tab-count{font-size:11.5px;font-weight:700;color:var(--text-faint);padding-left:6px}#plc .tab-btn.active .tab-count{color:var(--accent)}
+@media (max-width:640px){
+#plc .tb-brand{flex-direction:column;align-items:flex-start;gap:10px}
+#plc .logo-mark{width:124px;height:42px;flex:0 0 auto}
+#plc .tb-title{font-size:18px;line-height:23px}#plc .tb-eyebrow{letter-spacing:.08em;font-size:10px}#plc .tb-sub{font-size:12px;line-height:17px}
+#plc .titleblock{padding:14px}
+#plc .zb-bar{gap:5px}#plc .zb-bar > .zb-btn,#plc .zb-bar > .zb-menu{flex:1 1 calc(33.33% - 5px);min-width:0}
+#plc .zb-bar .zb-btn{padding:0 6px;font-size:11px}#plc .zb-bar .sync-pill{flex:1 1 100%;width:100%}
+#plc .zb-panel{position:fixed;left:10px;right:10px;top:auto;min-width:0}
+}
+@media (min-width:1210px){
+  #p-plc .titleblock{display:grid!important;grid-template-columns:minmax(0,1fr) 528px;column-gap:20px!important;row-gap:8px!important;align-items:center!important;padding:14px 20px!important;}
+  #p-plc .titleblock>.tb-top{grid-column:1;grid-row:1;}
+  #p-plc .titleblock>.zb-bar{grid-column:2;grid-row:1;margin:0!important;width:528px;display:grid!important;grid-template-columns:154px repeat(3,118px)!important;gap:6px!important;justify-content:end!important;}
+  #p-plc .titleblock>.tb-meta{grid-column:1/-1;grid-row:2;margin:0!important;}
+  #p-plc .zb-bar > *{width:100%!important;min-width:0!important;max-width:none!important;flex:none!important;}
+  #p-plc .zb-bar .zb-btn,#p-plc .zb-bar .sync-pill{height:30px!important;width:100%!important;}
+  #p-plc .zb-bar .sync-pill{padding:0 6px!important;white-space:nowrap}
+  #p-plc .titleblock .logo-mark{width:132px!important;height:44px!important;flex-basis:132px!important;}
+  #p-plc .titleblock .tb-sub{display:none!important;}
+  #p-plc .titleblock .logo-mark{background:#fff!important;border:1px solid var(--border)!important;border-radius:8px!important;padding:3px 6px!important;box-sizing:border-box!important}
+  #p-plc .titleblock .tb-title{white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+}
+#plc .tab-count.hot{color:#E07B39}
+#plc .tabs{margin:0 0 14px;flex-wrap:wrap;gap:2px}
+#plc .tab-btn{font-size:13px;padding:11px 11px 12px}
+#plc .tab-count{padding-left:4px}
+@media (max-width:760px){#plc .tabs{flex-wrap:nowrap;overflow-x:auto}}
+#plc .pl-help{margin:0 0 14px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:var(--panel);font-size:13px;line-height:1.6;color:var(--text-dim)}
+#plc .pl-help b{color:var(--text)}
+#plc .pl-bn{margin:3px 0 0;font-size:12.5px;color:var(--text-dim)}
+#plc .pl-bh{align-items:flex-start}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
