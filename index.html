@@ -4383,8 +4383,8 @@ function rdQRow(base, cols){
 function rdQBar(n, of){ const on = Object.values(RDQ).some(v => Array.isArray(v) ? v.length : v); return on ? `<div class="rd-qbar">Showing <b>${n}</b> of ${of} · <button class="linkish" data-rdqclear>✕ Clear column filters</button></div>` : ''; }
 function stageTxt(r){
   const L = stageList(r), word = {done: 'done', on: 'in progress', todo: 'not done'};
-  // remarks come from the AIF Excel remark columns; every stage in progress is listed, else the furthest unfinished stage that has one
-  const act = L.filter(x => x[1] === 'on' && x[3]), last = L.slice().reverse().find(x => x[1] !== 'done' && x[3]), notes = act.length ? act : last ? [last] : [];
+  // remarks come from the AIF Excel remark columns; every unfinished stage that has one is listed, in stage order
+  const notes = L.filter(x => x[1] !== 'done' && x[3]);
   return L.map(([n, st, tip]) => `<span class="rd-stg${st === 'done' ? ' ok' : st === 'on' ? ' on' : ''}" title="${n}: ${word[st]}${r.raw ? ' \u00b7 AIF Excel: ' + esc(tip) : ''}">${n}</span>`).join('') +
     notes.map(x => `<div class="rd-now" title="${x[0]} remark from the AIF Excel"><b>${x[0]}</b> \u00b7 ${esc(x[3])}</div>`).join('');
 }
