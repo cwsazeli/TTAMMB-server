@@ -1528,6 +1528,44 @@ async function plcLoad(){
 }
 /* Save one package: read the latest copy from the Sheet first, so two people working on different packages never
    overwrite each other; if someone changed THIS package meanwhile, stop and show their version. */
+/* Delete packages (Admin). The latest copy is read from the Sheet first so nothing else is lost; what was deleted is kept on this
+   device so "Restore last deleted" can bring it back. */
+const PLC_TRASH = 'ttammhub_plc_trash';
+function plcTrash(){ try{ const t = JSON.parse(localStorage.getItem(PLC_TRASH) || 'null'); return t && Array.isArray(t.recs) && t.recs.length ? t : null; }catch(e){ return null; } }
+async function plcRemove(ids, line){
+  const ok = await confirmSave('Procurement Lifecycle', {chg: 0, add: 0, del: ids.length, count: 1, lines: [line]});
+  if(!ok) return false;
+  const url = hubUrl(); let recs = PLC.recs.slice(), cfg = PLC.cfg;
+  if(url){
+    try{ const j = await gsCall(url, 'wop', {action: 'list', module: 'plc', pw: ok.pw});
+      if(j && Array.isArray(j.records) && !j.restricted){ const all = j.records.map(plcParse), c = all.find(r => r.id === '__cfg'); if(c && c.cfg && typeof c.cfg === 'object') cfg = Object.assign({}, PLC_CFG0, c.cfg); recs = all.filter(r => r.id && r.id !== '__cfg' && r.id !== '__meta'); } }
+    catch(e){ toast('⚠ Not deleted — could not reach the Google Sheet: ' + e.message, 9000); return false; }
+  }
+  const gone = recs.filter(r => ids.includes(r.id)), keep = recs.filter(r => !ids.includes(r.id));
+  if(url){
+    try{ await gsCall(url, 'wop', null, {action: 'replaceAll', module: 'plc', fields: PLC_FIELDS, records: [{id: '__cfg', cfg}].concat(keep).map(plcSer), pw: ok.pw, zbUser: ok.name, zbChanges: [line], zbChangeCount: 1}); }
+    catch(e){ toast('⚠ Not deleted: ' + e.message, 9000); return false; }
+  }
+  try{ localStorage.setItem(PLC_TRASH, JSON.stringify({at: plcNow(), by: ok.name, recs: gone.map(plcSer)})); }catch(e){}
+  PLC.recs = keep; PLC.cfg = cfg; plcCache(); return true;
+}
+async function plcRestore(){
+  const t = plcTrash(); if(!t){ toast('Nothing to restore on this device.'); return; }
+  const back = t.recs.map(plcParse), have = new Set(PLC.recs.map(r => r.id)), add = back.filter(r => !have.has(r.id));
+  if(!add.length){ toast('Those packages are already back.'); try{ localStorage.removeItem(PLC_TRASH); }catch(e){} renderPlc(); return; }
+  if(!confirm('Restore ' + add.length + ' deleted package' + (add.length === 1 ? '' : 's') + ' (' + add.map(plcRef).join(', ') + '), deleted ' + plcDT(t.at) + '?')) return;
+  const ok = await confirmSave('Procurement Lifecycle', {chg: 0, add: add.length, del: 0, count: 1, lines: ['Procurement Lifecycle — restored ' + add.map(plcRef).join(', ')]});
+  if(!ok) return;
+  const url = hubUrl(); let recs = PLC.recs.slice(), cfg = PLC.cfg;
+  try{
+    if(url){ const j = await gsCall(url, 'wop', {action: 'list', module: 'plc', pw: ok.pw});
+      if(j && Array.isArray(j.records) && !j.restricted){ const all = j.records.map(plcParse), c = all.find(r => r.id === '__cfg'); if(c && c.cfg && typeof c.cfg === 'object') cfg = Object.assign({}, PLC_CFG0, c.cfg); recs = all.filter(r => r.id && r.id !== '__cfg' && r.id !== '__meta'); }
+      recs = recs.concat(add.filter(r => !recs.some(x => x.id === r.id)));
+      await gsCall(url, 'wop', null, {action: 'replaceAll', module: 'plc', fields: PLC_FIELDS, records: [{id: '__cfg', cfg}].concat(recs).map(plcSer), pw: ok.pw, zbUser: ok.name, zbChanges: ['Restored ' + add.map(plcRef).join(', ')], zbChangeCount: 1}); }
+    else recs = recs.concat(add);
+  }catch(e){ toast('⚠ Not restored: ' + e.message, 9000); return; }
+  PLC.recs = recs; PLC.cfg = cfg; plcCache(); try{ localStorage.removeItem(PLC_TRASH); }catch(e){} toast('Restored ✓ ' + add.map(plcRef).join(', '), 5000); renderPlc();
+}
 async function plcCommit(nx, line, before){
   const ok = await confirmSave('Procurement Lifecycle', {chg: nx.createdAt ? 1 : 0, add: nx.createdAt ? 0 : 1, del: 0, count: 1, lines: [line]});
   if(!ok) return false;
@@ -1592,6 +1630,31 @@ function plcFlow(cls, nodes, seg){
     <div class="pl-fnote">Raise an MRF or a PSR — both go through the store counter-check, then the final PSR review.</div></div>`;
 }
 const plcFlowPos = [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1]];
+/* Running number box (same idea as the WOP running number): latest, next, how many in the series, numbers skipped, other series */
+const PLC_RUN = {
+  mrf: {lbl: 'MRF', no: r => r.mrfNo, dt: r => r.reqDate || r.createdAt},
+  psr: {lbl: 'PSR', no: r => r.psr.no, dt: r => (r.psr.t.pe || {}).at || r.createdAt},
+  rfq: {lbl: 'RFQ', no: r => r.rfq.no, dt: r => r.rfq.date || r.rfq.at || r.updatedAt},
+  loa: {lbl: 'LOA', no: r => r.loa.no, dt: r => r.loa.at},
+  po:  {lbl: 'PO',  no: r => r.stage >= 6 ? r.po.no : '', dt: r => r.po.date || r.po.at}
+};
+function plcRunHtml(kind){
+  const K = PLC_RUN[kind], cur = String(PLC.cfg[kind] || PLC_CFG0[kind]).replace(/\{YY\}/g, plcYY()), ser = new Map();
+  PLC.recs.forEach(r => { const n = clean(K.no(r)); if(!n) return; const m = /^(.*?)(\d+)(\D*)$/.exec(n); if(!m) return;
+    const key = m[1] + '|' + m[3]; let g = ser.get(key); if(!g) ser.set(key, g = {pre: m[1], suf: m[3], w: m[2].length, list: []});
+    g.w = Math.max(g.w, m[2].length); g.list.push({n, q: +m[2], d: K.dt(r)}); });
+  const dts = d => { const x = /^\d{4}-\d{2}-\d{2}/.test(String(d || '')) ? fmtD(String(d).slice(0, 10)) : d ? plcDT(d).slice(0, 11) : ''; return x && x !== '—' ? ` <span class="pl-rd">· ${x}</span>` : ''; };
+  const row = (g, main) => { const qs = [...new Set(g.list.map(x => x.q))].sort((a, b) => a - b), mx = qs[qs.length - 1], last = g.list.filter(x => x.q === mx)[0], have = new Set(qs), gap = [];
+    for(let i = 1; i < mx && gap.length < 13; i++) if(!have.has(i)) gap.push(g.pre + String(i).padStart(g.w, '0').slice(-g.w) + g.suf);
+    const dup = g.list.length - qs.length, next = main ? plcNext(kind) : g.pre + String(mx + 1).padStart(g.w, '0') + g.suf;
+    return `<div class="pl-run-r"><span>${main ? 'Latest' : 'Other series'}: <b class="pl-rn">${esc(last.n)}</b>${dts(last.d)}</span><span>Next number: <b class="pl-rx">${esc(next)}</b></span>
+      <span class="pl-rd">${qs.length} ${K.lbl} in this series · ${gap.length ? `<span class="pl-rg">not used: ${gap.slice(0, 12).map(x => esc(x.slice(g.pre.length))).join(', ')}${gap.length > 12 ? ' …' : ''}</span>` : 'no number skipped'}${dup ? ` · <span class="pl-rg">${dup} used twice</span>` : ''}</span></div>`; };
+  const groups = [...ser.values()], main = groups.find(g => g.pre === cur && !g.suf);
+  const others = groups.filter(g => g !== main).sort((a, b) => Math.max(...b.list.map(x => x.q)) - Math.max(...a.list.map(x => x.q)));
+  return `<div class="box pl-run"><div class="pl-run-h">🔢 ${K.lbl} running number</div>
+    ${main ? row(main, true) : `<div class="pl-run-r"><span>Latest: <span class="faint">none yet in this series</span></span><span>Next number: <b class="pl-rx">${esc(plcNext(kind))}</b></span><span class="pl-rd">Format set in ⚙ Settings: <span class="mono">${esc(PLC.cfg[kind] || PLC_CFG0[kind])}</span></span></div>`}
+    ${others.map(g => row(g, false)).join('')}</div>`;
+}
 function plcHead(){
   const url = hubUrl(), c = PLC.cfg, R = PLC.recs, logo = (document.querySelector('.brand .logo img') || {}).src || '';
   const last = R.reduce((m, r) => !m || String(r.updatedAt || '') > String(m.updatedAt || '') ? r : m, null);
@@ -1605,7 +1668,7 @@ function plcHead(){
       ${OPS ? '<button class="zb-btn primary" data-pa="imp" title="Import MRFs from Excel — coming soon">📥 Import Excel</button>' : ''}
       <div class="zb-menu"><button class="zb-btn" data-pmenu="1"${R.length ? '' : ' disabled'}>⤓ Export ▾</button><div class="zb-panel"><button data-pa="xlsx">📊 Export to Excel</button><button data-pa="copy">📋 Copy summary</button></div></div>
       ${OPS ? '<button class="zb-btn" disabled title="Nothing to undo — import is not available yet">↩ Undo import</button><button class="zb-btn" data-pa="cfg">⚙ Settings</button>' : ''}<button class="zb-btn" data-pa="help">❓ Help</button>
-      <div class="zb-menu right"><button class="zb-btn" data-pmenu="1">··· More ▾</button><div class="zb-panel"><button data-pa="reload">↻ Reload from Google Sheets</button><button data-pa="xlsx">📊 Export to Excel</button></div></div></div>
+      <div class="zb-menu right"><button class="zb-btn" data-pmenu="1">··· More ▾</button><div class="zb-panel"><button data-pa="reload">↻ Reload from Google Sheets</button><button data-pa="xlsx">📊 Export to Excel</button>${OPS ? `<button data-pa="restore"${plcTrash() ? '' : ' disabled'}>↩ Restore last deleted${plcTrash() ? ' (' + plcTrash().recs.length + ')' : ''}</button><button data-pa="delAll" class="danger"${R.length ? '' : ' disabled'}>🗑 Delete all packages</button>` : ''}</div></div></div>
     <div class="tb-meta"><span>📦 Records <b>${R.length}</b></span>${last && last.updatedAt ? `<span>🕐 Updated <b>${esc(dt(last.updatedAt))}</b>${last.updatedBy ? ' · by <b>' + esc(last.updatedBy) + '</b>' : ''}</span>` : '<span>No records yet</span>'}<span>🗂 Storage <b>${url ? 'Google Sheets · WOP_plc' : 'this device only'}</b></span><span>🔒 <b>Admin only</b> for now</span></div></div>
   ${PLC.help ? `<div class="pl-help"><b>How a package moves</b><br>
     <b>1 MRF</b> — site raises what is needed, charge code and need-by date. · <b>2 Store</b> — store enters what is in stock; only the balance is bought (all in stock → closed, issued from store). ·
@@ -1677,7 +1740,8 @@ function renderPlc(){
     body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p>${sum}</div><div class="pl-bhr">${search}${V.k === 'psr' ? '<button class="btn" data-pa="spAll" title="Check the items of these packages against the stock left in the Surplus Ledger">♻ Check Surplus Ledger</button>' : ''}${OPS && V.k === 'psr' ? '<button class="btn primary" data-pa="newPsr">＋ Raise New PSR</button>' : ''}</div></div>
       ${plcTable(list, PLC.f.q ? 'Nothing matches the search' : 'Nothing waiting here')}</div>`;
   }
-  el.innerHTML = PLC_CSS + plcHead() + err + body;
+  const runK = {mrf: ['mrf'], psr: ['psr'], rfq: ['rfq'], loa: ['loa'], po: ['po']}[V.k];
+  el.innerHTML = PLC_CSS + plcHead() + err + (runK ? runK.map(plcRunHtml).join('') : '') + body;
 }
 function plcCopy(){
   const R = PLC.recs, act = R.filter(r => !plcClosed(r)), at = i => act.filter(r => r.stage === i).length, done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled');
@@ -1710,7 +1774,7 @@ function plcDetail(el){
   const a = plcAward(r), wopList = (DATA.wop && DATA.wop.records || []).filter(w => w.wopNo).slice(0, 800);
   el.innerHTML = PLC_CSS + plcHead() + `<div class="pl-dh"><button class="btn sm" data-pa="back">← Back to list</button>
     <div class="pl-dt"><span class="mono">${esc(r.mrfNo || r.psr.no || (r.direct ? 'New PSR' : 'New MRF'))}</span><h2>${esc(r.title || (r.direct ? 'New purchase / service requisition' : 'New material requisition'))}</h2></div>${r.id ? plcPill(r) : ''}
-    <div class="pl-acts">${r.stage >= 5 && r.status !== 'cancelled' ? `<button class="btn sm" data-ppo="${esc(r.id)}">📄 ${r.stage >= 6 ? 'PO document' : 'Preview PO'}</button>` : ''}${OPS && r.id && !plcClosed(r) ? '<button class="btn sm danger" data-pa="cancel">Cancel ' + (r.direct ? 'PSR' : 'MRF') + '</button>' : ''}</div></div>
+    <div class="pl-acts">${r.stage >= 5 && r.status !== 'cancelled' ? `<button class="btn sm" data-ppo="${esc(r.id)}">📄 ${r.stage >= 6 ? 'PO document' : 'Preview PO'}</button>` : ''}${OPS && r.id && !plcClosed(r) ? '<button class="btn sm danger" data-pa="cancel">Cancel ' + (r.direct ? 'PSR' : 'MRF') + '</button>' : ''}${OPS && r.id ? '<button class="btn sm danger" data-pa="del" title="Delete this package and its history">🗑 Delete</button>' : ''}</div></div>
   ${r.status === 'returned' && r.retNote ? `<div class="note warn pl-ret">↩ <b>Returned:</b> ${esc(r.retNote)}</div>` : ''}
   ${r.status === 'cancelled' && r.retNote ? `<div class="note warn pl-ret">✕ <b>Cancelled:</b> ${esc(r.retNote)}</div>` : ''}
   ${steps}
@@ -1773,6 +1837,11 @@ function plcPsrForm(r){
   const f = Object.assign({}, r.psr.form || {}), w = r.wopNo && DATA.wop ? DATA.wop.records.find(x => String(x.wopNo) === String(r.wopNo)) : null;
   return Object.assign({projTitle: w ? clean(w.wopTitle || '') : r.title, projCode: r.charge || '', purpose: r.desc || r.title, delivery: r.site || '', expDate: r.needBy || '', pic: r.reqBy || '', contact: '', cat: [], appr: {}}, f, {appr: Object.assign({}, f.appr || {}), cat: Array.isArray(f.cat) ? f.cat : []});
 }
+/* Material category of a PSR line — same grouping as the Surplus box (Procurement); detected from the description, can be set by hand */
+const PLC_CATN = ['Pipe', 'Fitting', 'Flange', 'Valves', 'Gasket', 'Bolts and Nuts', 'Structural', 'Others'];
+function plcCatAuto(it){ try{ const f = mtoFeat(it.desc || ''); const i = spCat(f); return i >= 0 && i < 7 ? i : 7; }catch(e){ return 7; } }
+function plcCatOf(it){ return it.cat !== undefined && it.cat !== '' && !isNaN(+it.cat) ? +it.cat : plcCatAuto(it); }
+function plcCatSort(list, get){ return list.map((x, k) => ({x, k, c: plcCatOf(get(x))})).sort((a, b) => a.c - b.c || a.k - b.k); }
 function plcS2(r, ed, sub){
   const w = plcWait(r, 2); if(!sub && (w && r.stage < 2 || r.status === 'fromStore')) return plcSH(2, 'Purchase Service Requisition — reviewed by PE, CC and PM in turn.') + w;
   const nx = plcTierNext(r), f = plcPsrForm(r), edI = !!(sub && ed), idx = r.items.map((it, i) => i).filter(i => edI || clean(r.items[i].desc) && plcNet(r.items[i]) > 0);
@@ -1792,10 +1861,14 @@ function plcS2(r, ed, sub){
       <label><span>Person In Charge</span>${inp('pic', f.pic)}</label>
       <label><span>Contact Number</span>${inp('contact', f.contact, 'tel', '01x-xxxxxxx')}</label></div>
     <div class="psr-cat"><b>Category</b>${PLC_CATS.map(c => `<label><input type="checkbox" data-pcat="${c}"${f.cat.includes(c) ? ' checked' : ''}${plcRO(ed)}> ${c}</label>`).join('')}</div></div>
-    <div class="pl-tw"><table class="pl-t pl-it psr-it"><thead><tr><th>No</th><th>Description / Size / Brand</th><th class="n">Qty</th><th>UOM</th><th>Type</th><th>Duration (R/S)</th><th>Remark</th>${edI ? '<th></th>' : ''}</tr></thead><tbody>
-      ${idx.map((i, n) => { const it = r.items[i]; return `<tr data-pidx="${i}"><td>${n + 1}</td>${edI ? `<td><input data-pk="desc" value="${esc(it.desc)}" placeholder="Description / size / brand"></td><td><input data-pk="qty" type="number" min="0" step="any" class="n sh" value="${esc(it.qty)}"></td><td><input data-pk="unit" class="sh" value="${esc(it.unit)}"></td>` : `<td>${esc(it.desc)}</td><td class="n">${plcNet(it)}</td><td>${esc(it.unit)}</td>`}
+    <div class="pl-tw"><table class="pl-t pl-it psr-it"><thead><tr><th>No</th><th>Description / Size / Brand</th><th class="n">Qty</th><th>UOM</th>${ed ? '<th>Category</th>' : ''}<th>Type</th><th>Duration (R/S)</th><th>Remark</th>${edI ? '<th></th>' : ''}</tr></thead><tbody>
+      ${(() => { const nC = 7 + (ed ? 1 : 0) + (edI ? 1 : 0), srt = plcCatSort(idx, i => r.items[i]); let prev = -1, no = 0;
+        return srt.map(({x: i, c}) => { const it = r.items[i], cnt = srt.filter(z => z.c === c).length;
+          const head = c !== prev ? `<tr class="psr-cg" data-cat="${c}"><td colspan="${nC}">▸ <b>${PLC_CATN[c].toUpperCase()}</b> <span>· ${cnt}</span></td></tr>` : ''; prev = c; no++;
+          const auto = plcCatAuto(it), cs = ed ? `<td><select data-pk="cat" class="psr-cs" title="Category — Auto is worked out from the description"><option value=""${it.cat === undefined || it.cat === '' ? ' selected' : ''}>Auto · ${PLC_CATN[auto]}</option>${PLC_CATN.map((n, k) => `<option value="${k}"${it.cat !== undefined && it.cat !== '' && +it.cat === k ? ' selected' : ''}>${n}</option>`).join('')}</select></td>` : '';
+          return head + `<tr data-pidx="${i}" data-cat="${c}" class="psr-ci"><td>${no}</td>${edI ? `<td><input data-pk="desc" value="${esc(it.desc)}" placeholder="Description / size / brand"></td><td><input data-pk="qty" type="number" min="0" step="any" class="n sh" value="${esc(it.qty)}"></td><td><input data-pk="unit" class="sh" value="${esc(it.unit)}"></td>` : `<td>${esc(it.desc)}</td><td class="n">${plcNet(it)}</td><td>${esc(it.unit)}</td>`}${cs}
         <td><div class="psr-pr">${['P', 'R', 'S'].map(t => `<label title="${{P: 'Purchase', R: 'Rental', S: 'Services'}[t]}"><input type="radio" name="psrT${i}" value="${t}" data-pk="type"${typ(it) === t ? ' checked' : ''}${plcRO(ed)}>${t}</label>`).join('')}</div></td>
-        <td><input data-pk="dur" value="${esc(it.dur || '')}" placeholder="${typ(it) === 'P' ? '—' : 'e.g. 1 WEEK'}" class="psr-d"${plcRO(ed)}></td><td><input data-pk="rem" value="${esc(it.rem || '')}"${plcRO(ed)}></td>${edI ? `<td><button class="pl-x" data-ppdel="${i}" title="Remove line">✕</button></td>` : ''}</tr>`; }).join('')}</tbody></table></div>
+        <td><input data-pk="dur" value="${esc(it.dur || '')}" placeholder="${typ(it) === 'P' ? '—' : 'e.g. 1 WEEK'}" class="psr-d"${plcRO(ed)}></td><td><input data-pk="rem" value="${esc(it.rem || '')}"${plcRO(ed)}></td>${edI ? `<td><button class="pl-x" data-ppdel="${i}" title="Remove line">✕</button></td>` : ''}</tr>`; }).join(''); })()}</tbody></table></div>
     ${edI ? '<div class="pl-btns" style="border:0;padding-top:0;margin-top:8px"><button class="btn sm" data-pa="addPsrItem">＋ Add line</button></div>' : ''}
     <p class="psr-note">Type: <b>P</b> Purchase · <b>R</b> Rental · <b>S</b> Services — if Rental or Service, put the duration in days / weeks / months.</p>
   </div>
@@ -1824,7 +1897,7 @@ function plcReadPsr(r){
   const no = document.querySelector('#plc [data-pv="psrNo"]'); if(no && !r.psr.no && clean(no.value)) r.psr.noDraft = clean(no.value);
   $$('#plc tr[data-pidx]').forEach(tr => { const it = r.items[+tr.dataset.pidx]; if(!it) return;
     const t = tr.querySelector('[data-pk="type"]:checked'); if(t) it.type = t.value;
-    tr.querySelectorAll('input[data-pk]:not([type=radio])').forEach(e => { it[e.dataset.pk] = clean(e.value); }); });
+    tr.querySelectorAll('input[data-pk]:not([type=radio]),select[data-pk]').forEach(e => { it[e.dataset.pk] = clean(e.value); }); });
   if(r.direct){ r.title = f.purpose || f.projTitle; r.desc = f.projTitle && f.purpose ? f.projTitle : ''; r.charge = f.projCode; r.site = f.delivery; r.needBy = f.expDate; r.reqBy = f.pic; }
   return r;
 }
@@ -1833,8 +1906,11 @@ function plcPsrHtml(r){
   const f = plcPsrForm(r), logo = (document.querySelector('.brand .logo img') || {}).src || '', items = plcBuyItems(r);
   const d = s => s ? (/^\d{4}-\d{2}-\d{2}/.test(s) ? String(s).slice(8, 10) + '/' + String(s).slice(5, 7) + '/' + String(s).slice(0, 4) : esc(s)) : '';
   const dIso = s => { const x = new Date(s); return isNaN(x) ? '' : String(x.getDate()).padStart(2, '0') + '/' + String(x.getMonth() + 1).padStart(2, '0') + '/' + x.getFullYear(); };
-  const rows = Math.max(22, items.length + 2), tk = (it, t) => (it.type || 'P') === t ? '/' : '';
-  const body = Array.from({length: rows}, (_, i) => { const it = items[i];
+  const tk = (it, t) => (it.type || 'P') === t ? '/' : '', E9 = '<tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>';
+  const pr = []; let prevC = -1; plcCatSort(items, x => x).forEach(({x: it, c}) => { if(c !== prevC){ if(pr.length) pr.push(E9); pr.push(E9.replace('<td></td><td></td>', `<td></td><td class="pcg">${PLC_CATN[c].toUpperCase()}</td>`)); prevC = c; } pr.push(it); });
+  const ni = new Map(); let nn = 0; pr.forEach(x => { if(typeof x !== 'string') ni.set(x, ++nn); });
+  const rows = Math.max(22, pr.length + 1), rh = Math.min(14.5, 330 / rows), fz = rh >= 14 ? 10.5 : Math.max(8, +(rh * 0.74).toFixed(1));   // more lines → smaller rows, so it stays on one A4 page
+  const body = Array.from({length: rows}, (_, k) => { const x = pr[k]; if(typeof x === 'string') return x; const it = x, i = it ? ni.get(it) - 1 : 0;
     return it ? `<tr><td class="c">${i + 1}</td><td>${esc(it.desc)}</td><td class="c">${plcNet(it)}</td><td class="c">${esc(String(it.unit || '').toUpperCase())}</td><td class="c">${tk(it, 'P')}</td><td class="c">${tk(it, 'R')}</td><td class="c">${tk(it, 'S')}</td><td class="c">${esc(String(it.dur || '').toUpperCase())}</td><td>${esc(it.rem || '')}</td></tr>`
       : '<tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'; }).join('');
   const sg = (lbl, nm, pos, dt) => `<td class="psg"><div class="psg-l">${lbl}<span>:</span></div><div class="psg-s"></div>
@@ -1853,7 +1929,7 @@ function plcPsrHtml(r){
         <tr><th>Person In Charge</th><td class="cl">:</td><td class="u c">${esc(String(f.pic || '').toUpperCase())}</td></tr>
         <tr><th>Contact Number</th><td class="cl">:</td><td class="u c">${esc(f.contact)}</td></tr></table>
       <table class="psr-c"><tr><th colspan="2">Please tick (/) below category</th></tr>${PLC_CATS.map(c => `<tr><td>${c}</td><td class="c">${f.cat.includes(c) ? '/' : ''}</td></tr>`).join('')}</table></div>
-    <table class="psr-t"><thead><tr><th rowspan="2" style="width:4%">No</th><th rowspan="2">Description / Size / Brand</th><th rowspan="2" style="width:4%">Qty</th><th rowspan="2" style="width:6%">UOM</th><th colspan="3">Type</th><th rowspan="2" style="width:8%">Duration (R/S)</th><th rowspan="2" style="width:17%">Remark</th></tr>
+    <table class="psr-t" style="--rh:${rh}px;--fz:${fz}px"><thead><tr><th rowspan="2" style="width:4%">No</th><th rowspan="2">Description / Size / Brand</th><th rowspan="2" style="width:4%">Qty</th><th rowspan="2" style="width:6%">UOM</th><th colspan="3">Type</th><th rowspan="2" style="width:8%">Duration (R/S)</th><th rowspan="2" style="width:17%">Remark</th></tr>
       <tr><th style="width:4.4%">P</th><th style="width:4.4%">R</th><th style="width:4%">S</th></tr></thead><tbody>${body}</tbody></table>
     <table class="psr-s"><tr>${sg('Requested by', t('pe').by, t('pe').pos || 'Project Engineer', t('pe').at ? dIso(t('pe').at) : '')}${sg('Reviewed by', t('cc').by, t('cc').pos || '', t('cc').at ? dIso(t('cc').at) : '')}${sg('Verified by', t('pm').by, t('pm').pos || '', t('pm').at ? dIso(t('pm').at) : '')}${sg('Approved by', f.appr.name, f.appr.pos, d(f.appr.date))}</tr></table>
     <div class="psr-f"><span><b>Type :</b>&nbsp;&nbsp; <b>P</b> :PURCHASE &nbsp;&nbsp;&nbsp; <b>R</b> :RENTAL &nbsp;&nbsp;&nbsp; <b>S</b> :SERVICES</span><b>NOTE : IF RENTAL OR SERVICE, PLEASE INDICATE IN DAYS / WEEKS / MONTH</b></div></div>`;
@@ -1964,6 +2040,7 @@ function plcCalc(){
 function plcInput(e){
   const t = e.target;
   if(t.id === 'plQ'){ PLC.f.q = t.value; clearTimeout(plcInput._t); plcInput._t = setTimeout(() => { const pos = t.selectionStart; renderPlc(); const n = $('#plQ'); if(n){ n.focus(); try{ n.setSelectionRange(pos, pos); }catch(x){} } }, 220); return; }
+  if(e.type === 'change' && t.closest && t.closest('tr[data-pidx]') && t.dataset.pk === 'cat'){ const r0 = plcCur(); if(r0){ const y = $('#p-plc').scrollTop; plcReadPsr(r0); renderPlc(); $('#p-plc').scrollTop = y; } return; }
   if(t.dataset.pv === 'wopNo' && e.type === 'change' && DATA.wop){ const w = DATA.wop.records.find(x => String(x.wopNo) === t.value.trim());
     if(w){ const s = k => document.querySelector('#plc [data-pv="' + k + '"]'); if(s('charge') && !s('charge').value) s('charge').value = clean(w.chargeCode || ''); if(s('site') && !s('site').value) s('site').value = clean(w.location || ''); if(s('title') && !s('title').value) s('title').value = clean(w.wopTitle || ''); } }
   plcCalc();
@@ -1992,6 +2069,12 @@ async function plcClick(e){
   if(a === 'imp'){ toast('Import from Excel is not available yet — coming soon.', 5000); return; }
   if(a === 'spAll'){ const L = PLC.recs.filter(r => !plcClosed(r) && (r.stage === 1 || r.stage === 2)); if(!L.length){ toast('Nothing in Store & PSR to check.'); return; } plcSurplusShow(L, false); return; }
   if(a === 'spOne'){ const c = plcClone(r0); $$('#plc [data-sk]').forEach(e2 => { c.items[+e2.dataset.sk].stock = clean(e2.value); }); plcSurplusShow([c], true); return; }
+  if(a === 'restore'){ if(OPS) plcRestore(); return; }
+  if(a === 'delAll'){ if(!OPS || !PLC.recs.length) return;
+    const t = prompt('Delete ALL ' + PLC.recs.length + ' packages (MRF, PSR, RFQ, LOA, PO and history)?\nSettings are kept. You can bring them back with More ▾ → Restore last deleted (on this device).\n\nType DELETE to confirm:'); if(t === null) return;
+    if(t.trim().toUpperCase() !== 'DELETE'){ toast('Not deleted — type DELETE to confirm.'); return; }
+    if(await plcRemove(PLC.recs.map(r => r.id), 'Procurement Lifecycle — deleted all ' + PLC.recs.length + ' packages')){ PLC.sel = null; renderPlc(); toast('All packages deleted — More ▾ → Restore last deleted to undo.', 6000); }
+    return; }
   if(a === 'help'){ PLC.help = !PLC.help; renderPlc(); return; }
   if(a === 'copy'){ plcCopy(); return; }
   if(a === 'xlsx'){ plcExcel(); return; }
@@ -2026,6 +2109,13 @@ async function plcClick(e){
     if(!r.id) return;
     const from = PLC_STEPS[r.stage].t; r.stage = 0; r.status = 'returned'; r.retNote = why + ' (from ' + from + ')'; r.stageAt = plcNow(); r.psr.t = {};
     await save(tag() + 'Returned to requester at ' + from + ': ' + why); return;
+  }
+  if(a === 'del'){
+    const ref = plcRef(r0), po = r0.stage >= 6 && r0.status !== 'cancelled';
+    if(po){ const t = prompt(ref + ' already has an issued PO (' + r0.po.no + ').\nDeleting removes the package, its PSR, RFQ, LOA, PO and history.\n\nType ' + ref + ' to confirm:'); if(t === null) return; if(t.trim().toUpperCase() !== ref.toUpperCase()){ toast('Not deleted — the reference did not match.'); return; } }
+    else if(!confirm('Delete ' + ref + ' — ' + (r0.title || '') + '?\n\nThe package and its history are removed. You can bring it back with More ▾ → Restore last deleted (on this device).')) return;
+    if(await plcRemove([r0.id], ref + ' — Deleted: ' + (r0.title || '') + (po ? ' (PO ' + r0.po.no + ')' : ''))){ PLC.sel = null; PLC.tab = null; renderPlc(); toast('Deleted ' + ref + ' — More ▾ → Restore last deleted to undo.', 6000); }
+    return;
   }
   if(a === 'cancel'){
     const why = (prompt('Cancel ' + (r.mrfNo || 'this MRF') + '? Enter the reason:') || '').trim(); if(!why) return;
@@ -2509,7 +2599,7 @@ const PLC_CSS = `<style>
 .psr-doc .psr-c td.c{width:34px}
 .psr-doc .psr-t{border:2px solid #000}
 .psr-doc .psr-t th{background:#C6E0B4;border:1px solid #000;font-weight:700;padding:4px;text-align:center;vertical-align:middle}
-.psr-doc .psr-t td{border-left:1px solid #000;border-right:1px solid #000;border-bottom:1px solid #ddd;height:14.5px;padding:1px 4px}
+.psr-doc .psr-t td{border-left:1px solid #000;border-right:1px solid #000;border-bottom:1px solid #ddd;height:var(--rh,14.5px);padding:0 4px;line-height:1.1;font-size:var(--fz,10.5px)}
 .psr-doc .psr-s{border:2px solid #000;border-top:0;table-layout:fixed}
 .psr-doc .psg{border-right:1px solid #000;vertical-align:top;padding:2px 3px}
 .psr-doc .psg:last-child{border-right:0}
@@ -2521,7 +2611,7 @@ const PLC_CSS = `<style>
 @media print{ #printArea .psr-doc{box-shadow:none;padding:0;min-width:0;max-width:none} #printArea .psr-doc *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   #printArea .psr-doc th,#printArea .psr-doc td{background:none} #printArea .psr-doc .psr-t th,#printArea .psr-doc .psr-c th{background:#C6E0B4;border:1px solid #000;color:#000;text-align:center;vertical-align:middle}
   #printArea .psr-doc .psr-hd th,#printArea .psr-doc .psr-hd td{border:0;background:none} #printArea .psr-doc .psr-hd td.u{border-bottom:1px solid #999}
-  #printArea .psr-doc .psr-c td{border:1px solid #000} #printArea .psr-doc .psr-t td{border:0;border-left:1px solid #000;border-right:1px solid #000;border-bottom:1px solid #ddd}
+  #printArea .psr-doc .psr-c td{border:1px solid #000} #printArea .psr-doc .psr-t td{border:0;border-left:1px solid #000;border-right:1px solid #000;border-bottom:1px solid #ddd;padding:0 4px;height:var(--rh,14.5px);font-size:var(--fz,10.5px);line-height:1.1;vertical-align:middle} #printArea .psr-doc .psr-t th{padding:3px 4px} #printArea .psr-doc .psr-hd th,#printArea .psr-doc .psr-hd td{padding:3px 4px} #printArea .psr-doc .psg{padding:2px 3px}
   #printArea .psr-doc .psr-s td{border:0;border-right:1px solid #000} #printArea .psr-doc .psr-s td:last-child{border-right:0} }
 
 #plc .pl-flowg{position:relative;grid-template-columns:repeat(6,minmax(0,1fr))!important;grid-template-rows:100px 100px;row-gap:0!important}
@@ -2552,6 +2642,34 @@ const PLC_CSS = `<style>
 #plc-sp .pl-t td{padding:8px;border-bottom:1px solid var(--border-soft);vertical-align:top}
 #plc-sp .pl-t .n{text-align:right;white-space:nowrap}
 #plc-sp .pl-tw{overflow-x:auto}
+
+#plc .zb-panel button:disabled{opacity:.45;cursor:default}
+
+#plc .pl-run{border-radius:var(--pl-r);padding:12px 18px 6px;margin-bottom:14px}
+#plc .pl-run-h{font-size:11.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px}
+#plc .pl-run-r{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 28px;padding:7px 0;border-top:1px dashed var(--border-soft);font-size:13px;color:var(--text-dim)}
+#plc .pl-run-h+.pl-run-r{border-top:0}
+#plc .pl-rn{font-size:14.5px;color:var(--text);font-family:var(--mono)}
+#plc .pl-rx{color:var(--accent);font-family:var(--mono)}
+#plc .pl-rd{color:var(--text-faint)}
+#plc .pl-rg{color:var(--bad);font-weight:600}
+
+#plc .psr-it tr[data-cat="0"]{--cc:#3B82C4}#plc .psr-it tr[data-cat="1"]{--cc:#8B5CF6}#plc .psr-it tr[data-cat="2"]{--cc:#14A3A3}#plc .psr-it tr[data-cat="3"]{--cc:#E07B39}
+#plc .psr-it tr[data-cat="4"]{--cc:#D6558B}#plc .psr-it tr[data-cat="5"]{--cc:#C99A1B}#plc .psr-it tr[data-cat="6"]{--cc:#5B7C99}#plc .psr-it tr[data-cat="7"]{--cc:#8A94A3}
+#plc .psr-it tr.psr-cg td{background:color-mix(in srgb,var(--cc) 16%,var(--panel))!important;border-left:4px solid var(--cc);padding:8px 12px;font-size:12px;letter-spacing:.08em;color:var(--text)}
+#plc .psr-it tr.psr-cg td span{color:var(--text-faint);letter-spacing:0}
+#plc .psr-it tr.psr-cg td::first-letter{color:var(--cc)}
+#plc .psr-it tr.psr-ci td{background:color-mix(in srgb,var(--cc) 5%,var(--panel))!important}
+#plc .psr-it tr.psr-ci td:first-child{border-left:3px solid var(--cc)}
+#plc .psr-cs{font:inherit;font-size:12px;padding:6px 6px;border:1px solid var(--border);border-radius:7px;background:var(--panel2);color:var(--text);max-width:150px}
+#plc .psr-cs:disabled{border-color:transparent;background:transparent}
+.psr-doc .psr-t td.pcg{font-weight:700;text-decoration:underline}
+
+#plc .psr-it input[data-pk="desc"]{min-width:280px}
+#plc .psr-it input[data-pk="qty"]{min-width:64px;max-width:80px}
+#plc .psr-it input[data-pk="unit"]{min-width:58px;max-width:72px}
+#plc .psr-it input[data-pk="dur"]{min-width:84px}
+#plc .psr-it input[data-pk="rem"]{min-width:110px}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
