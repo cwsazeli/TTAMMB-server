@@ -1936,27 +1936,74 @@ function plcS2(r, ed, sub){
 PLC.pend = null;    // {id, k, s: signature, c: cop} — picked, not saved yet
 const plcSigKey = (n, kind) => 'ttammhub_plc_' + (kind === 'c' ? 'cop' : 'sig') + ':' + String(n || '').trim().toLowerCase();
 function plcSigSaved(name, kind){ try{ return localStorage.getItem(plcSigKey(name, kind)) || ''; }catch(e){ return ''; } }
+/* Clean a signature / cop picture: find the paper colour (grey or white, whatever the lighting), make it transparent, keep the ink,
+   trim to the ink, then shrink to fit the signature box. Works on new uploads and on pictures saved earlier. */
+function plcSigProcess(im, kind){
+  const A = Math.min(1, 1000 / Math.max(im.width, im.height)), w = Math.max(1, Math.round(im.width * A)), h = Math.max(1, Math.round(im.height * A));
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); x.drawImage(im, 0, 0, w, h);
+  const D = x.getImageData(0, 0, w, h), p = D.data, n = w * h;
+  // paper = light, low-colour opaque pixels (white or grey, whatever the lighting); ink is dark or clearly coloured
+  const L = new Float32Array(n), hist = new Uint32Array(256); let op = 0, cand = 0;
+  for(let i = 0, k = 0; k < n; i += 4, k++){ const l = 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2]; L[k] = l; if(p[i + 3] > 128){ op++; const sa = Math.max(p[i], p[i + 1], p[i + 2]) - Math.min(p[i], p[i + 1], p[i + 2]); if(sa < 45 && l > 95){ hist[l | 0]++; cand++; } } }
+  if(!op) return null;
+  const noPaper = cand < op * 0.25;            // e.g. a picture cleaned earlier: only ink left → keep the ink, just trim and resize
+  let acc = 0, cut = 255; for(let v = 255; v >= 0; v--){ acc += hist[v]; if(acc >= cand * 0.55){ cut = v; break; } }
+  let br = 255, bg = 255, bb = 255, bn = 0;
+  if(!noPaper){ br = bg = bb = 0; for(let i = 0, k = 0; k < n; i += 4, k++){ if(p[i + 3] > 128 && L[k] >= cut && L[k] > 95 && Math.max(p[i], p[i + 1], p[i + 2]) - Math.min(p[i], p[i + 1], p[i + 2]) < 45){ br += p[i]; bg += p[i + 1]; bb += p[i + 2]; bn++; } }
+    br /= bn; bg /= bn; bb /= bn; }
+  const bL = 0.3 * br + 0.59 * bg + 0.11 * bb;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for(let i = 0, k = 0; k < n; i += 4, k++){
+    if(p[i + 3] < 10){ p[i + 3] = 0; continue; }
+    if(noPaper){ if(p[i + 3] > 90){ const xx = k % w, yy = (k / w) | 0; if(xx < x0) x0 = xx; if(xx > x1) x1 = xx; if(yy < y0) y0 = yy; if(yy > y1) y1 = yy; } continue; }
+    const dark = bL - L[k], col = Math.hypot(p[i] - br, p[i + 1] - bg, p[i + 2] - bb), sat = Math.max(p[i], p[i + 1], p[i + 2]) - Math.min(p[i], p[i + 1], p[i + 2]);
+    const score = Math.max(dark, sat > 40 ? col * 0.8 : 0);          // darker than the paper, or clearly coloured (blue / purple cop ink)
+    const a = score <= 22 ? 0 : score >= 60 ? 1 : (score - 22) / 38;
+    if(!a){ p[i + 3] = 0; continue; }
+    const wb = (v, b) => { const t = v * 255 / Math.max(40, b); return Math.max(0, Math.min(255, 255 - (255 - t) * 1.25)); };   // white-balance against the paper, then a little more contrast: ink stays ink-coloured
+    p[i] = wb(p[i], br); p[i + 1] = wb(p[i + 1], bg); p[i + 2] = wb(p[i + 2], bb);
+    p[i + 3] = Math.round(255 * a);
+    if(a > 0.35){ const xx = k % w, yy = (k / w) | 0; if(xx < x0) x0 = xx; if(xx > x1) x1 = xx; if(yy < y0) y0 = yy; if(yy > y1) y1 = yy; }
+  }
+  x.putImageData(D, 0, 0);
+  if(x1 < 0) return null;
+  const pad = Math.round(Math.max(w, h) * 0.015); x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+  const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+  for(const [W, H] of (kind === 'c' ? [[230, 230], [190, 190], [160, 160], [130, 130]] : [[360, 140], [300, 116], [240, 92], [190, 72]])){
+    const sc = Math.min(1, W / cw, H / ch), o = document.createElement('canvas'); o.width = Math.max(1, Math.round(cw * sc)); o.height = Math.max(1, Math.round(ch * sc));
+    const ox = o.getContext('2d'); ox.imageSmoothingQuality = 'high'; ox.drawImage(c, x0, y0, cw, ch, 0, 0, o.width, o.height);
+    for(const q of [0.82, 0.68, 0.52]){ const u = o.toDataURL('image/webp', q); if(/^data:image\/webp/.test(u) && u.length < 9500) return u; }
+    const u = o.toDataURL('image/png'); if(u.length < 9500) return u;
+  }
+  return '';
+}
 function plcSigMake(file, kind){
   return new Promise((res, rej) => {
     if(!/^image\//.test(file.type)) return rej(new Error('Choose an image (photo or scan of the signature).'));
     const fr = new FileReader(); fr.onerror = () => rej(new Error('Could not read the file.'));
     fr.onload = () => { const im = new Image(); im.onerror = () => rej(new Error('Could not open the image.'));
-      im.onload = () => {
-        const cut = (W0, H0) => { const sc = Math.min(1, W0 / im.width, H0 / im.height), w = Math.max(1, Math.round(im.width * sc)), h = Math.max(1, Math.round(im.height * sc));
-          const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); x.drawImage(im, 0, 0, w, h);
-          const d = x.getImageData(0, 0, w, h), p = d.data;
-          for(let i = 0; i < p.length; i += 4){ const l = 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2]; if(l > 215) p[i + 3] = 0; else if(l > 175) p[i + 3] = Math.round(p[i + 3] * (215 - l) / 40); }
-          x.putImageData(d, 0, 0); return c; };
-        let out = '';
-        for(const [W, H] of (kind === 'c' ? [[230, 230], [190, 190], [160, 160], [130, 130]] : [[360, 140], [300, 116], [240, 92], [190, 72]])){ const c = cut(W, H);
-          for(const q of [0.8, 0.65, 0.5]){ const u = c.toDataURL('image/webp', q); if(/^data:image\/webp/.test(u) && u.length < 9500){ out = u; break; } }
-          if(!out){ const u = c.toDataURL('image/png'); if(u.length < 9500) out = u; }
-          if(out) break; }
-        if(!out) return rej(new Error('The image is too detailed — crop it to just the signature and stamp, then try again.'));
+      im.onload = () => { const out = plcSigProcess(im, kind);
+        if(out === null) return rej(new Error('No signature found in the picture — take it on plain paper with good light.'));
+        if(!out) return rej(new Error('The image is too detailed — crop it to just the ' + (kind === 'c' ? 'cop' : 'signature') + ', then try again.'));
         res(out); };
       im.src = fr.result; };
     fr.readAsDataURL(file);
   });
+}
+/* pictures saved before the background fix are cleaned again just before printing (results kept for this session) */
+const PLC_CLEAN = new Map();
+function plcSigClean(url, kind){
+  if(!url) return Promise.resolve(url); if(PLC_CLEAN.has(url)) return Promise.resolve(PLC_CLEAN.get(url));
+  return new Promise(res => { const im = new Image(); im.onload = () => { let o = '';
+    try{ // already clean (mostly transparent) → keep as is; only pictures that still carry their paper background are processed
+      const c = document.createElement('canvas'), sc = Math.min(1, 200 / Math.max(im.width, im.height)); c.width = Math.max(1, Math.round(im.width * sc)); c.height = Math.max(1, Math.round(im.height * sc));
+      const x = c.getContext('2d'); x.drawImage(im, 0, 0, c.width, c.height); const p = x.getImageData(0, 0, c.width, c.height).data; let tr = 0; for(let i = 3; i < p.length; i += 4) if(p[i] < 20) tr++;
+      o = plcSigProcess(im, kind) || url; }catch(e){ o = url; } PLC_CLEAN.set(url, o); PLC_CLEAN.set(o, o); res(o); }; im.onerror = () => res(url); im.src = url; });
+}
+async function plcSigCleanAll(r){
+  const S = Object.assign({}, r.sigs), C = Object.assign({}, r.stamps);
+  await Promise.all(Object.keys(S).map(async k => { S[k] = await plcSigClean(S[k], 's'); }).concat(Object.keys(C).map(async k => { C[k] = await plcSigClean(C[k], 'c'); })));
+  r.sigs = S; r.stamps = C; return r;
 }
 function plcSigBox(r, k){
   const name = hubUser(), P = PLC.pend && PLC.pend.id === (r.id || '__new') && PLC.pend.k === k ? PLC.pend : {};
@@ -2032,15 +2079,29 @@ function plcPrint(html){
   const done = () => { document.body.classList.remove('printing'); window.removeEventListener('afterprint', done); };
   window.addEventListener('afterprint', done); setTimeout(() => { window.print(); setTimeout(done, 1500); }, 60);
 }
-function plcPsrShow(){
+/* fit the printed page inside the preview window (click the page to switch between "whole page" and 100 %) */
+function plcFit(){
+  const d = $('#dlgPlc'), db = $('#plDlgB'), wrap = db && db.querySelector('.po-wrap'), doc = wrap && wrap.querySelector('.psr-doc,.tcb-doc,.po-doc'); if(!doc) return;
+  d.classList.add('pv');
+  let box = wrap.querySelector('.pv-box'); if(!box){ box = document.createElement('div'); box.className = 'pv-box'; doc.parentNode.insertBefore(box, doc); box.appendChild(doc);
+    box.title = 'Click to zoom in / out'; box.onclick = () => { PLC.pvFull = !PLC.pvFull; plcFit(); }; }
+  const W = doc.classList.contains('tcb-doc') ? 1300 : doc.classList.contains('po-doc') ? 820 : 1120;      // the page's own width (A4 landscape forms / A4 portrait PO)
+  doc.style.transform = ''; doc.style.width = W + 'px'; const H = doc.offsetHeight;
+  const cs = getComputedStyle(wrap), aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), ah = db.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 4;
+  const sc = PLC.pvFull ? 1 : Math.min(1, aw / W, ah / H);
+  doc.style.width = W + 'px'; doc.style.transform = 'scale(' + sc + ')'; doc.style.transformOrigin = 'top left';
+  box.style.width = Math.floor(W * sc) + 'px'; box.style.height = Math.floor(H * sc) + 'px'; box.classList.toggle('full', !!PLC.pvFull); wrap.classList.toggle('pv-scroll', !!PLC.pvFull);
+}
+if(!window.__plcFitR){ window.__plcFitR = true; window.addEventListener('resize', () => { const d = $('#dlgPlc'); if(d && d.open && d.classList.contains('pv')) plcFit(); }); }
+async function plcPsrShow(){
   const r0 = plcCur(); if(!r0) return;
-  const r = plcReadPsr(plcClone(r0)), d = $('#dlgPlc');
+  const r = await plcSigCleanAll(plcReadPsr(plcClone(r0))), d = $('#dlgPlc');
   $('#plDlgT').textContent = '📄 Purchase / Service Requisition ' + (r.psr.no || r.psr.noDraft || '');
   $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap psr-wrap">${plcPsrHtml(r).replace(/<style>@page[^<]*<\/style>/, '')}</div>`;
   $('#plDlgF').innerHTML = `<span class="faint" style="font-size:12px;margin-right:auto">Prints on A4 landscape. Empty lines are left for writing by hand.</span><button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF</button>`;
   $('#plDlgX').onclick = () => d.close();
   $('#plDlgP').onclick = () => { d.close(); plcPrint(plcPsrHtml(r)); };
-  d.showModal();
+  PLC.pvFull = false; d.classList.add('pv'); if(!d.open) d.showModal(); requestAnimationFrame(plcFit);
 }
 /* 4 — RFQ: Technical Commercial Bid Evaluation (TCBE). One tab per supplier (offer / brand, parity and unit price per item),
    a live comparison underneath (lowest compliant price per item in green), and the TCBE sheet to print on A4 landscape. */
@@ -2179,7 +2240,7 @@ function plcTcbeShow(){
   $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap psr-wrap">${plcTcbeHtml(r).replace(/<style>@page[^<]*<\/style>/, '')}</div>`;
   $('#plDlgF').innerHTML = `<span class="faint" style="font-size:12px;margin-right:auto">Prints on A4 landscape. Lowest compliant price per item in green.</span><button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF</button>`;
   $('#plDlgX').onclick = () => d.close(); $('#plDlgP').onclick = () => { d.close(); plcPrint(plcTcbeHtml(r)); };
-  d.showModal();
+  PLC.pvFull = false; d.classList.add('pv'); if(!d.open) d.showModal(); requestAnimationFrame(plcFit);
 }
 /* 5 — LOA */
 function plcS4(r, ed){
@@ -2267,7 +2328,7 @@ async function plcClick(e){
   if(d.ppsr){ plcPsrShow(); return; }
   if(d.psig){ const inp = document.querySelector('#plc input[data-psigf="' + d.psig + '"]'); if(inp) inp.click(); return; }
   if(d.psigx){ const [, kind] = d.psigx.split(':'); if(PLC.pend) delete PLC.pend[kind]; plcKeepTier(); renderPlc(); return; }
-  if(d.psigu){ const r1 = plcCur(), id = (r1 && r1.id) || '__new', [tk, kind] = d.psigu.split(':'); if(!PLC.pend || PLC.pend.id !== id || PLC.pend.k !== tk) PLC.pend = {id, k: tk}; PLC.pend[kind] = plcSigSaved(hubUser(), kind); plcKeepTier(); renderPlc(); return; }
+  if(d.psigu){ const r1 = plcCur(), id = (r1 && r1.id) || '__new', [tk, kind] = d.psigu.split(':'); if(!PLC.pend || PLC.pend.id !== id || PLC.pend.k !== tk) PLC.pend = {id, k: tk}; plcKeepTier(); plcSigClean(plcSigSaved(hubUser(), kind), kind).then(u => { PLC.pend[kind] = u; renderPlc(); }); return; }
   if(d.popen){ PLC.sel = d.popen; PLC.tab = null; renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(d.ptab !== undefined){ PLC.tab = +d.ptab; renderPlc(); return; }
   const r0 = plcCur();
@@ -2434,11 +2495,11 @@ function plcPoShow(id, unp){
     $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap">${plcPoHtml(r, U)}</div>`;
     $('#plDlgF').innerHTML = `<div class="pl-seg" role="group" aria-label="PO version"><button type="button" class="${U ? '' : 'on'}" id="plPoP">Priced PO</button><button type="button" class="${U ? 'on' : ''}" id="plPoU">Unpriced PO</button></div><span style="flex:1"></span>
       <button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF — ${U ? 'unpriced' : 'priced'}</button>`;
-    $('#plPoP').onclick = () => { U = false; draw(); }; $('#plPoU').onclick = () => { U = true; draw(); };
+    $('#plPoP').onclick = () => { U = false; draw(); requestAnimationFrame(plcFit); }; $('#plPoU').onclick = () => { U = true; draw(); requestAnimationFrame(plcFit); };
     $('#plDlgX').onclick = () => d.close();
     $('#plDlgP').onclick = () => { d.close(); plcPrint(plcPoHtml(r, U)); };
   };
-  draw(); if(!d.open) d.showModal();
+  PLC.pvFull = false; d.classList.add('pv'); draw(); if(!d.open) d.showModal(); requestAnimationFrame(plcFit);
 }
 
 /* ---------- Surplus Ledger check: is any of the stock left over (Procurement → Surplus Ledger) a match for what the MRF / PSR asks for? ---------- */
@@ -2460,7 +2521,7 @@ function plcSurplusMatch(desc, rows){
 /* recs: the packages to check · inStore: true when opened from a package's store check (offers "Use") */
 async function plcSurplusShow(recs, inStore){
   const d = $('#dlgPlc');
-  $('#plDlgT').textContent = '♻ Check against the Surplus Ledger';
+  $('#dlgPlc').classList.remove('pv'); $('#plDlgT').textContent = '♻ Check against the Surplus Ledger';
   $('#plDlgB').innerHTML = PLC_CSS + '<div class="note">Working out the surplus stock…</div>';
   $('#plDlgF').innerHTML = '<button class="btn" id="plDlgX">Close</button>'; $('#plDlgX').onclick = () => d.close();
   if(!d.open) d.showModal();
@@ -2492,7 +2553,7 @@ async function plcSurplusShow(recs, inStore){
 function plcSettings(){
   const C = PLC.cfg, d = $('#dlgPlc');
   const f = (k, l, t) => `<label class="pl-fl"><span>${l}</span><input data-pc="${k}" type="${t || 'text'}" value="${esc(C[k] ?? '')}"></label>`;
-  $('#plDlgT').textContent = '⚙ Procurement Lifecycle — settings';
+  d.classList.remove('pv'); $('#plDlgT').textContent = '⚙ Procurement Lifecycle — settings';
   $('#plDlgB').innerHTML = PLC_CSS + `<div class="pl-form" style="margin-top:0">${f('company', 'Company name (PO header)')}${f('reg', 'Company registration no')}
     <label class="pl-fl w"><span>Company address (PO header)</span><input data-pc="addr" value="${esc(C.addr)}"></label>${f('phone', 'Phone / e-mail on PO')}${f('deliverTo', 'Default delivery address')}
     ${f('approver', 'Default LOA signatory')}${f('approverTitle', 'Signatory designation')}${f('terms', 'Default payment terms')}${f('sst', 'Default SST %', 'number')}${f('minBids', 'Minimum quotations for RFQ', 'number')}</div>
@@ -2679,6 +2740,13 @@ const PLC_CSS = `<style>
 /* PO document (dialog preview and print) */
 #dlgPlc{max-width:940px}
 #dlgPlc .db{max-height:72vh;overflow:auto}
+#dlgPlc.pv{max-width:min(1500px,96vw);width:96vw}
+#dlgPlc.pv .db{height:calc(92vh - 150px);max-height:none;overflow:hidden;padding:10px}
+#dlgPlc.pv .po-wrap{height:100%;overflow:hidden;display:flex;justify-content:center;align-items:flex-start;padding:10px;box-sizing:border-box}
+#dlgPlc.pv .po-wrap.pv-scroll{overflow:auto;display:block}
+#dlgPlc .pv-box{position:relative;cursor:zoom-in;flex:0 0 auto;margin:0 auto}
+#dlgPlc .pv-box.full{cursor:zoom-out}
+#dlgPlc .pv-box>div{margin:0!important;max-width:none!important}
 .po-wrap{background:#E9EDF2;padding:18px;border-radius:8px}
 .po-doc{position:relative;background:#fff;color:#111;font-family:var(--sans);font-size:12.5px;line-height:1.45;padding:28px 30px;max-width:820px;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.12);overflow:hidden}
 .po-doc .po-wm{position:absolute;top:38%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);font-size:110px;font-weight:800;color:rgba(200,40,40,.09);letter-spacing:.1em;pointer-events:none}
@@ -2973,8 +3041,8 @@ const PLC_CSS = `<style>
 #plc .pl-sigdone img{height:44px;max-width:150px;object-fit:contain}
 .psr-doc .psg-s{position:relative}
 .psr-doc .psg-s img{position:absolute;object-fit:contain;mix-blend-mode:multiply}
-.psr-doc .psg-s img.ps{left:50px;top:-8px;height:74px;max-width:62%;object-position:left center}
-.psr-doc .psg-s img.pc{left:44%;top:-10px;height:66px;width:66px;opacity:.9}
+.psr-doc .psg-s img.ps{left:52px;top:-4px;height:62px;max-width:58%;object-position:left center}
+.psr-doc .psg-s img.pc{left:52%;top:-8px;height:68px;width:68px;opacity:.92}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
