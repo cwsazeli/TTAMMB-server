@@ -1436,17 +1436,17 @@ $('#btnStaff').addEventListener('click', () => (LEVEL !== 'client' || PREVIEW) ?
    without a Sheet it is kept on this device. Viewing: Management/Operation and Admin. Every change asks for the name and
    the access password (same as all modules) and is written to the Activity log. */
 const PLC_KEY = 'ttammhub_plc';
-const PLC_FIELDS = ['id','mrfNo','title','desc','wopNo','site','charge','reqBy','reqDate','needBy','priority','stage','status','stageAt','retNote','items','store','psr','rfq','loa','po','log','cfg','createdAt','createdBy','updatedAt','updatedBy'];
-const PLC_JSON = ['items','store','psr','rfq','loa','po','log','cfg'];
+const PLC_FIELDS = ['id','mrfNo','title','desc','wopNo','site','charge','reqBy','reqDate','needBy','priority','stage','status','stageAt','retNote','items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','createdAt','createdBy','updatedAt','updatedBy'];
+const PLC_JSON = ['items','store','psr','rfq','loa','po','log','cfg','sigs','stamps'];
 const PLC_STEPS = [
   {t: 'MRF Submission', s: 'Site / Workshop'},
   {t: 'Store Verification', s: 'Stock check'},
-  {t: 'PSR 3-Tier Review', s: 'PE → CC → PM'},
+  {t: 'PSR Review', s: 'PE → CC → PM → Director'},
   {t: 'RFQ 3-Bid Matrix', s: 'Vendors evaluated'},
   {t: 'Management LOA', s: 'Sign-off'},
   {t: 'PO Generated', s: 'Official PO'}
 ];
-const PLC_TIERS = [['pe', 'PE', 'Project Engineer', 'prepares the PSR'], ['cc', 'CC', 'Cost Control', 'checks budget and charge code'], ['pm', 'PM', 'Project Manager', 'approves the PSR']];
+const PLC_TIERS = [['pe', 'PE', 'Project Engineer', 'prepares the PSR'], ['cc', 'CC', 'Cost Control', 'checks budget and charge code'], ['pm', 'PM', 'Project Manager', 'approves the PSR'], ['dir', 'DIR', 'Director', 'approves the PSR']];
 const PLC_CFG0 = {company: 'ZULKIFLI NGAH ENGINEERING SDN BHD', reg: '', addr: '', phone: '', mrf: 'MRF-{YY}-', psr: 'PSR-{YY}-', rfq: 'RFQ-{YY}-', loa: 'LOA-{YY}-', po: 'ZNE/PO/{YY}/',
   approver: '', approverTitle: 'Director', deliverTo: '', terms: '30 days from invoice date', sst: 0, minBids: 3};
 let PLC = {recs: [], cfg: Object.assign({}, PLC_CFG0), loaded: false, busy: false, err: '', f: {st: 'active', q: ''}, sel: null, tab: null, draft: null};
@@ -1457,6 +1457,7 @@ function plcParse(r){
   const o = Object.assign({}, r); PLC_JSON.forEach(k => { o[k] = plcJ(o[k]); });
   o.stage = Number(o.stage) || 0; if(!Array.isArray(o.items)) o.items = []; if(!Array.isArray(o.log)) o.log = [];
   ['store', 'psr', 'rfq', 'loa', 'po'].forEach(k => { if(!o[k] || typeof o[k] !== 'object' || Array.isArray(o[k])) o[k] = {}; });
+  ['sigs', 'stamps'].forEach(f => { if(!o[f] || typeof o[f] !== 'object' || Array.isArray(o[f])) o[f] = {}; });
   if(!Array.isArray(o.rfq.bids)) o.rfq.bids = []; if(!o.psr.t || typeof o.psr.t !== 'object') o.psr.t = {};
   o._base = String(o.updatedAt || ''); return o;
 }
@@ -1576,9 +1577,9 @@ function plcAuth(roles, lines){
 function plcNeed(a, r, d){
   if(a === 'saveMrf' || a === 'submitMrf') return PLC_ANY;
   if(a === 'savePsr' || a === 'submitPsr') return ['PE'];
-  if(a === 'return') return r.stage === 1 ? ['MATCO'] : r.stage === 2 ? ['PE', 'CC', 'PM'] : r.stage === 3 ? ['PROC'] : r.stage === 4 ? ['DIR'] : PLC_ANY;
+  if(a === 'return') return r.stage === 1 ? ['MATCO'] : r.stage === 2 ? ['PE', 'CC', 'PM', 'DIR'] : r.stage === 3 ? ['PROC'] : r.stage === 4 ? ['DIR'] : PLC_ANY;
   if(a === 'storeOk') return ['MATCO'];
-  if(a === 'tierOk') return [{pe: 'PE', cc: 'CC', pm: 'PM'}[d.tier]];
+  if(a === 'tierOk') return [{pe: 'PE', cc: 'CC', pm: 'PM', dir: 'DIR'}[d.tier]];
   if(a === 'saveRfq' || a === 'rfqOk') return ['PROC'];
   if(a === 'loaOk' || a === 'loaNo') return ['DIR'];
   if(a === 'savePo' || a === 'poOk') return ['PROC'];
@@ -1728,9 +1729,9 @@ function plcHead(){
     <div class="tb-meta"><span>📦 Records <b>${R.length}</b></span>${last && last.updatedAt ? `<span>🕐 Updated <b>${esc(dt(last.updatedAt))}</b>${last.updatedBy ? ' · by <b>' + esc(last.updatedBy) + '</b>' : ''}</span>` : '<span>No records yet</span>'}<span>🗂 Storage <b>${url ? 'Google Sheets · WOP_plc' : 'this device only'}</b></span><span title="PE · CC · Matco · Procurement · PM · Director — the Admin password works for every step">🔐 Each step asks for its <b>role password</b></span></div></div>
   ${PLC.help ? `<div class="pl-help"><b>How a package moves</b><br>
     <b>1 MRF</b> — site raises what is needed, charge code and need-by date. · <b>2 Store</b> — store enters what is in stock; only the balance is bought (all in stock → closed, issued from store). ·
-    <b>3 PSR 3-Tier</b> — PE prepares, Cost Control checks budget / charge code, PM approves, in turn. · <b>4 RFQ</b> — at least ${num(c.minBids) || 3} quotations; the lowest compliant bid is marked L1, any other award needs a justification. ·
+    <b>3 PSR Review</b> — PE requests, Cost Control reviews budget / charge code, PM verifies, Director approves, in turn. · <b>4 RFQ</b> — at least ${num(c.minBids) || 3} quotations; the lowest compliant bid is marked L1, any other award needs a justification. ·
     <b>5 LOA</b> — management signs (or rejects back to RFQ). · <b>6 PO</b> — official PO with running number, print or save as PDF.<br>
-    Any step can be returned to the requester with a reason. <b>Passwords:</b> MRF — any role · PSR submission and PE approval — PE · CC approval — CC · store check — Matco · PM approval — PM · RFQ and PO — Procurement · LOA — Director · cancel, delete and settings — Admin. The Admin password works for every step. Each change is written to the Activity log with your name and role.</div>` : ''}
+    Any step can be returned to the requester with a reason. <b>Passwords:</b> MRF — any role · PSR submission and PE approval — PE · CC approval — CC · store check — Matco · PM approval — PM · PSR final approval — Director · RFQ and PO — Procurement · LOA — Director · cancel, delete and settings — Admin. The Admin password works for every step. Each change is written to the Activity log with your name and role.</div>` : ''}
   <div class="tabs">${tabs}</div>`;
 }
 const plcRef = r => r.mrfNo || r.psr.no || (r.direct ? 'PSR' : 'MRF');
@@ -1773,7 +1774,7 @@ function renderPlc(){
     const n0 = (dir) => act.filter(r => r.stage === 0 && !!r.direct === dir), sub0 = l => { const d = l.filter(r => r.status === 'draft').length, x = l.length - d; return l.length ? d + ' draft · ' + x + ' returned' : ''; };
     const nd = (n, view, t, sm, c, rw) => ({h: `<button class="pl-pstep${n ? ' has' : ''}" data-pview="${view}"><span class="c">${n}</span><b>${t}</b><small>${sm}</small></button>`, c, r: rw});
     const pipe = plcFlow('pl-pipe', [nd(n0(false).length, 'mrf', 'MRF Submission', sub0(n0(false)) || 'Site / Workshop', 1, 1), nd(n0(true).length, 'psr', 'PSR Submission', sub0(n0(true)) || 'Direct PSR', 1, 2)]
-      .concat(PLC_STEPS.slice(1).map((s, k) => nd(at(k + 1), goV(k + 1), s.t, k + 1 === 2 ? 'Final PSR · PE → CC → PM' : s.s, k + 2, 1))), {});
+      .concat(PLC_STEPS.slice(1).map((s, k) => nd(at(k + 1), goV(k + 1), s.t, k + 1 === 2 ? 'Final PSR · PE → CC → PM → DIR' : s.s, k + 2, 1))), {});
     const pr = act.filter(plcQ).sort(plcSort);
     body = `${pipe}
     <div class="pl-kpis">
@@ -1888,7 +1889,7 @@ function plcS1(r, ed){
 /* 3 — PSR 3-tier */
 /* 3 — PSR 3-tier, with the company PURCHASE/SERVICE REQUISITION form (fill in here, print A4 landscape) */
 const PLC_CATS = ['Equipment', 'Material', 'Consumable', 'Service'];
-const PLC_POS = {pe: 'Project Engineer', cc: 'Cost Control', pm: 'Project Manager'};
+const PLC_POS = {pe: 'Project Engineer', cc: 'Cost Control', pm: 'Project Manager', dir: 'Director'};
 function plcPsrForm(r){
   const f = Object.assign({}, r.psr.form || {}), w = r.wopNo && DATA.wop ? DATA.wop.records.find(x => String(x.wopNo) === String(r.wopNo)) : null;
   return Object.assign({projTitle: w ? clean(w.wopTitle || '') : r.title, projCode: r.charge || '', purpose: r.desc || r.title, delivery: r.site || '', expDate: r.needBy || '', pic: r.reqBy || '', contact: '', cat: [], appr: {}}, f, {appr: Object.assign({}, f.appr || {}), cat: Array.isArray(f.cat) ? f.cat : []});
@@ -1904,7 +1905,7 @@ function plcS2(r, ed, sub){
   const inp = (k, v, t, ph) => `<input data-pv="pf_${k}" type="${t || 'text'}" value="${esc(v)}"${ph ? ` placeholder="${esc(ph)}"` : ''}${plcRO(ed)}>`;
   const typ = it => it.type || 'P';
   return (sub ? `<div class="pl-sh"><h3>PSR Submission</h3><p>Raise a Purchase / Service Requisition directly. Submitting sends it to the store for a counter-check, then to the final PSR review (PE → CC → PM).</p></div>`
-    : plcSH(2, 'Final PSR review — after the store counter-check, PE, Cost Control and the Project Manager approve in turn. Print it any time for wet signatures.')) + `
+    : plcSH(2, 'Final PSR review — after the store counter-check: Requested (PE) → Reviewed (CC) → Verified (PM) → Approved (Director), in turn. Print it any time.')) + `
   <div class="psr-form">
     <div class="psr-top"><div class="psr-l">
       <label><span>Project Title</span>${inp('projTitle', f.projTitle)}</label>
@@ -1930,17 +1931,52 @@ function plcS2(r, ed, sub){
   </div>
   ${sub ? (ed ? '<div class="pl-btns"><button class="btn" data-ppsr="1">🖨 Print PSR form</button><span class="sp"></span><button class="btn" data-pa="savePsr">Save draft</button><button class="btn primary" data-pa="submitPsr">Submit PSR →</button></div>' : '<div class="pl-btns"><button class="btn" data-ppsr="1">🖨 Print PSR form</button></div>') : plcTiersHtml(r, ed, w, nx, f)}`;
 }
+/* Uploaded signatures (signature + company stamp photo): shrunk, white background made transparent, kept with the package
+   (column "sigs" in WOP_plc, one small image per sign-off) and printed in the signature box of the PSR form. */
+PLC.pend = null;    // {id, k, s: signature, c: cop} — picked, not saved yet
+const plcSigKey = (n, kind) => 'ttammhub_plc_' + (kind === 'c' ? 'cop' : 'sig') + ':' + String(n || '').trim().toLowerCase();
+function plcSigSaved(name, kind){ try{ return localStorage.getItem(plcSigKey(name, kind)) || ''; }catch(e){ return ''; } }
+function plcSigMake(file, kind){
+  return new Promise((res, rej) => {
+    if(!/^image\//.test(file.type)) return rej(new Error('Choose an image (photo or scan of the signature).'));
+    const fr = new FileReader(); fr.onerror = () => rej(new Error('Could not read the file.'));
+    fr.onload = () => { const im = new Image(); im.onerror = () => rej(new Error('Could not open the image.'));
+      im.onload = () => {
+        const cut = (W0, H0) => { const sc = Math.min(1, W0 / im.width, H0 / im.height), w = Math.max(1, Math.round(im.width * sc)), h = Math.max(1, Math.round(im.height * sc));
+          const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d'); x.drawImage(im, 0, 0, w, h);
+          const d = x.getImageData(0, 0, w, h), p = d.data;
+          for(let i = 0; i < p.length; i += 4){ const l = 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2]; if(l > 215) p[i + 3] = 0; else if(l > 175) p[i + 3] = Math.round(p[i + 3] * (215 - l) / 40); }
+          x.putImageData(d, 0, 0); return c; };
+        let out = '';
+        for(const [W, H] of (kind === 'c' ? [[230, 230], [190, 190], [160, 160], [130, 130]] : [[360, 140], [300, 116], [240, 92], [190, 72]])){ const c = cut(W, H);
+          for(const q of [0.8, 0.65, 0.5]){ const u = c.toDataURL('image/webp', q); if(/^data:image\/webp/.test(u) && u.length < 9500){ out = u; break; } }
+          if(!out){ const u = c.toDataURL('image/png'); if(u.length < 9500) out = u; }
+          if(out) break; }
+        if(!out) return rej(new Error('The image is too detailed — crop it to just the signature and stamp, then try again.'));
+        res(out); };
+      im.src = fr.result; };
+    fr.readAsDataURL(file);
+  });
+}
+function plcSigBox(r, k){
+  const name = hubUser(), P = PLC.pend && PLC.pend.id === (r.id || '__new') && PLC.pend.k === k ? PLC.pend : {};
+  const slot = (kind, lbl, ic) => { const v = P[kind]; return `<div class="pl-sigslot">${v ? `<img src="${v}" alt="${lbl}"><button type="button" class="pl-x" data-psigx="${k}:${kind}" title="Remove ${lbl}">✕</button>`
+    : `<button type="button" class="btn sm" data-psig="${k}:${kind}">${ic} Upload ${lbl}</button>${plcSigSaved(name, kind) ? `<button type="button" class="btn sm" data-psigu="${k}:${kind}" title="Saved on this device for ${esc(name)}">Use my saved ${lbl}</button>` : ''}`}
+    <input type="file" accept="image/*" data-psigf="${k}:${kind}" hidden></div>`; };
+  return `<div class="pl-sigbox">${slot('s', 'sign', '🖊')}${slot('c', 'cop', '🔵')}<span class="pl-sub">Photo or scan · white background removed · the cop prints over the signature</span></div>`;
+}
 function plcTiersHtml(r, ed, w, nx, f){
-  return `  <div class="pl-tiers">${PLC_TIERS.map(([k, ab, name, role]) => { const t = r.psr.t[k] || {}, isNow = ed && k === nx, lbl = {pe: 'Requested by', cc: 'Reviewed by', pm: 'Verified by'}[k];
+  return `  <div class="pl-tiers">${PLC_TIERS.map(([k, ab, name, role]) => { const t = r.psr.t[k] || {}, isNow = ed && k === nx, lbl = {pe: 'Requested by', cc: 'Reviewed by', pm: 'Verified by', dir: 'Approved by'}[k];
     return `<div class="pl-tier${t.at ? ' ok' : isNow ? ' now' : ''}"><span class="pl-tb">${ab}</span><div class="pl-tt"><b>${lbl} — ${name}</b><small>${role}</small>
-      ${t.at ? `<p>✓ <b>${esc(t.by)}</b>${t.pos ? ' · ' + esc(t.pos) : ''} · ${plcDT(t.at)}${t.note ? '<br><i>' + esc(t.note) + '</i>' : ''}</p>` : isNow ? `<div class="pl-tin pl-tin3"><input data-pv="tBy" placeholder="Name" value="${esc(hubUser())}"><input data-pv="tPos" placeholder="Position" value="${esc(PLC_POS[k])}"><input data-pv="tNote" placeholder="Remarks (optional)"></div>` : `<p class="faint">${r.stage > 2 ? '—' : 'Waiting'}</p>`}</div>
+      ${t.at ? `<p>✓ <b>${esc(t.by)}</b>${t.pos ? ' · ' + esc(t.pos) : ''} · ${plcDT(t.at)}${t.note ? '<br><i>' + esc(t.note) + '</i>' : ''}</p>${r.sigs[k] || r.stamps[k] ? `<span class="pl-sigdone">${r.sigs[k] ? `<img src="${r.sigs[k]}" alt="signature">` : ''}${r.stamps[k] ? `<img src="${r.stamps[k]}" alt="cop">` : ''}</span>` : ''}` : isNow ? `<div class="pl-tin pl-tin3"><input data-pv="tBy" placeholder="Name" value="${esc(hubUser())}"><input data-pv="tPos" placeholder="Position" value="${esc(PLC_POS[k])}"><input data-pv="tNote" placeholder="Remarks (optional)"></div>${plcSigBox(r, k)}` : `<p class="faint">${r.stage > 2 ? '—' : 'Waiting'}</p>`}</div>
       ${isNow ? `<div class="pl-tact">${r.id ? '<button class="btn sm" data-pa="return">↩ Return</button>' : ''}<button class="btn sm primary" data-pa="tierOk" data-tier="${k}">Approve as ${ab}</button></div>` : ''}</div>`; }).join('')}
-    <div class="pl-tier"><span class="pl-tb">✎</span><div class="pl-tt"><b>Approved by</b><small>Optional — leave empty to sign by hand on the printed form</small>
-      ${ed ? `<div class="pl-tin pl-tin3"><input data-pv="pf_apName" placeholder="Name" value="${esc(f.appr.name || '')}"><input data-pv="pf_apPos" placeholder="Position" value="${esc(f.appr.pos || '')}"><input data-pv="pf_apDate" type="date" value="${esc(f.appr.date || '')}"></div>`
-        : `<p>${f.appr.name ? esc(f.appr.name) + (f.appr.pos ? ' · ' + esc(f.appr.pos) : '') + (f.appr.date ? ' · ' + fmtD(f.appr.date) : '') : '<span class="faint">—</span>'}</p>`}</div></div></div>
+</div>
   <div class="pl-btns"><button class="btn" data-ppsr="1">🖨 Print PSR form</button>${ed ? '<span class="sp"></span><button class="btn" data-pa="savePsr">Save PSR form</button>' : ''}</div>
   ${!ed && r.stage === 2 ? w : ''}`;
 }
+/* keep the name / position / remark typed in the active sign-off row when the page redraws (e.g. after adding a signature) */
+function plcKeepTier(){ const g = k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); return e ? e.value : null; };
+  const v = {by: g('tBy'), pos: g('tPos'), note: g('tNote')}; if(v.by === null) return; setTimeout(() => { const s2 = (k, x) => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); if(e && x !== null) e.value = x; }; s2('tBy', v.by); s2('tPos', v.pos); s2('tNote', v.note); }, 0); }
 /* read what is typed on the PSR form into a copy of the record */
 function plcReadPsr(r){
   if(!document.querySelector('#plc [data-pv="pf_projTitle"]')) return r;
@@ -1969,7 +2005,7 @@ function plcPsrHtml(r){
   const body = Array.from({length: rows}, (_, k) => { const x = pr[k]; if(typeof x === 'string') return x; const it = x, i = it ? ni.get(it) - 1 : 0;
     return it ? `<tr><td class="c">${i + 1}</td><td>${esc(it.desc)}</td><td class="c">${plcNet(it)}</td><td class="c">${esc(String(it.unit || '').toUpperCase())}</td><td class="c">${tk(it, 'P')}</td><td class="c">${tk(it, 'R')}</td><td class="c">${tk(it, 'S')}</td><td class="c">${esc(String(it.dur || '').toUpperCase())}</td><td>${esc(it.rem || '')}</td></tr>`
       : '<tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'; }).join('');
-  const sg = (lbl, nm, pos, dt) => `<td class="psg"><div class="psg-l">${lbl}<span>:</span></div><div class="psg-s"></div>
+  const sg = (lbl, nm, pos, dt, img, cop) => `<td class="psg"><div class="psg-l">${lbl}<span>:</span></div><div class="psg-s">${img ? `<img class="ps" src="${img}" alt="">` : ''}${cop ? `<img class="pc" src="${cop}" alt="">` : ''}</div>
     <div class="psg-r"><span>Name</span><i>:</i><b>${esc(String(nm || '').toUpperCase())}</b></div><div class="psg-r"><span>Position</span><i>:</i><b>${esc(String(pos || '').toUpperCase())}</b></div><div class="psg-r"><span>Date</span><i>:</i><b>${dt}</b></div></td>`;
   const t = k => r.psr.t[k] || {};
   return `<style>@page{size:A4 landscape;margin:7mm}</style><div class="psr-doc">
@@ -1987,7 +2023,7 @@ function plcPsrHtml(r){
       <table class="psr-c"><tr><th colspan="2">Please tick (/) below category</th></tr>${PLC_CATS.map(c => `<tr><td>${c}</td><td class="c">${f.cat.includes(c) ? '/' : ''}</td></tr>`).join('')}</table></div>
     <table class="psr-t" style="--rh:${rh}px;--fz:${fz}px"><thead><tr><th rowspan="2" style="width:4%">No</th><th rowspan="2">Description / Size / Brand</th><th rowspan="2" style="width:4%">Qty</th><th rowspan="2" style="width:6%">UOM</th><th colspan="3">Type</th><th rowspan="2" style="width:8%">Duration (R/S)</th><th rowspan="2" style="width:17%">Remark</th></tr>
       <tr><th style="width:4.4%">P</th><th style="width:4.4%">R</th><th style="width:4%">S</th></tr></thead><tbody>${body}</tbody></table>
-    <table class="psr-s"><tr>${sg('Requested by', t('pe').by, t('pe').pos || 'Project Engineer', t('pe').at ? dIso(t('pe').at) : '')}${sg('Reviewed by', t('cc').by, t('cc').pos || '', t('cc').at ? dIso(t('cc').at) : '')}${sg('Verified by', t('pm').by, t('pm').pos || '', t('pm').at ? dIso(t('pm').at) : '')}${sg('Approved by', f.appr.name, f.appr.pos, d(f.appr.date))}</tr></table>
+    <table class="psr-s"><tr>${sg('Requested by', t('pe').by, t('pe').pos || 'Project Engineer', t('pe').at ? dIso(t('pe').at) : '', r.sigs.pe, r.stamps.pe)}${sg('Reviewed by', t('cc').by, t('cc').pos || '', t('cc').at ? dIso(t('cc').at) : '', r.sigs.cc, r.stamps.cc)}${sg('Verified by', t('pm').by, t('pm').pos || '', t('pm').at ? dIso(t('pm').at) : '', r.sigs.pm, r.stamps.pm)}${t('dir').at ? sg('Approved by', t('dir').by, t('dir').pos || 'Director', dIso(t('dir').at), r.sigs.dir, r.stamps.dir) : sg('Approved by', f.appr.name, f.appr.pos, d(f.appr.date))}</tr></table>
     <div class="psr-f"><span><b>Type :</b>&nbsp;&nbsp; <b>P</b> :PURCHASE &nbsp;&nbsp;&nbsp; <b>R</b> :RENTAL &nbsp;&nbsp;&nbsp; <b>S</b> :SERVICES</span><b>NOTE : IF RENTAL OR SERVICE, PLEASE INDICATE IN DAYS / WEEKS / MONTH</b></div></div>`;
 }
 function plcPrint(html){
@@ -2204,6 +2240,12 @@ function plcCalc(){
 }
 function plcInput(e){
   const t = e.target;
+  if(t.dataset && t.dataset.psigf && e.type === 'change' && t.files && t.files[0]){ const k = t.dataset.psigf, r1 = plcCur();
+    const [tk, kind] = k.split(':'), id = (r1 && r1.id) || '__new';
+    plcSigMake(t.files[0], kind).then(u => { if(!PLC.pend || PLC.pend.id !== id || PLC.pend.k !== tk) PLC.pend = {id, k: tk}; PLC.pend[kind] = u;
+      try{ const nm = (document.querySelector('#plc [data-pv="tBy"]') || {}).value || hubUser(); if(nm) localStorage.setItem(plcSigKey(nm, kind), u); }catch(x){}
+      plcKeepTier(); renderPlc(); toast((kind === 'c' ? 'Cop' : 'Signature') + ' added — press Approve to sign.'); })
+      .catch(x => toast(x.message, 7000)); return; }
   if(t.id === 'plQ'){ PLC.f.q = t.value; clearTimeout(plcInput._t); plcInput._t = setTimeout(() => { const pos = t.selectionStart; renderPlc(); const n = $('#plQ'); if(n){ n.focus(); try{ n.setSelectionRange(pos, pos); }catch(x){} } }, 220); return; }
   if(e.type === 'change' && t.closest && t.closest('tr[data-pidx]') && t.dataset.pk === 'cat'){ const r0 = plcCur(); if(r0){ const y = $('#p-plc').scrollTop; plcReadPsr(r0); renderPlc(); $('#p-plc').scrollTop = y; } return; }
   if(t.dataset.pv === 'wopNo' && e.type === 'change' && DATA.wop){ const w = DATA.wop.records.find(x => String(x.wopNo) === t.value.trim());
@@ -2223,6 +2265,9 @@ async function plcClick(e){
   if(d.ppo){ e.stopPropagation(); plcPoShow(d.ppo, false); return; }
   if(d.ppou){ e.stopPropagation(); plcPoShow(d.ppou, true); return; }
   if(d.ppsr){ plcPsrShow(); return; }
+  if(d.psig){ const inp = document.querySelector('#plc input[data-psigf="' + d.psig + '"]'); if(inp) inp.click(); return; }
+  if(d.psigx){ const [, kind] = d.psigx.split(':'); if(PLC.pend) delete PLC.pend[kind]; plcKeepTier(); renderPlc(); return; }
+  if(d.psigu){ const r1 = plcCur(), id = (r1 && r1.id) || '__new', [tk, kind] = d.psigu.split(':'); if(!PLC.pend || PLC.pend.id !== id || PLC.pend.k !== tk) PLC.pend = {id, k: tk}; PLC.pend[kind] = plcSigSaved(hubUser(), kind); plcKeepTier(); renderPlc(); return; }
   if(d.popen){ PLC.sel = d.popen; PLC.tab = null; renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(d.ptab !== undefined){ PLC.tab = +d.ptab; renderPlc(); return; }
   const r0 = plcCur();
@@ -2255,7 +2300,7 @@ async function plcClick(e){
   if(a === 'addBid'){ plcReadRfq(r0); r0.rfq.bids.push(plcBidNew(r0.rfq.bids.length)); r0.rfq.sel = r0.rfq.bids.length - 1; renderPlc(); return; }
   if(!PLC_ED()){ toast('Only ZNESB staff can change procurement records.'); return; }
   const r = plcClone(r0), tag = () => plcRef(r) + ' — ';
-  const need = plcNeed(a, r0, d), save = async (line, before) => { b.disabled = true; try{ const ok = await plcCommit(r, line, before, need); if(ok){ if(PLC.sel === '__new'){ PLC.sel = r.id; PLC.draft = null; } PLC.tab = null; renderPlc(); toast('Saved ✓ ' + plcRef(r)); } return ok; } finally{ b.disabled = false; } };
+  const need = plcNeed(a, r0, d), save = async (line, before) => { b.disabled = true; try{ const ok = await plcCommit(r, line, before, need); if(ok){ PLC.pend = null; if(PLC.sel === '__new'){ PLC.sel = r.id; PLC.draft = null; } PLC.tab = null; renderPlc(); toast('Saved ✓ ' + plcRef(r)); } return ok; } finally{ b.disabled = false; } };
   const step = (n, st) => { r.stage = n; r.status = st || 'open'; r.stageAt = plcNow(); r.retNote = ''; };
   const newNo = (nx, recs) => { if(!nx.id) nx.id = 'plc:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); if(!nx.mrfNo && !nx.direct) nx.mrfNo = plcNext('mrf', recs); if(!nx.stageAt) nx.stageAt = plcNow(); };
   if(a === 'saveMrf' || a === 'submitMrf'){
@@ -2276,7 +2321,7 @@ async function plcClick(e){
   if(a === 'return'){
     const why = (prompt('Why is it being returned to the requester? (shown on the MRF)') || '').trim(); if(!why) return;
     if(!r.id) return;
-    const from = PLC_STEPS[r.stage].t; r.stage = 0; r.status = 'returned'; r.retNote = why + ' (from ' + from + ')'; r.stageAt = plcNow(); r.psr.t = {};
+    const from = PLC_STEPS[r.stage].t; r.stage = 0; r.status = 'returned'; r.retNote = why + ' (from ' + from + ')'; r.stageAt = plcNow(); r.psr.t = {}; r.sigs = {}; r.stamps = {};
     await save(tag() + 'Returned to requester at ' + from + ': ' + why); return;
   }
   if(a === 'del'){
@@ -2311,9 +2356,11 @@ async function plcClick(e){
     if(k === 'pe'){ const no = plcVal('psrNo') || r.psr.no; if(!no){ toast('Enter the PSR number.'); return; } r.psr.no = no; }
     if(r.status === 'returned'){ r.status = 'open'; r.retNote = ''; }
     r.psr.t[k] = {by, pos: plcVal('tPos'), note: plcVal('tNote'), at: plcNow()};
+    const P = PLC.pend && PLC.pend.k === k && PLC.pend.id === (r0.id || '__new') ? PLC.pend : {}; r.sigs = Object.assign({}, r.sigs); r.stamps = Object.assign({}, r.stamps);
+    if(P.s) r.sigs[k] = P.s; else delete r.sigs[k]; if(P.c) r.stamps[k] = P.c; else delete r.stamps[k];
     const ab = PLC_TIERS.find(t => t[0] === k)[1];
-    if(k === 'pm'){ step(3); }
-    await save(tag() + 'PSR ' + (r.psr.no || '') + ' approved by ' + ab + ' (' + by + ')' + (k === 'pm' ? ' — PSR complete, go to RFQ' : ''), psrNo);
+    if(k === 'dir'){ step(3); }
+    await save(tag() + 'PSR ' + (r.psr.no || '') + ' approved by ' + ab + ' (' + by + ')' + (k === 'dir' ? ' — PSR approved, go to RFQ' : ''), psrNo);
     return;
   }
   if(a === 'submitPsr'){ if(!psrOk(true)) return; const no = plcVal('psrNo'); if(no && !r.psr.no) r.psr.no = no; const re = r.status === 'returned'; r.stage = 1; r.status = 'open'; r.stageAt = plcNow(); r.retNote = '';
@@ -2917,6 +2964,17 @@ const PLC_CSS = `<style>
 @media print{ #printArea .tcb-doc{box-shadow:none;padding:0;min-width:0;max-width:none} #printArea .tcb-doc *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   #printArea .tcb-doc table,#printArea .tcb-doc th,#printArea .tcb-doc td{font-size:7.4px} #printArea .tcb-doc .tcb-crit tr.tot td{font-size:8.5px} #printArea .tcb-doc .tcb-info td.sp{border:0} #printArea .tcb-doc th,#printArea .tcb-doc td{padding:2px 3px} #printArea .tcb-doc .tcb-t th{background:#C6E0B4;border:1px solid #777;text-align:center} #printArea .tcb-doc .tcb-t tr.ch th{background:#D9E1F2} #printArea .tcb-doc .tcb-t th.tsec{background:#D9D9D9;font-size:9px!important} #printArea .tcb-doc .tcb-t th.lh{background:#fff;text-align:left}
   #printArea .tcb-doc .tcb-t td{border:1px solid #777} #printArea .tcb-doc .tcb-crit td{border:0} #printArea .tcb-doc .tcb-crit td.cv{border-bottom:1px solid #bbb} #printArea .tcb-doc .tcb-info th,#printArea .tcb-doc .tcb-info td{border:1px solid #999;background:none} #printArea .tcb-doc .tcb-info td.pg{background:#ddd} #printArea .tcb-doc .tcb-sig td{border:1px solid #777;padding:0} }
+
+#plc .pl-sigbox{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+#plc .pl-sigslot{display:flex;align-items:center;gap:6px}
+#plc .pl-sigbox img{height:56px;max-width:180px;object-fit:contain;background:#fff;border:1px dashed var(--border);border-radius:6px;padding:2px}
+#plc .pl-sigbox .pl-sub{margin:0}
+#plc .pl-sigdone{display:inline-flex;gap:4px;background:#fff;border-radius:6px;margin-top:4px;padding:2px 4px}
+#plc .pl-sigdone img{height:44px;max-width:150px;object-fit:contain}
+.psr-doc .psg-s{position:relative}
+.psr-doc .psg-s img{position:absolute;object-fit:contain;mix-blend-mode:multiply}
+.psr-doc .psg-s img.ps{left:50px;top:-8px;height:74px;max-width:62%;object-position:left center}
+.psr-doc .psg-s img.pc{left:44%;top:-10px;height:66px;width:66px;opacity:.9}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
