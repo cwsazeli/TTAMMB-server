@@ -4386,16 +4386,19 @@ function stageTxt(r){
   // remarks come from the AIF Excel remark columns; every unfinished stage that has one is listed, in stage order
   const notes = L.filter(x => x[1] !== 'done' && x[3]);
   return L.map(([n, st, tip]) => `<span class="rd-stg${st === 'done' ? ' ok' : st === 'on' ? ' on' : ''}" title="${n}: ${word[st]}${r.raw ? ' \u00b7 AIF Excel: ' + esc(tip) : ''}">${n}</span>`).join('') +
-    notes.map(x => `<div class="rd-now" title="${x[0]} remark from the AIF Excel"><b>${x[0]}</b> \u00b7 ${rdNoteHtml(x[3])}</div>`).join('');
+    notes.map(x => `<div class="rd-now" title="${x[0]} remark from the AIF Excel"><b>${x[0]}</b><span>\u00b7</span><span class="rd-nc">${rdNoteHtml(x[3])}</span></div>`).join('');
 }
-/* "Partially inspected; outstanding 1) 6" check valve - 1ea 2) …" → first part on the line, each part after ";" on its own line, numbered items listed underneath */
+/* "Partially inspected; outstanding 1) 6" check valve - 1ea 2) …" → "Partially inspected, outstanding:" on the first line, numbered items listed underneath (aligned with the text) */
 function rdNoteHtml(t){
-  const parts = String(t || '').split(/\s*;\s*/).filter(Boolean), cap = s => s.charAt(0).toUpperCase() + s.slice(1);
-  return parts.map((p, i) => { const seg = p.split(/(?:^|\s+)(?=\d{1,2}\)\s*\S)/).filter(Boolean), items = seg.filter(x => /^\d{1,2}\)/.test(x)), head = seg.filter(x => !/^\d{1,2}\)/.test(x)).join(' ').replace(/\s*:\s*$/, '');
-    const h = head ? (i ? `<span class="rd-nl">${esc(cap(head))}${items.length ? ':' : ''}</span>` : esc(head) + (items.length ? ':' : '')) : '';
-    return h + items.map(x => `<span class="rd-ni">${esc(x)}</span>`).join(''); }).join('');
+  const blocks = [];
+  String(t || '').split(/\s*;\s*/).filter(Boolean).forEach(p => {
+    const seg = p.split(/(?:^|\s+)(?=\d{1,2}\)\s*\S)/).filter(Boolean), items = seg.filter(x => /^\d{1,2}\)/.test(x)), head = seg.filter(x => !/^\d{1,2}\)/.test(x)).join(' ').replace(/\s*:\s*$/, ''), last = blocks[blocks.length - 1];
+    if(head){ if(last && !last.items.length) last.t += ', ' + head; else blocks.push({t: head, items: []}); }
+    if(items.length){ if(!blocks.length) blocks.push({t: '', items: []}); blocks[blocks.length - 1].items.push(...items); }
+  });
+  return blocks.map(b => (b.t ? `<span class="rd-nl">${esc(b.t)}${b.items.length ? ':' : ''}</span>` : '') + b.items.map(x => `<span class="rd-ni">${esc(x)}</span>`).join('')).join('');
 }
-const RD_NOTE_CSS = (() => { try{ const st = document.createElement('style'); st.textContent = '.rd-now .rd-nl{display:block;margin-top:2px}.rd-now .rd-ni{display:block;padding-left:14px;position:relative}.rd-now .rd-ni::before{content:"";position:absolute;left:4px;top:.55em;width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.5}'; document.head.appendChild(st); }catch(e){} return 1; })();
+const RD_NOTE_CSS = (() => { try{ const st = document.createElement('style'); st.textContent = '.rd-now{display:grid!important;grid-template-columns:auto auto minmax(0,1fr);column-gap:5px;align-items:start}.rd-now .rd-nc{min-width:0}.rd-now .rd-nl{display:block}.rd-now .rd-nl+.rd-nl{margin-top:2px}.rd-now .rd-ni{display:block;padding-left:12px;position:relative}.rd-now .rd-ni::before{content:"";position:absolute;left:4px;top:.55em;width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.5}'; document.head.appendChild(st); }catch(e){} return 1; })();
 const RD_CLIENT = {partial: ['Partially received', 'warn'], ready: ['Material received', 'ok'], eta_ok: ['Material received', 'ok'], none: ['No material needed', 'faint'], waiting: ['Bought — waiting delivery', 'info'],
   surplus: ['Material received', 'ok'], blocked: ['Not bought yet', 'bad'], eta_no: ['Not received yet', 'warn'], pre: ['Preparation in progress', 'info'], unknown: ['Not assessed yet', 'faint']};
 const OC_CLIENT = {closeout: ['Work done — close-out in progress', 'ok', 'Execution complete; documentation / status update in progress.'], hold: ['On hold', 'faint', 'Work on hold.'], survey: ['Survey pending', 'info', 'Site survey not yet done.'], drawing: ['Drawing approval pending', 'info', 'Drawing submitted, waiting for approval.'], mto: ['Material take-off in progress', 'info', 'Material list being prepared.'],
