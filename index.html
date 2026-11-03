@@ -1569,7 +1569,7 @@ function plcMatch(r, st){
 const PLC_VIEWS = [
   {k: 'dash', ic: '📊', t: 'Dashboard & Status'},
   {k: 'mrf', ic: '📝', t: 'Material Requisitions (MRF)', note: 'Every requisition raised, at any stage. Use the filter to narrow down.'},
-  {k: 'psr', ic: '🏬', t: 'Store & PSR 3-Tier', note: 'Waiting for the store stock check, or for the PSR review by PE → CC → PM.', m: r => !plcClosed(r) && (r.stage === 1 || r.stage === 2)},
+  {k: 'psr', ic: '🏬', t: 'Store & PSR 3-Tier', note: 'PSRs raised directly (draft / returned), and packages waiting for the store counter-check or the final PSR review by PE → CC → PM.', m: r => !plcClosed(r) && (r.stage === 1 || r.stage === 2 || (r.direct && r.stage === 0))},
   {k: 'rfq', ic: '⚖️', t: 'RFQ 3-Supplier Sourcing', note: 'PSR approved — collect at least three quotations and recommend a supplier.', m: r => !plcClosed(r) && r.stage === 3},
   {k: 'loa', ic: '✍️', t: 'Management LOA', note: 'Recommended supplier and amount waiting for management sign-off.', m: r => !plcClosed(r) && r.stage === 4},
   {k: 'po', ic: '📄', t: 'Purchase Order (Official)', note: 'LOA signed — PO to be issued, and every PO already issued.', m: r => r.status !== 'cancelled' && r.stage >= 5}
@@ -1653,7 +1653,7 @@ function renderPlc(){
     const kpi = (ic, cls, l, v, s, go) => `<button class="pl-kpi" data-pview="${go}"><span class="pl-ki ${cls}">${ic}</span><span><span class="l">${l}</span><span class="v">${v}</span><span class="s">${s}</span></span></button>`;
     const n0 = (dir) => act.filter(r => r.stage === 0 && !!r.direct === dir), sub0 = l => { const d = l.filter(r => r.status === 'draft').length, x = l.length - d; return l.length ? d + ' draft · ' + x + ' returned' : ''; };
     const nd = (n, view, t, sm, c, rw) => ({h: `<button class="pl-pstep${n ? ' has' : ''}" data-pview="${view}"><span class="c">${n}</span><b>${t}</b><small>${sm}</small></button>`, c, r: rw});
-    const pipe = plcFlow('pl-pipe', [nd(n0(false).length, 'mrf', 'MRF Submission', sub0(n0(false)) || 'Site / Workshop', 1, 1), nd(n0(true).length, 'mrf', 'PSR Submission', sub0(n0(true)) || 'Direct PSR', 1, 2)]
+    const pipe = plcFlow('pl-pipe', [nd(n0(false).length, 'mrf', 'MRF Submission', sub0(n0(false)) || 'Site / Workshop', 1, 1), nd(n0(true).length, 'psr', 'PSR Submission', sub0(n0(true)) || 'Direct PSR', 1, 2)]
       .concat(PLC_STEPS.slice(1).map((s, k) => nd(at(k + 1), goV(k + 1), s.t, k + 1 === 2 ? 'Final PSR · PE → CC → PM' : s.s, k + 2, 1))), {});
     const pr = act.filter(plcQ).sort(plcSort);
     body = `${pipe}
