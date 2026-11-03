@@ -1844,6 +1844,7 @@ function plcDetail(el){
       <div class="box pl-card"><h4>History</h4>${r.log.length ? `<ol class="pl-log">${r.log.slice().reverse().map(l => `<li><span>${esc(plcDT(l.at))} · ${esc(l.by || '')}</span>${esc(l.t)}</li>`).join('')}</ol>` : '<p class="faint" style="margin:0;font-size:12.5px">Not saved yet.</p>'}</div></aside></div>
   <datalist id="plWops">${wopList.map(w => `<option value="${esc(w.wopNo)}">${esc(clean(w.wopTitle || '').slice(0, 80))}</option>`).join('')}</datalist>`;
   plcCalc();
+  $$('#plc .pl-sigdone img[data-kind]').forEach(im => plcSigClean(im.getAttribute('src'), im.dataset.kind).then(u => { if(u && u !== im.getAttribute('src')) im.src = u; }));
 }
 const plcRO = ed => ed ? '' : ' disabled';
 const plcF = (k, l, v, ed, x) => `<label class="pl-fl${x && x.wide ? ' w' : ''}"><span>${l}${x && x.req ? ' <i>*</i>' : ''}</span>${x && x.area ? `<textarea data-pv="${k}" rows="3"${plcRO(ed)}>${esc(v)}</textarea>`
@@ -2014,8 +2015,8 @@ function plcSigBox(r, k){
 }
 function plcTiersHtml(r, ed, w, nx, f){
   return `  <div class="pl-tiers">${PLC_TIERS.map(([k, ab, name, role]) => { const t = r.psr.t[k] || {}, isNow = ed && k === nx, lbl = {pe: 'Requested by', cc: 'Reviewed by', pm: 'Verified by', dir: 'Approved by'}[k];
-    return `<div class="pl-tier${t.at ? ' ok' : isNow ? ' now' : ''}"><span class="pl-tb">${ab}</span><div class="pl-tt"><b>${lbl} — ${name}</b><small>${role}</small>
-      ${t.at ? `<p>✓ <b>${esc(t.by)}</b>${t.pos ? ' · ' + esc(t.pos) : ''} · ${plcDT(t.at)}${t.note ? '<br><i>' + esc(t.note) + '</i>' : ''}</p>${r.sigs[k] || r.stamps[k] ? `<span class="pl-sigdone">${r.sigs[k] ? `<img src="${r.sigs[k]}" alt="signature">` : ''}${r.stamps[k] ? `<img src="${r.stamps[k]}" alt="cop">` : ''}</span>` : ''}` : isNow ? `<div class="pl-tin pl-tin3"><input data-pv="tBy" placeholder="Name" value="${esc(hubUser())}"><input data-pv="tPos" placeholder="Position" value="${esc(PLC_POS[k])}"><input data-pv="tNote" placeholder="Remarks (optional)"></div>${plcSigBox(r, k)}` : `<p class="faint">${r.stage > 2 ? '—' : 'Waiting'}</p>`}</div>
+    return `<div class="pl-tier${t.at ? ' ok' : isNow ? ' now' : ''}"><span class="pl-tb">${ab}</span><div class="pl-tt"><b>${lbl}</b><small>${role}</small>
+      ${t.at ? `<p>✓ <b>${esc(t.by)}</b>${t.pos ? ' · ' + esc(t.pos) : ''} · ${plcDT(t.at)}${t.note ? '<br><i>' + esc(t.note) + '</i>' : ''}</p>${r.sigs[k] || r.stamps[k] ? `<span class="pl-sigdone">${r.sigs[k] ? `<img src="${r.sigs[k]}" alt="signature" data-kind="s">` : ''}${r.stamps[k] ? `<img src="${r.stamps[k]}" alt="cop" data-kind="c">` : ''}</span>` : ''}` : isNow ? `<div class="pl-tin pl-tin3"><input data-pv="tBy" placeholder="Name" value="${esc(hubUser())}"><input data-pv="tPos" placeholder="Position" value="${esc(PLC_POS[k])}"><input data-pv="tNote" placeholder="Remarks (optional)"></div>${plcSigBox(r, k)}` : `<p class="faint">${r.stage > 2 ? '—' : 'Waiting'}</p>`}</div>
       ${isNow ? `<div class="pl-tact">${r.id ? '<button class="btn sm" data-pa="return">↩ Return</button>' : ''}<button class="btn sm primary" data-pa="tierOk" data-tier="${k}">Approve as ${ab}</button></div>` : ''}</div>`; }).join('')}
 </div>
   <div class="pl-btns"><button class="btn" data-ppsr="1">🖨 Print PSR form</button>${ed ? '<span class="sp"></span><button class="btn" data-pa="savePsr">Save PSR form</button>' : ''}</div>
