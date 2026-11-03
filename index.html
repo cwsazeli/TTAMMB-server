@@ -2011,7 +2011,7 @@ function plcSigBox(r, k){
   const slot = (kind, lbl, ic) => { const v = P[kind]; return `<div class="pl-sigslot">${v ? `<img src="${v}" alt="${lbl}"><button type="button" class="pl-x" data-psigx="${k}:${kind}" title="Remove ${lbl}">✕</button>`
     : `<button type="button" class="btn sm" data-psig="${k}:${kind}">${ic} Upload ${lbl}</button>${plcSigSaved(name, kind) ? `<button type="button" class="btn sm" data-psigu="${k}:${kind}" title="Saved on this device for ${esc(name)}">Use my saved ${lbl}</button>` : ''}`}
     <input type="file" accept="image/*" data-psigf="${k}:${kind}" hidden></div>`; };
-  return `<div class="pl-sigbox">${slot('s', 'sign', '🖊')}${slot('c', 'cop', '🔵')}<span class="pl-sub">Photo or scan · white background removed · the cop prints over the signature</span></div>`;
+  return `<div class="pl-sigbox">${slot('s', 'sign', '🖊')}${slot('c', 'cop', '🔵')}</div>`;
 }
 function plcTiersHtml(r, ed, w, nx, f){
   return `  <div class="pl-tiers">${PLC_TIERS.map(([k, ab, name, role]) => { const t = r.psr.t[k] || {}, isNow = ed && k === nx, lbl = {pe: 'Requested by', cc: 'Reviewed by', pm: 'Verified by', dir: 'Approved by'}[k];
@@ -2053,7 +2053,7 @@ function plcPsrHtml(r){
   const body = Array.from({length: rows}, (_, k) => { const x = pr[k]; if(typeof x === 'string') return x; const it = x, i = it ? ni.get(it) - 1 : 0;
     return it ? `<tr><td class="c">${i + 1}</td><td>${esc(it.desc)}</td><td class="c">${plcNet(it)}</td><td class="c">${esc(String(it.unit || '').toUpperCase())}</td><td class="c">${tk(it, 'P')}</td><td class="c">${tk(it, 'R')}</td><td class="c">${tk(it, 'S')}</td><td class="c">${esc(String(it.dur || '').toUpperCase())}</td><td>${esc(it.rem || '')}</td></tr>`
       : '<tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>'; }).join('');
-  const sg = (lbl, nm, pos, dt, img, cop) => `<td class="psg"><div class="psg-l">${lbl}<span>:</span></div><div class="psg-s">${img ? `<img class="ps" src="${img}" alt="">` : ''}${cop ? `<img class="pc" src="${cop}" alt="">` : ''}</div>
+  const sg = (lbl, nm, pos, dt, img, cop) => `<td class="psg"><div class="psg-l">${lbl}<span>:</span></div><div class="psg-s">${img || cop ? `<div class="psg-im">${img ? `<img class="ps" src="${img}" alt="">` : ''}${cop ? `<img class="pc" src="${cop}" alt="">` : ''}</div>` : ''}</div>
     <div class="psg-r"><span>Name</span><i>:</i><b>${esc(String(nm || '').toUpperCase())}</b></div><div class="psg-r"><span>Position</span><i>:</i><b>${esc(String(pos || '').toUpperCase())}</b></div><div class="psg-r"><span>Date</span><i>:</i><b>${dt}</b></div></td>`;
   const t = k => r.psr.t[k] || {};
   return `<style>@page{size:A4 landscape;margin:7mm}</style><div class="psr-doc">
@@ -3041,9 +3041,11 @@ const PLC_CSS = `<style>
 #plc .pl-sigdone{display:inline-flex;gap:4px;background:#fff;border-radius:6px;margin-top:4px;padding:2px 4px}
 #plc .pl-sigdone img{height:44px;max-width:150px;object-fit:contain}
 .psr-doc .psg-s{position:relative}
-.psr-doc .psg-s img{position:absolute;object-fit:contain;mix-blend-mode:multiply}
-.psr-doc .psg-s img.ps{left:52px;top:-4px;height:62px;max-width:58%;object-position:left center}
-.psr-doc .psg-s img.pc{left:52%;top:-8px;height:68px;width:68px;opacity:.92}
+.psr-doc .psg-im{position:absolute;left:52px;top:-6px;right:4px;display:flex;align-items:center}
+.psr-doc .psg-im img{object-fit:contain;mix-blend-mode:multiply;flex:0 0 auto}
+.psr-doc .psg-im img.ps{height:60px;max-width:62%}
+.psr-doc .psg-im img.pc{height:66px;width:66px;opacity:.92;margin-left:-14px}
+.psr-doc .psg-im img.pc:first-child{margin-left:0}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
