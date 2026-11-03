@@ -1674,7 +1674,7 @@ function renderPlc(){
     const list = R.filter(r => V.m(r) && plcQ(r)).sort(V.k === 'po' ? (a, b) => (a.stage >= 6) - (b.stage >= 6) || String(b.po.date || '').localeCompare(String(a.po.date || '')) : plcSort);
     const sum = V.k === 'po' ? (() => { const iss = list.filter(r => r.stage >= 6), net = iss.reduce((s, r) => s + plcPoCalc(r).sub, 0); return `<p class="pl-bn">${list.length - iss.length} to issue · ${iss.length} issued · <b>${plcRM(net)}</b> committed (net)</p>`; })()
       : V.k === 'loa' ? `<p class="pl-bn">${list.length} package${list.length === 1 ? '' : 's'} · <b>${plcRM(list.reduce((s, r) => s + plcValue(r), 0))}</b> to sign</p>` : '';
-    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p>${sum}</div><div class="pl-bhr">${search}${OPS && V.k === 'psr' ? '<button class="btn primary" data-pa="newPsr">＋ Raise New PSR</button>' : ''}</div></div>
+    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p>${sum}</div><div class="pl-bhr">${search}${V.k === 'psr' ? '<button class="btn" data-pa="spAll" title="Check the items of these packages against the stock left in the Surplus Ledger">♻ Check Surplus Ledger</button>' : ''}${OPS && V.k === 'psr' ? '<button class="btn primary" data-pa="newPsr">＋ Raise New PSR</button>' : ''}</div></div>
       ${plcTable(list, PLC.f.q ? 'Nothing matches the search' : 'Nothing waiting here')}</div>`;
   }
   el.innerHTML = PLC_CSS + plcHead() + err + body;
@@ -1762,7 +1762,7 @@ function plcS1(r, ed){
     ${r.items.map((it, i) => `<tr data-si="${i}"><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td>${esc(it.unit)}</td>
       <td class="n">${ed ? `<input data-sk="${i}" type="number" min="0" step="any" class="n" value="${esc(it.stock || '')}" placeholder="0">` : esc(it.stock || '0')}</td><td class="n" data-net="${i}"><b>${plcNet(it)}</b></td></tr>`).join('')}</tbody></table></div>
   <div class="pl-form">${plcF('sBy', 'Verified by (store)', r.store.by || (ed ? hubUser() : ''), ed, {req: 1})}${plcF('sNote', 'Store remarks', r.store.note || '', ed, {wide: 1})}</div>
-  ${ed ? `<div class="pl-btns"><button class="btn" data-pa="return">↩ Return to requester</button><span class="sp"></span><span class="pl-hint" id="plSHint"></span><button class="btn primary" data-pa="storeOk" id="plSBtn">Confirm → PSR</button></div>`
+  ${ed ? `<div class="pl-btns"><button class="btn" data-pa="return">↩ Return to requester</button><button class="btn" data-pa="spOne">♻ Check Surplus Ledger</button><span class="sp"></span><span class="pl-hint" id="plSHint"></span><button class="btn primary" data-pa="storeOk" id="plSBtn">Confirm → PSR</button></div>`
     : r.store.at ? `<p class="pl-done">✓ Checked by <b>${esc(r.store.by || '')}</b> on ${plcDT(r.store.at)}${r.status === 'fromStore' ? ' — everything issued from store, MRF closed.' : ''}</p>` : w}`;
 }
 /* 3 — PSR 3-tier */
@@ -1990,6 +1990,8 @@ async function plcClick(e){
   if(a === 'back'){ if(PLC.sel === '__new' && plcDirty() && !confirm('Leave without saving?')) return; PLC.sel = null; PLC.tab = null; PLC.draft = null; renderPlc(); return; }
   if(a === 'reload'){ PLC.loaded = false; renderPlc(); return; }
   if(a === 'imp'){ toast('Import from Excel is not available yet — coming soon.', 5000); return; }
+  if(a === 'spAll'){ const L = PLC.recs.filter(r => !plcClosed(r) && (r.stage === 1 || r.stage === 2)); if(!L.length){ toast('Nothing in Store & PSR to check.'); return; } plcSurplusShow(L, false); return; }
+  if(a === 'spOne'){ const c = plcClone(r0); $$('#plc [data-sk]').forEach(e2 => { c.items[+e2.dataset.sk].stock = clean(e2.value); }); plcSurplusShow([c], true); return; }
   if(a === 'help'){ PLC.help = !PLC.help; renderPlc(); return; }
   if(a === 'copy'){ plcCopy(); return; }
   if(a === 'xlsx'){ plcExcel(); return; }
@@ -2130,6 +2132,53 @@ function plcPoShow(id){
     window.addEventListener('afterprint', done); setTimeout(() => { window.print(); setTimeout(done, 1500); }, 60);
   };
   d.showModal();
+}
+
+/* ---------- Surplus Ledger check: is any of the stock left over (Procurement → Surplus Ledger) a match for what the MRF / PSR asks for? ---------- */
+async function plcSurplusData(){
+  if(!MTO_LOADED) await mtoLoad();
+  if(!DATA.mat){ if(frames.mat && !frames.mat.srcdoc) frames.mat.srcdoc = MODULE_SRC.mat;
+    try{ await whenReady('mat', 30000); }catch(e){} for(let i = 0; i < 40 && !DATA.mat; i++){ collect(); if(!DATA.mat) await new Promise(r => setTimeout(r, 250)); } }
+  if(!MTO) return {err: 'The survey MTO is not loaded yet (Procurement → Material Reconciliation). The surplus is worked out from it.'};
+  if(!DATA.mat) return {err: 'Materials data did not load — open Materials Status once, then try again.'};
+  let R; try{ R = surplusAvailable(); }catch(e){ return {err: 'Could not work out the surplus: ' + e.message}; }
+  if(!R) return {err: 'Surplus is not available yet.'};
+  const rows = R.rows.filter(x => x.avail > 1e-9).map(x => Object.assign({f: mtoFeat(x.desc)}, x));
+  return {rows};
+}
+function plcSurplusMatch(desc, rows){
+  const f = mtoFeat(desc);
+  return rows.map(x => ({x, s: mtoScore(f, x.f)})).filter(m => m.s >= 0.5).sort((a, b) => b.s - a.s || b.x.avail - a.x.avail).slice(0, 4).map(m => Object.assign({score: m.s}, m.x));
+}
+/* recs: the packages to check · inStore: true when opened from a package's store check (offers "Use") */
+async function plcSurplusShow(recs, inStore){
+  const d = $('#dlgPlc');
+  $('#plDlgT').textContent = '♻ Check against the Surplus Ledger';
+  $('#plDlgB').innerHTML = PLC_CSS + '<div class="note">Working out the surplus stock…</div>';
+  $('#plDlgF').innerHTML = '<button class="btn" id="plDlgX">Close</button>'; $('#plDlgX').onclick = () => d.close();
+  if(!d.open) d.showModal();
+  const S = await plcSurplusData();
+  if(S.err){ $('#plDlgB').innerHTML = PLC_CSS + `<div class="note warn">⚠ ${esc(S.err)}</div>`; return; }
+  const lines = []; recs.forEach(r => r.items.forEach((it, i) => { if(!clean(it.desc)) return; const need = r.stage >= 2 ? plcNet(it) : num(it.qty); if(!(need > 0) && r.stage < 2) return;
+    lines.push({r, i, it, need, m: plcSurplusMatch(it.desc, S.rows)}); }));
+  const hit = lines.filter(l => l.m.length), full = hit.filter(l => l.m[0].avail >= l.need - 1e-9);
+  const cell = (l, c) => `<div class="pl-spm"><span class="${c.avail >= l.need - 1e-9 ? 'ok' : 'part'}">${c.avail >= l.need - 1e-9 ? '✓ enough' : 'partly'}</span> <b>${esc(c.sheet)}</b>: ${esc(c.desc)} — <b>${mtoQ(c.avail)} ${esc(c.unit || '')}</b> available${c.score < 0.75 ? ' <span class="faint">(check match)</span>' : ''}
+    ${inStore && OPS ? ` <button class="btn sm" data-spuse="${l.i}" data-spq="${Math.min(c.avail, num(l.it.qty))}" data-spfrom="${esc(c.sheet + ' — ' + c.desc)}">Use ${mtoQ(Math.min(c.avail, num(l.it.qty)))}</button>` : ''}</div>`;
+  $('#plDlgB').innerHTML = PLC_CSS + `<div id="plc-sp"><p class="pl-spsum">${lines.length} item line${lines.length === 1 ? '' : 's'} checked · <b>${hit.length}</b> with matching surplus · <b>${full.length}</b> can be fully covered.
+      Surplus = stock already <b>received</b>, minus what each package's own MTO uses, minus what the ledger has issued and what other items have reserved.</p>
+    ${lines.length ? `<div class="pl-tw"><table class="pl-t"><thead><tr><th>Package</th><th>Item asked for</th><th class="n">Qty</th><th>Matching surplus stock</th></tr></thead><tbody>
+      ${lines.sort((a, b) => b.m.length - a.m.length).map(l => `<tr><td class="mono" style="white-space:nowrap">${esc(plcRef(l.r))}</td><td>${esc(l.it.desc)}</td><td class="n">${mtoQ(l.need)} ${esc(l.it.unit || '')}</td>
+        <td>${l.m.length ? l.m.map(c => cell(l, c)).join('') : '<span class="faint">No match — buy it</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="note">No items to check.</div>'}
+    <p class="faint" style="font-size:12px;margin:10px 0 0">${inStore ? '<b>Use</b> puts the quantity in the <b>In store</b> column and notes where it comes from. ' : ''}To record the actual transfer between packages, issue it from the Surplus box in Procurement — the ledger keeps the stock figures right.</p></div>`;
+  $('#plDlgF').innerHTML = '<button class="btn" id="plDlgL">Open Surplus Ledger</button><button class="btn primary" id="plDlgX">Close</button>';
+  $('#plDlgX').onclick = () => d.close();
+  $('#plDlgL').onclick = () => { d.close(); PR_TAB = 'ledger'; go('proc'); };
+  $('#plDlgB').querySelectorAll('[data-spuse]').forEach(b => b.onclick = () => {
+    const inp = document.querySelector('#plc [data-sk="' + b.dataset.spuse + '"]'); if(!inp){ toast('Open the Store Verification step to use surplus.'); return; }
+    inp.value = +(+b.dataset.spq).toFixed(2); const n = document.querySelector('#plc [data-pv="sNote"]');
+    if(n){ const t = 'Surplus: ' + inp.value + ' from ' + b.dataset.spfrom; n.value = n.value ? n.value + '; ' + t : t; }
+    plcCalc(); b.textContent = '✓ Used'; b.disabled = true; toast('Put in the In store column — press Confirm to save the store check.', 5000);
+  });
 }
 
 /* ---------- settings ---------- */
@@ -2492,6 +2541,17 @@ const PLC_CSS = `<style>
   #plc .pl-flowg small{display:none}
   #plc .pl-fnote{display:none}
 }
+
+#plc-sp .pl-spsum{font-size:12.5px;color:var(--text-dim);margin:0 0 12px;line-height:1.5}
+#plc-sp .pl-spm{font-size:12.5px;padding:3px 0;line-height:1.5}
+#plc-sp .pl-spm .ok{color:var(--ok);font-weight:700}
+#plc-sp .pl-spm .part{color:var(--warn);font-weight:700}
+#plc-sp .pl-spm .btn{margin-left:6px;padding:2px 9px;font-size:11.5px}
+#plc-sp table.pl-t{width:100%;border-collapse:collapse;font-size:12.5px}
+#plc-sp .pl-t th{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);text-align:left;padding:8px;border-bottom:1px solid var(--border);background:var(--panel2)}
+#plc-sp .pl-t td{padding:8px;border-bottom:1px solid var(--border-soft);vertical-align:top}
+#plc-sp .pl-t .n{text-align:right;white-space:nowrap}
+#plc-sp .pl-tw{overflow-x:auto}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
