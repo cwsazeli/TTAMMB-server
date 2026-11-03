@@ -1822,9 +1822,9 @@ function plcReadMrf(r){
 function plcS1(r, ed){
   const w = plcWait(r, 1); if(w && r.stage < 1) return plcSH(1, 'The store checks what is already in stock.') + w;
   return plcSH(1, 'The store enters what is already in stock. Only the balance goes forward to purchase.') + `
-  <div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th>Unit</th><th class="n">In store</th><th class="n">To purchase</th></tr></thead><tbody>
+  <div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th>Unit</th><th class="n">In store</th><th class="n">To purchase</th><th>Remarks</th></tr></thead><tbody>
     ${r.items.map((it, i) => `<tr data-si="${i}"><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td>${esc(it.unit)}</td>
-      <td class="n">${ed ? `<input data-sk="${i}" type="number" min="0" step="any" class="n" value="${esc(it.stock || '')}" placeholder="0">` : esc(it.stock || '0')}</td><td class="n" data-net="${i}"><b>${plcNet(it)}</b></td></tr>`).join('')}</tbody></table></div>
+      <td class="n">${ed ? `<input data-sk="${i}" type="number" min="0" step="any" class="n" value="${esc(it.stock || '')}" placeholder="0">` : esc(it.stock || '0')}</td><td class="n" data-net="${i}"><b>${plcNet(it)}</b></td><td class="pl-srem">${ed ? `<input data-skr="${i}" value="${esc(it.srem || '')}" placeholder="Storeman remark (optional)">` : esc(it.srem || '')}</td></tr>`).join('')}</tbody></table></div>
   <div class="pl-form">${plcF('sBy', 'Verified by (store)', r.store.by || (ed ? hubUser() : ''), ed, {req: 1})}${plcF('sNote', 'Store remarks', r.store.note || '', ed, {wide: 1})}</div>
   ${ed ? `<div class="pl-btns"><button class="btn" data-pa="return">↩ Return to requester</button><button class="btn" data-pa="spOne">♻ Check Surplus Ledger</button><span class="sp"></span><span class="pl-hint" id="plSHint"></span><button class="btn primary" data-pa="storeOk" id="plSBtn">Confirm → PSR</button></div>`
     : r.store.at ? `<p class="pl-done">✓ Checked by <b>${esc(r.store.by || '')}</b> on ${plcDT(r.store.at)}${r.status === 'fromStore' ? ' — everything issued from store, MRF closed.' : ''}</p>` : w}`;
@@ -1999,8 +1999,8 @@ function plcS5(r, ed){
       <td><input data-lk="rate" type="number" min="0" step="0.01" class="n" value="${esc(l.rate)}" placeholder="—"${plcRO(ed)}></td><td class="n" data-lamt="${i}"></td></tr>`).join('')}</tbody>
     <tfoot><tr><td colspan="5" class="n">Subtotal</td><td class="n" id="plSub"></td></tr><tr><td colspan="5" class="n" id="plSstL">SST</td><td class="n" id="plSst"></td></tr><tr class="tot"><td colspan="5" class="n">Total</td><td class="n" id="plTot"></td></tr></tfoot></table></div>
   <div class="pl-hint" id="plPoHint"></div>
-  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn" data-pa="savePo">Save</button><button class="btn" data-ppo="${esc(r.id)}">📄 Preview</button><button class="btn primary" data-pa="poOk">Issue PO ✓</button></div>`
-    : issued ? `<p class="pl-done">✓ PO ${esc(r.po.no)} issued by <b>${esc(r.po.by || '')}</b> on ${plcDT(r.po.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}" style="margin-left:8px">📄 Print / Save PDF</button></p>` : w}`;
+  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn" data-pa="savePo">Save</button><button class="btn" data-ppo="${esc(r.id)}">📄 Priced PO</button><button class="btn" data-ppou="${esc(r.id)}">📄 Unpriced PO</button><button class="btn primary" data-pa="poOk">Issue PO ✓</button></div>`
+    : issued ? `<p class="pl-done">✓ PO ${esc(r.po.no)} issued by <b>${esc(r.po.by || '')}</b> on ${plcDT(r.po.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}" style="margin-left:8px">📄 Priced PO</button><button class="btn sm" data-ppou="${esc(r.id)}" style="margin-left:6px">📄 Unpriced PO</button></p>` : w}`;
 }
 function plcReadPo(r){
   const g = k => plcVal(k);
@@ -2055,7 +2055,8 @@ async function plcClick(e){
   if(d.pview){ if(PLC.sel === '__new' && plcDirty() && !confirm('Leave without saving?')) return;
     PLC.view = d.pview; PLC.sel = null; PLC.tab = null; PLC.draft = null; try{ localStorage.setItem('ttammhub_plc_view', d.pview); }catch(x){} renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(d.pf){ PLC.f.st = d.pf; renderPlc(); return; }
-  if(d.ppo){ e.stopPropagation(); plcPoShow(d.ppo); return; }
+  if(d.ppo){ e.stopPropagation(); plcPoShow(d.ppo, false); return; }
+  if(d.ppou){ e.stopPropagation(); plcPoShow(d.ppou, true); return; }
   if(d.ppsr){ plcPsrShow(); return; }
   if(d.popen){ PLC.sel = d.popen; PLC.tab = null; renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(d.ptab !== undefined){ PLC.tab = +d.ptab; renderPlc(); return; }
@@ -2123,6 +2124,7 @@ async function plcClick(e){
   }
   if(a === 'storeOk'){
     $$('#plc [data-sk]').forEach(e2 => { r.items[+e2.dataset.sk].stock = clean(e2.value); });
+    $$('#plc [data-skr]').forEach(e2 => { r.items[+e2.dataset.skr].srem = clean(e2.value); });
     const by = plcVal('sBy'); if(!by){ toast('Enter who verified the store stock.'); return; }
     r.store = {by, note: plcVal('sNote'), at: plcNow()};
     if(!plcBuyItems(r).length){ r.status = 'fromStore'; r.stageAt = plcNow(); await save(tag() + 'Store check: all items available — issued from store, MRF closed'); return; }
@@ -2190,38 +2192,39 @@ async function plcClick(e){
 function plcKeepRfq(r){ const aw = ($('#plBids input[name="plAward"]:checked') || {}).value; if(aw !== undefined) r.rfq.award = aw; const n = $('#plc [data-pv="rfqNo"]'); if(n) r.rfq.no = clean(n.value); const j = $('#plc [data-pv="just"]'); if(j) r.rfq.just = j.value; }
 
 /* ---------- PO document ---------- */
-function plcPoHtml(r){
+function plcPoHtml(r, unp){
   const c = plcPoCalc(r), a = c.award || {}, C = PLC.cfg, issued = r.stage >= 6, logo = (document.querySelector('.brand .logo img') || {}).src || '';
   const m2 = v => num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2});
   const lines = c.priced ? c.lines.filter(l => l.desc).map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.desc)}</td><td class="n">${esc(l.qty)}</td><td>${esc(l.unit)}</td><td class="n">${num(l.rate) > 0 ? m2(l.rate) : ''}</td><td class="n">${num(l.rate) > 0 ? m2(num(l.qty) * num(l.rate)) : ''}</td></tr>`).join('')
     : `<tr><td>1</td><td><b>${esc(r.title)}</b>${r.desc ? '<br>' + esc(r.desc) : ''}<ul>${c.lines.filter(l => l.desc).map(l => `<li>${esc(l.desc)} — ${esc(l.qty)} ${esc(l.unit)}</li>`).join('')}</ul>As per quotation ${esc(a.ref || '')}</td><td class="n">1</td><td>lot</td><td class="n">${m2(c.sub)}</td><td class="n">${m2(c.sub)}</td></tr>`;
+  const linesU = c.lines.filter(l => l.desc).map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.desc)}</td><td class="n">${esc(l.qty)}</td><td>${esc(l.unit)}</td></tr>`).join('');
   const sig = (l, n, t, dt) => `<div class="po-sig"><div class="ln"></div><b>${esc(n || '')}</b><span>${esc(t)}</span>${dt ? `<span>${fmtD(String(dt).slice(0, 10))}</span>` : ''}<small>${l}</small></div>`;
   return `<div class="po-doc">${issued ? '' : '<div class="po-wm">DRAFT</div>'}
     <div class="po-h"><div class="po-co">${logo ? `<img src="${logo}" alt="">` : ''}<div><b>${esc(C.company || '')}</b>${C.reg ? `<span>(${esc(C.reg)})</span>` : ''}${C.addr ? `<span>${esc(C.addr)}</span>` : ''}${C.phone ? `<span>${esc(C.phone)}</span>` : ''}</div></div>
-      <div class="po-ti"><h1>PURCHASE ORDER</h1><table><tr><th>PO No</th><td>${esc(r.po.no || '—')}</td></tr><tr><th>Date</th><td>${r.po.date ? fmtD(r.po.date) : '—'}</td></tr><tr><th>Quotation</th><td>${esc(a.ref || '—')}</td></tr></table></div></div>
+      <div class="po-ti"><h1>PURCHASE ORDER</h1>${unp ? '<div class="po-unp">UNPRICED COPY</div>' : ''}<table><tr><th>PO No</th><td>${esc(r.po.no || '—')}</td></tr><tr><th>Date</th><td>${r.po.date ? fmtD(r.po.date) : '—'}</td></tr><tr><th>Quotation</th><td>${esc(a.ref || '—')}</td></tr></table></div></div>
     <div class="po-2"><div><h5>Supplier</h5><b>${esc(a.supplier || '—')}</b>${r.po.attn ? `<span>Attn: ${esc(r.po.attn)}</span>` : ''}</div>
       <div><h5>Deliver to</h5><span>${esc(r.po.to || r.site || '—')}</span><span>Delivery date: <b>${r.po.del ? fmtD(r.po.del) : '—'}</b></span></div>
       <div><h5>References</h5><span>MRF: ${esc(r.mrfNo || '—')} · PSR: ${esc(r.psr.no || '—')}</span><span>RFQ: ${esc(r.rfq.no || '—')} · LOA: ${esc(r.loa.no || '—')}</span><span>Charge code: ${esc(r.charge || '—')}${r.wopNo ? ' · WOP ' + esc(r.wopNo) : ''}</span></div></div>
-    <table class="po-l"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th><th class="n">Unit price (RM)</th><th class="n">Amount (RM)</th></tr></thead><tbody>${lines}</tbody>
-      <tfoot><tr><td colspan="5" class="n">Subtotal</td><td class="n">${m2(c.sub)}</td></tr><tr><td colspan="5" class="n">SST ${c.sstP}%</td><td class="n">${m2(c.sst)}</td></tr><tr class="tot"><td colspan="5" class="n">TOTAL (RM)</td><td class="n">${m2(c.total)}</td></tr></tfoot></table>
-    <div class="po-tc"><b>Payment terms:</b> ${esc(r.po.terms || '—')}${r.po.note ? `<br><b>Notes:</b> ${esc(r.po.note)}` : ''}<br>Please quote the PO number on all delivery orders and invoices. Goods are subject to inspection on receipt.</div>
+    ${unp ? `<table class="po-l"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th></tr></thead><tbody>${linesU}</tbody></table>` : `<table class="po-l"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th><th class="n">Unit price (RM)</th><th class="n">Amount (RM)</th></tr></thead><tbody>${lines}</tbody>
+      <tfoot><tr><td colspan="5" class="n">Subtotal</td><td class="n">${m2(c.sub)}</td></tr><tr><td colspan="5" class="n">SST ${c.sstP}%</td><td class="n">${m2(c.sst)}</td></tr><tr class="tot"><td colspan="5" class="n">TOTAL (RM)</td><td class="n">${m2(c.total)}</td></tr></tfoot></table>`}
+    <div class="po-tc"><b>Payment terms:</b> ${esc(r.po.terms || '—')}${r.po.note ? `<br><b>Notes:</b> ${esc(r.po.note)}` : ''}<br>${unp ? 'Unpriced copy for store / site receiving — prices are on the original PO. ' : ''}Please quote the PO number on all delivery orders and invoices. Goods are subject to inspection on receipt.</div>
     <div class="po-sigs">${sig('Prepared by', (r.psr.t.pe || {}).by, 'Project Engineer', (r.psr.t.pe || {}).at)}${sig('Verified by', (r.psr.t.pm || {}).by, 'Project Manager', (r.psr.t.pm || {}).at)}${sig('Approved by', r.loa.by, r.loa.title || C.approverTitle || '', r.loa.at)}${sig('Accepted by supplier', '', 'Name, signature & company stamp', '')}</div>
     <div class="po-f">${issued ? 'Issued ' + plcDT(r.po.at) + (r.po.by ? ' by ' + esc(r.po.by) : '') : 'Draft — not yet issued'} · ${esc(plcRef(r))}</div></div>`;
 }
-function plcPoShow(id){
+function plcPoShow(id, unp){
   let r = PLC.recs.find(x => x.id === id); if(!r) return;
   if(PLC.sel === id && $('#plPoL') && r.stage < 6) r = plcReadPo(plcClone(r));   // preview shows what is typed, not yet saved
-  const d = $('#dlgPlc'); $('#plDlgT').textContent = '📄 Purchase Order ' + (r.po.no || '') + (r.stage >= 6 ? '' : ' — preview');
-  $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap">${plcPoHtml(r)}</div>`;
-  $('#plDlgF').innerHTML = `<button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF</button>`;
-  $('#plDlgX').onclick = () => d.close();
-  $('#plDlgP').onclick = () => {
-    $('#printArea').innerHTML = PLC_CSS + plcPoHtml(r); d.close();
-    document.body.classList.add('printing');
-    const done = () => { document.body.classList.remove('printing'); window.removeEventListener('afterprint', done); };
-    window.addEventListener('afterprint', done); setTimeout(() => { window.print(); setTimeout(done, 1500); }, 60);
+  const d = $('#dlgPlc'); let U = !!unp;
+  const draw = () => {
+    $('#plDlgT').textContent = '📄 Purchase Order ' + (r.po.no || '') + (U ? ' — unpriced' : ' — priced') + (r.stage >= 6 ? '' : ' (preview)');
+    $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap">${plcPoHtml(r, U)}</div>`;
+    $('#plDlgF').innerHTML = `<div class="pl-seg" role="group" aria-label="PO version"><button type="button" class="${U ? '' : 'on'}" id="plPoP">Priced PO</button><button type="button" class="${U ? 'on' : ''}" id="plPoU">Unpriced PO</button></div><span style="flex:1"></span>
+      <button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF — ${U ? 'unpriced' : 'priced'}</button>`;
+    $('#plPoP').onclick = () => { U = false; draw(); }; $('#plPoU').onclick = () => { U = true; draw(); };
+    $('#plDlgX').onclick = () => d.close();
+    $('#plDlgP').onclick = () => { d.close(); plcPrint(plcPoHtml(r, U)); };
   };
-  d.showModal();
+  draw(); if(!d.open) d.showModal();
 }
 
 /* ---------- Surplus Ledger check: is any of the stock left over (Procurement → Surplus Ledger) a match for what the MRF / PSR asks for? ---------- */
@@ -2265,7 +2268,7 @@ async function plcSurplusShow(recs, inStore){
   $('#plDlgL').onclick = () => { d.close(); PR_TAB = 'ledger'; go('proc'); };
   $('#plDlgB').querySelectorAll('[data-spuse]').forEach(b => b.onclick = () => {
     const inp = document.querySelector('#plc [data-sk="' + b.dataset.spuse + '"]'); if(!inp){ toast('Open the Store Verification step to use surplus.'); return; }
-    inp.value = +(+b.dataset.spq).toFixed(2); const n = document.querySelector('#plc [data-pv="sNote"]');
+    inp.value = +(+b.dataset.spq).toFixed(2); const n = document.querySelector('#plc [data-skr="' + b.dataset.spuse + '"]') || document.querySelector('#plc [data-pv="sNote"]');
     if(n){ const t = 'Surplus: ' + inp.value + ' from ' + b.dataset.spfrom; n.value = n.value ? n.value + '; ' + t : t; }
     plcCalc(); b.textContent = '✓ Used'; b.disabled = true; toast('Put in the In store column — press Confirm to save the store check.', 5000);
   });
@@ -2300,7 +2303,7 @@ async function plcExcel(){
     'Stage': plcState(r).t, 'Days at stage': plcClosed(r) ? '' : plcDays(r.stageAt || r.updatedAt), 'Store checked by': r.store.by || '', 'PSR no': r.psr.no || '', 'PSR PE': (r.psr.t.pe || {}).by || '', 'PSR CC': (r.psr.t.cc || {}).by || '', 'PSR PM': (r.psr.t.pm || {}).by || '',
     'RFQ no': r.rfq.no || '', 'Quotations': plcBids(r).b.length, 'Awarded supplier': a.supplier || '', 'Quotation ref': a.ref || '', 'Award amount (RM)': a.amount ? num(a.amount) : '', 'Justification': r.rfq.just || '',
     'LOA no': r.loa.no || '', 'LOA signed by': r.loa.by || '', 'PO no': r.stage >= 6 ? r.po.no : '', 'PO date': r.stage >= 6 ? r.po.date : '', 'PO net (RM)': r.stage >= 6 ? c.sub : '', 'PO total incl. SST (RM)': r.stage >= 6 ? c.total : '', 'Last updated': r.updatedAt ? plcDT(r.updatedAt) : '', 'Updated by': r.updatedBy || ''}; });
-  const it = []; R.forEach(r => r.items.forEach((x, i) => it.push({'MRF no': r.mrfNo, '#': i + 1, 'Description': x.desc, 'Qty requested': num(x.qty), 'Unit': x.unit, 'In store': num(x.stock), 'To purchase': plcNet(x), 'Remarks': x.rem})));
+  const it = []; R.forEach(r => r.items.forEach((x, i) => it.push({'MRF no': r.mrfNo, '#': i + 1, 'Description': x.desc, 'Qty requested': num(x.qty), 'Unit': x.unit, 'In store': num(x.stock), 'To purchase': plcNet(x), 'Remarks': x.rem, 'Store remark': x.srem || ''})));
   const bd = []; R.forEach(r => { const {ok} = plcBids(r), srt = ok.slice().sort((p, q) => num(p.amount) - num(q.amount)); r.rfq.bids.filter(b => b.supplier).forEach(b => bd.push({'MRF no': r.mrfNo, 'RFQ no': r.rfq.no, 'Supplier': b.supplier, 'Quotation ref': b.ref, 'Amount (RM)': num(b.amount), 'Delivery days': b.days, 'Payment terms': b.terms, 'Compliant': b.ok !== false ? 'Yes' : 'No', 'Rank': srt.indexOf(b) >= 0 ? 'L' + (srt.indexOf(b) + 1) : '', 'Awarded': r.rfq.award === b.id ? 'Yes' : '', 'Remarks': b.rem})); });
   const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(pk), 'Packages'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(it.length ? it : [{}]), 'Items'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(bd.length ? bd : [{}]), 'RFQ bids');
   X.writeFile(wb, 'Procurement_Lifecycle_' + todayISO().replace(/-/g, '') + '.xlsx'); toast('Exported ✓');
@@ -2670,6 +2673,14 @@ const PLC_CSS = `<style>
 #plc .psr-it input[data-pk="unit"]{min-width:58px;max-width:72px}
 #plc .psr-it input[data-pk="dur"]{min-width:84px}
 #plc .psr-it input[data-pk="rem"]{min-width:110px}
+
+#plc .pl-srem{min-width:200px}
+#plc .pl-srem input{font:inherit;font-size:13px;padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--panel2);color:var(--text);width:100%}
+#dlgPlc .df{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pl-seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.pl-seg button{border:0;background:var(--panel2);color:var(--text-dim);font:inherit;font-size:12.5px;font-weight:600;padding:7px 12px;cursor:pointer}
+.pl-seg button.on{background:var(--accent);color:var(--accent-ink)}
+.po-doc .po-unp{display:inline-block;margin:0 0 6px;padding:2px 8px;border:1.5px solid #B3261E;color:#B3261E;font-weight:700;font-size:11px;letter-spacing:.1em}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
