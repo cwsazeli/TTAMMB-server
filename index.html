@@ -1476,16 +1476,19 @@ const plcClosed = r => r.status === 'cancelled' || r.status === 'fromStore' || r
 const plcNet = it => Math.max(0, num(it.qty) - num(it.stock));
 const plcBuyItems = r => r.items.filter(it => clean(it.desc) && plcNet(it) > 0);
 function plcBids(r){
-  const b = (r.rfq.bids || []).filter(x => clean(x.supplier) && num(x.amount) > 0), ok = b.filter(x => x.ok !== false);
-  const low = ok.reduce((m, x) => !m || num(x.amount) < num(m.amount) ? x : m, null);
+  const T = x => plcBidParts(r, x).total, b = (r.rfq.bids || []).filter(x => clean(x.supplier) && T(x) > 0), ok = b.filter(x => x.ok !== false);
+  const low = ok.reduce((m, x) => !m || T(x) < T(m) ? x : m, null);
   return {b, ok, low};
 }
 const plcAward = r => (r.rfq.bids || []).find(x => x.id && x.id === r.rfq.award) || null;
 function plcPoCalc(r){
-  const a = plcAward(r), lines = Array.isArray(r.po.lines) && r.po.lines.length ? r.po.lines : plcBuyItems(r).map(it => ({desc: it.desc, qty: plcNet(it), unit: it.unit, rate: ''}));
+  const a = plcAward(r), AL = (a && a.lines) || {}, ap = a ? plcBidParts(r, a) : null; let lines;
+  if(Array.isArray(r.po.lines) && r.po.lines.length) lines = r.po.lines;
+  else { lines = plcBuyIdx(r).map(i => { const it = r.items[i], l = AL[i] || {}; return {desc: it.desc, qty: plcNet(it), unit: it.unit, rate: num(l.rate) > 0 && l.par !== 'NO QUOTE' && l.par !== 'INCLUDE' ? l.rate : ''}; });
+    if(a && lines.some(l => num(l.rate) > 0)){ if(num((a.other || {}).amt)) lines.push({desc: a.other.d || 'Other charges', qty: 1, unit: 'LOT', rate: a.other.amt}); if(num(a.disc)) lines.push({desc: 'Discount', qty: 1, unit: 'LOT', rate: String(-num(a.disc))}); } }
   const priced = lines.some(l => clean(l.rate) !== '' && num(l.rate) > 0);
-  const sub = priced ? lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0) : (a ? num(a.amount) : 0);
-  const sstP = r.po.sst !== undefined && r.po.sst !== '' ? num(r.po.sst) : num(PLC.cfg.sst), sst = Math.round(sub * sstP) / 100;
+  const sub = Math.round((priced ? lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0) : (ap ? ap.net : 0)) * 100) / 100;
+  const sstP = r.po.sst !== undefined && r.po.sst !== '' ? num(r.po.sst) : ap && ap.sst && ap.net ? +(ap.sst / ap.net * 100).toFixed(2) : num(PLC.cfg.sst), sst = Math.round(sub * sstP) / 100;
   return {lines, priced, sub, sstP, sst, total: sub + sst, award: a};
 }
 const plcValue = r => r.stage >= 6 ? plcPoCalc(r).sub : (plcAward(r) ? num(plcAward(r).amount) : 0);
@@ -2003,26 +2006,144 @@ function plcPsrShow(){
   $('#plDlgP').onclick = () => { d.close(); plcPrint(plcPsrHtml(r)); };
   d.showModal();
 }
-/* 4 — RFQ 3-bid matrix */
-function plcS3(r, ed){
-  const w = plcWait(r, 3); if(w && r.stage < 3 || r.status === 'fromStore') return plcSH(3, 'Quotations from at least three suppliers, compared side by side.') + w;
-  const min = num(PLC.cfg.minBids) || 3, bids = r.rfq.bids.slice(); if(ed) while(bids.length < min) bids.push({id: 'b' + Date.now().toString(36) + bids.length, supplier: '', ref: '', amount: '', days: '', terms: '', ok: true, rem: ''});
-  const {low} = plcBids(Object.assign({}, r, {rfq: Object.assign({}, r.rfq, {bids})}));
-  return plcSH(3, `At least ${min} quotations. The lowest compliant bid is marked; choosing another supplier needs a justification.`) + `
-  <div class="pl-form">${plcF('rfqNo', 'RFQ no', r.rfq.no || (ed ? plcNext('rfq') : ''), ed, {req: 1})}${plcF('rfqDate', 'Closing date', r.rfq.date || '', ed, {type: 'date'})}</div>
-  <div class="pl-tw"><table class="pl-t pl-bid" id="plBids"><thead><tr><th>Award</th><th>Supplier</th><th>Quotation ref</th><th class="n">Amount (RM)</th><th class="n">Delivery (days)</th><th>Payment terms</th><th>Compliant</th><th>Remarks</th><th>Rank</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
-    ${bids.map((b, i) => `<tr data-bi="${esc(b.id)}" class="${r.rfq.award === b.id ? 'aw' : ''}${low && low.id === b.id ? ' low' : ''}"><td class="c"><input type="radio" name="plAward" value="${esc(b.id)}"${r.rfq.award === b.id ? ' checked' : ''}${plcRO(ed)}></td>
-      <td><input data-bk="supplier" value="${esc(b.supplier)}" placeholder="Supplier ${i + 1}"${plcRO(ed)}></td><td><input data-bk="ref" value="${esc(b.ref)}"${plcRO(ed)}></td>
-      <td><input data-bk="amount" type="number" min="0" step="0.01" class="n" value="${esc(b.amount)}"${plcRO(ed)}></td><td><input data-bk="days" type="number" min="0" class="n sh" value="${esc(b.days)}"${plcRO(ed)}></td>
-      <td><input data-bk="terms" value="${esc(b.terms)}"${plcRO(ed)}></td><td class="c"><input type="checkbox" data-bk="ok"${b.ok !== false ? ' checked' : ''}${plcRO(ed)}></td><td><input data-bk="rem" value="${esc(b.rem)}"${plcRO(ed)}></td>
-      <td class="pl-rk" data-rk="${esc(b.id)}"></td>${ed ? `<td><button class="pl-x" data-bdel="${esc(b.id)}" title="Remove">✕</button></td>` : ''}</tr>`).join('')}</tbody></table></div>
-  <div class="pl-rec" id="plRec"></div>
-  <div class="pl-form">${plcF('just', 'Justification (needed if the award is not the lowest compliant bid, or fewer than ' + min + ' valid quotations)', r.rfq.just || '', ed, {area: 1, wide: 1})}</div>
-  ${ed ? `<div class="pl-btns"><button class="btn sm" data-pa="addBid">＋ Add supplier</button><button class="btn" data-pa="return">↩ Return to requester</button><span class="sp"></span><button class="btn" data-pa="saveRfq">Save matrix</button><button class="btn primary" data-pa="rfqOk">Submit for LOA →</button></div>`
-    : r.rfq.at ? `<p class="pl-done">✓ Submitted for LOA by <b>${esc(r.rfq.by || '')}</b> on ${plcDT(r.rfq.at)}</p>` : w}`;
+/* 4 — RFQ: Technical Commercial Bid Evaluation (TCBE). One tab per supplier (offer / brand, parity and unit price per item),
+   a live comparison underneath (lowest compliant price per item in green), and the TCBE sheet to print on A4 landscape. */
+const PLC_PAR = ['COMPLY', 'NOT COMPLY', 'NO QUOTE', 'INCLUDE'];
+const plcBuyIdx = r => r.items.map((it, i) => i).filter(i => clean(r.items[i].desc) && plcNet(r.items[i]) > 0);
+function plcBidParts(r, b){
+  const L = b.lines || {}; let items = 0, any = false;
+  plcBuyIdx(r).forEach(i => { const l = L[i] || {}; if(l.par === 'NO QUOTE' || l.par === 'INCLUDE') return; const p = num(l.rate); if(p > 0){ any = true; items += p * plcNet(r.items[i]); } });
+  const other = num((b.other || {}).amt), sst = num(b.sst), disc = num(b.disc);
+  if(!any && !other) return {items: 0, other: 0, sst: 0, disc: 0, total: num(b.amount), net: num(b.amount), manual: true};
+  const total = Math.round((items + other + sst - disc) * 100) / 100;
+  return {items: Math.round(items * 100) / 100, other, sst, disc, total, net: Math.round((total - sst) * 100) / 100, manual: false};
 }
-function plcReadBids(){
-  return $$('#plBids tr[data-bi]').map(tr => { const o = {id: tr.dataset.bi}; tr.querySelectorAll('[data-bk]').forEach(e => { o[e.dataset.bk] = e.type === 'checkbox' ? e.checked : clean(e.value); }); return o; });
+const plcBidNew = n => ({id: 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) + n, supplier: '', reg: 'YES', ref: '', qdate: '', terms: '', valid: '', dtime: '', rec: '', ok: true, rem: '', other: {d: '', amt: ''}, sst: '', disc: '', lines: {}, amount: ''});
+function plcRfqCat(r){ const t = new Set(plcBuyIdx(r).map(i => r.items[i].type || 'P')); return t.size !== 1 ? 'MIXED' : t.has('R') ? 'RENTAL' : t.has('S') ? 'SERVICES' : 'PURCHASE'; }
+function plcS3(r, ed){
+  const w = plcWait(r, 3); if(w && r.stage < 3 || r.status === 'fromStore') return plcSH(3, 'Technical Commercial Bid Evaluation — quotations from at least three suppliers, compared item by item.') + w;
+  const min = num(PLC.cfg.minBids) || 3;
+  if(ed){ while(r.rfq.bids.length < min) r.rfq.bids.push(plcBidNew(r.rfq.bids.length)); }
+  const B = r.rfq.bids; let sel = Math.min(Math.max(0, r.rfq.sel || 0), Math.max(0, B.length - 1)); r.rfq.sel = sel;
+  const b = B[sel] || plcBidNew(0), L = b.lines || {}, idx = plcBuyIdx(r), parts = plcBidParts(r, b);
+  const f = (k, l, v, x) => `<label class="pl-fl"><span>${l}</span>${x && x.opts ? `<select data-bf="${k}"${plcRO(ed)}>${x.opts.map(o => `<option${o === v ? ' selected' : ''}>${o}</option>`).join('')}</select>` : `<input data-bf="${k}" type="${x && x.type || 'text'}" value="${esc(v || '')}"${x && x.ph ? ` placeholder="${esc(x.ph)}"` : ''}${plcRO(ed)}>`}</label>`;
+  const m2 = v => num(v) ? num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—';
+  return plcSH(3, `Technical Commercial Bid Evaluation (TCBE) — at least ${min} quotations. Fill each supplier's offer item by item; the lowest compliant price per item shows in green. Choosing a supplier other than the lowest compliant total needs a justification.`) + `
+  <div class="pl-form">${plcF('rfqNo', 'RFQ no', r.rfq.no || (ed ? plcNext('rfq') : ''), ed, {req: 1})}${plcF('rfqDate', 'Closing date', r.rfq.date || '', ed, {type: 'date'})}
+    ${plcF('rfqCat', 'Category', r.rfq.cat || plcRfqCat(r), ed, {opts: ['PURCHASE', 'RENTAL', 'SERVICES', 'MIXED']})}${plcF('rfqDel', 'Delivery terms (all suppliers)', r.rfq.dterms || '', ed, {ph: 'e.g. DAP ZNESB YARD TKY'})}</div>
+  <div class="tcb-tabs" role="tablist">${B.map((x, i) => `<button type="button" class="tcb-tab${i === sel ? ' on' : ''}${r.rfq.award === x.id ? ' aw' : ''}" data-bsel="${i}">Supplier #${i + 1}<small>${esc(x.supplier || '—')}</small><b data-btot="${i}">${plcBidParts(r, x).total ? plcRM(plcBidParts(r, x).total) : ''}</b></button>`).join('')}${ed ? '<button type="button" class="tcb-tab add" data-pa="addBid">＋ Add supplier</button>' : ''}</div>
+  <div class="tcb-panel" id="plBid" data-bid="${esc(b.id)}">
+    <div class="pl-form" style="margin-top:0">${f('supplier', 'Supplier name', b.supplier, {ph: 'e.g. Eastern Pipes & Fittings Sdn Bhd'})}${f('reg', 'Registered supplier', b.reg || 'YES', {opts: ['YES', 'NO']})}${f('ref', 'Quotation ref no', b.ref)}${f('qdate', 'Quotation date', b.qdate, {type: 'date'})}
+      ${f('terms', 'Payment terms', b.terms, {ph: 'e.g. 30 DAYS'})}${f('valid', 'Price & quotation validity', b.valid, {ph: 'e.g. 30 DAYS'})}${f('dtime', 'Delivery time', b.dtime, {ph: 'e.g. 3-6 WORKING DAYS'})}${f('rec', 'Recommendation', b.rec)}</div>
+    <div class="pl-tw"><table class="pl-t pl-it tcb-it"><thead><tr><th>Item</th><th>Description</th><th class="n">Qty</th><th>UOM</th><th>Offer / brand</th><th>Parity</th><th class="n">Unit price (RM)</th><th class="n">Amount (RM)</th></tr></thead><tbody>
+      ${idx.map((i, n) => { const it = r.items[i], l = L[i] || {}; return `<tr data-bl="${i}"><td>${n + 1}</td><td>${esc(it.desc)}${it.dur ? `<span class="pl-sub">${esc(it.dur)}</span>` : ''}</td><td class="n">${plcNet(it)}</td><td>${esc(it.unit)}</td>
+        <td><input data-bk="offer" value="${esc(l.offer || '')}" placeholder="Brand / origin / offer"${plcRO(ed)}></td>
+        <td><select data-bk="par" class="tcb-par ${String(l.par || 'COMPLY').replace(/\s/g, '')}"${plcRO(ed)}>${PLC_PAR.map(p => `<option${(l.par || 'COMPLY') === p ? ' selected' : ''}>${p}</option>`).join('')}</select></td>
+        <td><input data-bk="rate" type="number" min="0" step="0.01" class="n" value="${esc(l.rate || '')}" placeholder="—"${plcRO(ed)}></td><td class="n" data-bamt="${i}">${m2(num(l.rate) * plcNet(it))}</td></tr>`; }).join('')}</tbody>
+      <tfoot><tr><td></td><td colspan="5"><input data-bf="otherD" value="${esc((b.other || {}).d || '')}" placeholder="Other charges (e.g. 3rd party endorsement for mill cert)"${plcRO(ed)}></td><td colspan="2"><input data-bf="otherA" type="number" step="0.01" class="n" value="${esc((b.other || {}).amt || '')}" placeholder="0.00"${plcRO(ed)}></td></tr>
+        <tr><td></td><td colspan="5" class="n">Sales &amp; Service Tax (SST), if applicable (RM)</td><td colspan="2"><input data-bf="sst" type="number" step="0.01" class="n" value="${esc(b.sst || '')}" placeholder="0.00"${plcRO(ed)}></td></tr>
+        <tr><td></td><td colspan="5" class="n">Discount (RM)</td><td colspan="2"><input data-bf="disc" type="number" step="0.01" class="n" value="${esc(b.disc || '')}" placeholder="0.00"${plcRO(ed)}></td></tr>
+        <tr class="tot"><td></td><td colspan="5" class="n">Total award (RM)</td><td colspan="2" class="n" id="plBTot">${parts.total ? m2(parts.total) : '—'}</td></tr></tfoot></table></div>
+    ${parts.manual && num(b.amount) ? `<p class="pl-hint">This quotation was saved as a lump sum of ${plcRM(b.amount)} (older matrix). Enter unit prices to break it down.</p>` : ''}
+    <div class="tcb-ft"><label class="tcb-ok"><input type="checkbox" data-bf="ok"${b.ok !== false ? ' checked' : ''}${plcRO(ed)}> Technically acceptable (TA)</label>${f('rem', 'Remarks', b.rem)}${ed && B.length > 1 ? `<button class="btn sm danger" data-bdel="${esc(b.id)}">✕ Remove supplier #${sel + 1}</button>` : ''}</div>
+  </div>
+  <h4 class="pl-h4">Comparison — lowest compliant price per item in green</h4>
+  <div class="pl-tw" id="plCmp">${plcCmpHtml(r, ed)}</div>
+  <div class="pl-rec" id="plRec"></div>
+  <div class="pl-form">${plcF('just', 'Justification (needed if the award is not the lowest compliant total, or fewer than ' + min + ' valid quotations)', r.rfq.just || '', ed, {area: 1, wide: 1})}</div>
+  <div class="pl-btns"><button class="btn" data-ptcbe="1">🖨 Print TCBE</button>${ed ? `<button class="btn" data-pa="return">↩ Return to requester</button><span class="sp"></span><button class="btn" data-pa="saveRfq">Save TCBE</button><button class="btn primary" data-pa="rfqOk">Submit for LOA →</button>` : ''}</div>
+  ${!ed && r.rfq.at ? `<p class="pl-done">✓ Submitted for LOA by <b>${esc(r.rfq.by || '')}</b> on ${plcDT(r.rfq.at)}</p>` : !ed ? w : ''}`;
+}
+/* comparison table (live): unit prices per item per supplier, lowest compliant in green; totals, rank and the award choice */
+function plcCmpHtml(r, ed){
+  const B = r.rfq.bids.filter(b => clean(b.supplier) || Object.values(b.lines || {}).some(l => num(l.rate) > 0) || num(b.amount)), idx = plcBuyIdx(r);
+  if(!B.length) return '<div class="note">Enter at least one supplier to compare.</div>';
+  const P = B.map(b => plcBidParts(r, b)), lowT = B.map((b, k) => ({b, t: P[k].total, ok: b.ok !== false && P[k].total > 0})).filter(x => x.ok).sort((a, b) => a.t - b.t).map(x => x.b.id);
+  const m2 = v => num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const body = idx.map((i, n) => { const it = r.items[i], pr = B.map(b => { const l = (b.lines || {})[i] || {}; return {p: num(l.rate), par: l.par || 'COMPLY', ok: b.ok !== false}; });
+    const ok = pr.filter(x => x.p > 0 && x.ok && (x.par === 'COMPLY')).map(x => x.p), lo = ok.length ? Math.min(...ok) : null;
+    return `<tr><td>${n + 1}</td><td>${esc(it.desc)}</td><td class="n">${plcNet(it)} ${esc(it.unit)}</td>${pr.map(x => `<td class="n${lo !== null && x.p === lo && x.par === 'COMPLY' && x.ok ? ' tcb-lo' : ''}">${x.par === 'NO QUOTE' ? '<span class="faint">no quote</span>' : x.par === 'INCLUDE' ? '<span class="faint">include</span>' : x.p ? m2(x.p) : '<span class="faint">—</span>'}${x.par === 'NOT COMPLY' ? '<span class="pl-sub pl-late">not comply</span>' : ''}</td>`).join('')}</tr>`; }).join('');
+  return `<table class="pl-t tcb-cmp"><thead><tr><th>Item</th><th>Description</th><th class="n">Qty</th>${B.map((b, k) => `<th class="n">#${r.rfq.bids.indexOf(b) + 1} ${esc(b.supplier || '—')}<span class="pl-sub">unit price (RM)</span></th>`).join('')}</tr></thead><tbody>${body}</tbody>
+    <tfoot><tr class="tot"><td></td><td>Total award (RM)</td><td></td>${B.map((b, k) => `<td class="n${lowT[0] === b.id ? ' tcb-lo' : ''}">${P[k].total ? m2(P[k].total) : '—'}${P[k].total ? `<span class="pl-sub">${lowT.indexOf(b.id) >= 0 ? 'L' + (lowT.indexOf(b.id) + 1) : 'not TA'}</span>` : ''}</td>`).join('')}</tr>
+      <tr><td></td><td>Award</td><td></td>${B.map(b => `<td class="n"><label class="tcb-aw"><input type="radio" name="plAward" value="${esc(b.id)}"${r.rfq.award === b.id ? ' checked' : ''}${plcRO(ed)}> ${r.rfq.award === b.id ? '<b>Awarded</b>' : 'Award'}</label></td>`).join('')}</tr></tfoot></table>`;
+}
+/* read the open supplier tab + the RFQ header into r */
+function plcReadRfq(r){
+  const g = k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); return e ? clean(e.value) : undefined; };
+  if(g('rfqNo') !== undefined) r.rfq.no = g('rfqNo'); if(g('rfqDate') !== undefined) r.rfq.date = g('rfqDate'); if(g('rfqCat') !== undefined) r.rfq.cat = g('rfqCat'); if(g('rfqDel') !== undefined) r.rfq.dterms = g('rfqDel');
+  const j = $('#plc [data-pv="just"]'); if(j) r.rfq.just = j.value;
+  const aw = $('#plc input[name="plAward"]:checked'); if(aw) r.rfq.award = aw.value;
+  const P = $('#plBid'); if(P){ const b = r.rfq.bids.find(x => x.id === P.dataset.bid); if(b){
+    P.querySelectorAll('[data-bf]').forEach(e => { const k = e.dataset.bf, v = e.type === 'checkbox' ? e.checked : clean(e.value);
+      if(k === 'otherD') (b.other = b.other || {}).d = v; else if(k === 'otherA') (b.other = b.other || {}).amt = v; else b[k] = v; });
+    b.lines = b.lines || {};
+    P.querySelectorAll('tr[data-bl]').forEach(tr => { const l = b.lines[tr.dataset.bl] = Object.assign({}, b.lines[tr.dataset.bl] || {}); tr.querySelectorAll('[data-bk]').forEach(e => { l[e.dataset.bk] = clean(e.value); }); });
+  } }
+  r.rfq.bids.forEach(x => { const pt = plcBidParts(r, x); if(!pt.manual) x.amount = pt.total ? String(pt.total) : ''; });
+  return r;
+}
+const plcReadBids = () => { const r = plcCur(); return r ? plcReadRfq(plcClone(r)).rfq.bids : []; };
+function plcKeepRfq(r){ plcReadRfq(r); }
+function plcRfqLive(){
+  const r0 = plcCur(); if(!r0 || !$('#plBid')) return;
+  const r = plcReadRfq(plcClone(r0)), b = r.rfq.bids.find(x => x.id === $('#plBid').dataset.bid), m2 = v => num(v) ? num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—';
+  if(b){ $$('#plBid tr[data-bl]').forEach(tr => { const i = +tr.dataset.bl, l = (b.lines || {})[i] || {}, c = tr.querySelector('[data-bamt]'); if(c) c.textContent = l.par === 'NO QUOTE' || l.par === 'INCLUDE' ? '—' : m2(num(l.rate) * plcNet(r.items[i]));
+      const s = tr.querySelector('select[data-bk="par"]'); if(s) s.className = 'tcb-par ' + String(s.value).replace(/\s/g, ''); });
+    const t = plcBidParts(r, b).total; $('#plBTot').textContent = t ? m2(t) : '—'; const k = r.rfq.bids.indexOf(b), tt = document.querySelector('#plc [data-btot="' + k + '"]'); if(tt) tt.textContent = t ? plcRM(t) : '';
+    const tab = document.querySelector('#plc [data-bsel="' + k + '"] small'); if(tab) tab.textContent = b.supplier || '—'; }
+  const cmp = $('#plCmp'); if(cmp) cmp.innerHTML = plcCmpHtml(r, plcCanEdit(r, 3));
+  const B = r.rfq.bids, valid = B.filter(x => clean(x.supplier) && plcBidParts(r, x).total > 0), okB = valid.filter(x => x.ok !== false).sort((a, c) => plcBidParts(r, a).total - plcBidParts(r, c).total), low = okB[0];
+  const min = num(PLC.cfg.minBids) || 3, a = valid.find(x => x.id === r.rfq.award), rec = $('#plRec'), why = [], T = x => plcBidParts(r, x).total;
+  if(valid.length < min) why.push('only ' + valid.length + ' valid quotation' + (valid.length === 1 ? '' : 's') + ' (minimum ' + min + ')');
+  if(a && low && a.id !== low.id) why.push('award is ' + plcRM(T(a) - T(low)) + ' above the lowest compliant total');
+  if(a && a.ok === false) why.push('awarded supplier is not technically acceptable');
+  if(rec){ rec.innerHTML = (low ? `<span>Lowest compliant total: <b>${esc(low.supplier)}</b> — ${plcRM(T(low))}</span>` : '<span class="faint">Enter suppliers and prices to compare.</span>') + (a ? `<span>Award: <b>${esc(a.supplier)}</b> — ${plcRM(T(a))}</span>` : '') + (why.length ? `<span class="pl-late">⚠ Justification needed: ${esc(why.join('; '))}</span>` : ''); rec.dataset.need = why.length ? '1' : ''; }
+}
+/* the TCBE sheet (A4 landscape), same layout as the company Excel */
+function plcTcbeHtml(r){
+  const B = r.rfq.bids.filter(b => clean(b.supplier)), idx = plcBuyIdx(r), f = r.psr.form || {}, logo = (document.querySelector('.brand .logo img') || {}).src || '', N = B.length || 1;
+  const m2 = v => num(v) ? num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '';
+  const dmy = s => /^\d{4}-\d{2}-\d{2}/.test(String(s || '')) ? String(s).slice(8, 10) + '.' + String(s).slice(5, 7) + '.' + String(s).slice(0, 4) : esc(s || '');
+  const P = B.map(b => plcBidParts(r, b)), awd = r.rfq.award;
+  const lo = {}; idx.forEach(i => { const ps = B.map(b => { const l = (b.lines || {})[i] || {}; return b.ok !== false && (l.par || 'COMPLY') === 'COMPLY' && num(l.rate) > 0 ? num(l.rate) : null; }).filter(x => x !== null); lo[i] = ps.length ? Math.min(...ps) : null; });
+  const sp = (cls, txt) => `<td class="${cls}">${txt}</td>`, parC = p => p === 'NOT COMPLY' ? 'tn' : p === 'NO QUOTE' ? 'nq' : 'ta';
+  const head = (lbl, fn, tech) => `<tr><th colspan="5" class="lh">${lbl}</th>${B.map((b, k) => `<td colspan="2" class="c">${fn(b, k)}</td>`).join('')}${B.map((b, k) => `<td colspan="3" class="c${awd === b.id ? ' awh' : ''}">${fn(b, k)}</td>`).join('')}</tr>`;
+  const rows = idx.map((i, n) => { const it = r.items[i];
+    return `<tr><td class="c">${n + 1}</td><td>${esc(it.desc)}</td><td class="c">${plcNet(it)}</td><td class="c">${esc(String(it.unit || '').toUpperCase())}</td><td class="c">${esc(String(it.dur || '').toUpperCase())}</td>
+      ${B.map(b => { const l = (b.lines || {})[i] || {}, p = l.par || 'COMPLY'; return `<td>${esc(l.offer || '')}</td><td class="c ${parC(p)}">${p === 'NO QUOTE' ? 'NO<br>QUOTE' : esc(p)}</td>`; }).join('')}
+      ${B.map(b => { const l = (b.lines || {})[i] || {}, p = l.par || 'COMPLY', g = lo[i] !== null && num(l.rate) === lo[i] && p === 'COMPLY' && b.ok !== false ? ' lo' : '', cp = p === 'NO QUOTE' || (!num(l.rate) && p !== 'INCLUDE') ? 'NO QUOTE' : p === 'INCLUDE' ? 'INCLUDE' : p;
+        return `<td class="n${g}">${p === 'NO QUOTE' ? '' : m2(l.rate)}</td><td class="n${g}">${p === 'NO QUOTE' || p === 'INCLUDE' ? '' : m2(num(l.rate) * plcNet(it))}</td><td class="c ${parC(cp)}${g}">${cp === 'NO QUOTE' ? 'NO<br>QUOTE' : esc(cp)}</td>`; }).join('')}</tr>`; }).join('');
+  const sumRow = (lbl, fn, cls) => `<tr class="${cls || ''}"><td></td><td colspan="4"><b>${lbl}</b></td>${B.map(() => '<td></td><td></td>').join('')}${B.map((b, k) => `<td colspan="2" class="n">${fn(b, k)}</td><td></td>`).join('')}</tr>`;
+  const other = B.some(b => num((b.other || {}).amt)) ? `<tr><td></td><td colspan="4"><b>Other charges</b></td>${B.map(() => '<td></td><td></td>').join('')}${B.map(b => num((b.other || {}).amt) ? `<td colspan="2" style="white-space:normal">${esc(b.other.d || '')}</td><td class="n">${m2(b.other.amt)}</td>` : '<td colspan="2"></td><td></td>').join('')}</tr>` : '';
+  const crit = (lbl, fn, common) => `<tr><td class="cl">${lbl}</td><td class="cc">:</td>${common !== undefined ? `<td colspan="${N}" class="cv">${esc(common)}</td>` : B.map((b, k) => `<td class="cv">${fn(b, k)}</td>`).join('')}</tr>`;
+  const sig = (l, nm, t) => `<td><div class="tsl">${l}</div><div class="tss"></div><div class="tsn">${esc(nm || '')}</div><div class="tst">${t}</div></td>`;
+  const by = s => String(s || '').replace(/\s*\([^)]*\)\s*$/, '');
+  return `<style>@page{size:A4 landscape;margin:5mm}</style><div class="tcb-doc" style="--n:${N}">
+    <div class="tcb-h"><span></span><h1>TECHNICAL COMMERCIAL BID EVALUATION SHEET (TCBE)</h1>${logo ? `<img src="${logo}" alt="">` : '<span></span>'}</div>
+    <table class="tcb-info"><colgroup><col style="width:12%"><col style="width:40%"><col><col style="width:5%"><col style="width:5%"></colgroup><tr><th>PROJECT TITLE</th><td>${esc(f.projTitle || r.title || '')}</td><td class="sp"></td><td class="pg">PAGE</td><td class="pg">1 OF 1</td></tr>
+      <tr><th>PROJECT CODE</th><td>${esc(f.projCode || r.charge || '')}</td><td class="sp" colspan="3"></td></tr><tr><th>RFQ NO.</th><td>${esc(r.rfq.no || '')}</td><td class="sp" colspan="3"></td></tr><tr><th>CATEGORY</th><td>${esc(r.rfq.cat || plcRfqCat(r))}</td><td class="sp" colspan="3"></td></tr></table>
+    <table class="tcb-t"><colgroup><col style="width:2.4%"><col style="width:14%"><col style="width:2.6%"><col style="width:2.8%"><col style="width:3.6%">${B.map(() => `<col style="width:${Math.max(5, 74.6 / N - 15.8).toFixed(2)}%"><col style="width:3.6%">`).join('')}${B.map(() => '<col style="width:4%"><col style="width:4.6%"><col style="width:3.6%">').join('')}</colgroup><thead>
+      <tr><th colspan="5" class="lh"></th><th colspan="${2 * N}" class="tsec">TECHNICAL EVALUATION</th><th colspan="${3 * N}" class="tsec">COMMERCIAL EVALUATION</th></tr>
+      ${head('SUPPLIER NOS', (b, k) => '<b>SUPPLIER #' + (k + 1) + '</b>' + (awd === b.id ? ' ★' : ''))}${head('SUPPLIER NAME', b => esc(String(b.supplier).toUpperCase()))}${head('REGISTERED SUPPLIER', b => esc(b.reg || ''))}
+      ${head('QUOTATION REF NO.', b => esc(b.ref || ''))}${head('QUOTATION DATE', b => dmy(b.qdate))}
+      <tr class="ch"><th style="width:2.4%">ITEM</th><th style="width:14%">DESCRIPTION</th><th style="width:2.6%">QTY</th><th style="width:2.8%">UOM</th><th style="width:3.6%">DURATION</th>${B.map(() => `<th style="width:${Math.max(5, 74.6 / N - 15.8).toFixed(2)}%">OFFER/BRAND</th><th style="width:3.6%">PARITY BAND</th>`).join('')}${B.map(() => '<th style="width:4%">UNIT PRICE (RM)</th><th style="width:4.6%">AMOUNT (RM)</th><th style="width:3.6%">PARITY BAND</th>').join('')}</tr></thead>
+      <tbody>${rows}${other}${sumRow('SALES &amp; SERVICE TAX (SST), if applicable', b => m2(b.sst))}${sumRow('Discount', b => num(b.disc) ? '(' + m2(b.disc) + ')' : '')}</tbody></table>
+    <div class="tcb-low"><div class="tcb-leg"><div class="ta">TECHNICALLY ACCEPTABLE (TA)</div><div class="tn">TECHNICALLY NOT ACCEPTABLE (TNA)</div></div>
+      <table class="tcb-crit"><tr class="tot"><td class="cl">TOTAL AWARD, RM</td><td class="cc"></td>${B.map((b, k) => `<td class="cv n${awd === b.id ? ' awt' : ''}"><b>${P[k].total ? m2(P[k].total) : ''}</b></td>`).join('')}</tr>
+        <tr><td class="cl">CRITERIAS :</td><td></td>${B.map(b => `<td class="cv ${b.ok !== false ? 'ta' : 'tn'}">${b.ok !== false ? 'TA' : 'TNA'}</td>`).join('')}</tr>
+        ${crit('PAYMENT TERMS', b => esc(b.terms || ''))}${crit('PRICE &amp; QUOTATION VALIDITY', b => esc(b.valid || ''))}${crit('DELIVERY TERMS', null, r.rfq.dterms || '')}${crit('DELIVERY TIME', b => esc(b.dtime || ''))}
+        ${crit('RECOMMENDATION', b => (awd === b.id ? '<b>RECOMMENDED FOR AWARD</b>' + (b.rec ? '<br>' : '') : '') + esc(b.rec || ''))}</table></div>
+    ${r.rfq.just ? `<div class="tcb-just"><b>Justification:</b> ${esc(r.rfq.just)}</div>` : ''}
+    <table class="tcb-sig"><tr>${sig('Prepared by', by(r.rfq.by), 'Procurement Assistant')}${sig('Check by', '', 'Cost Controller')}${sig('Review by', '', 'Project Engineer')}${sig('Verified by', '', 'Project Manager')}${sig('Appraised by', '', 'Project Director')}${sig('Approved by', by(r.loa.by), 'Operation/Managing Director')}</tr></table></div>`;
+}
+function plcTcbeShow(){
+  const r0 = plcCur(); if(!r0) return; const r = $('#plBid') ? plcReadRfq(plcClone(r0)) : r0, d = $('#dlgPlc');
+  if(!r.rfq.bids.some(b => clean(b.supplier))){ toast('Enter at least one supplier first.'); return; }
+  $('#plDlgT').textContent = '📄 TCBE ' + (r.rfq.no || '') + ' — ' + (r.title || '');
+  $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap psr-wrap">${plcTcbeHtml(r).replace(/<style>@page[^<]*<\/style>/, '')}</div>`;
+  $('#plDlgF').innerHTML = `<span class="faint" style="font-size:12px;margin-right:auto">Prints on A4 landscape. Lowest compliant price per item in green.</span><button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF</button>`;
+  $('#plDlgX').onclick = () => d.close(); $('#plDlgP').onclick = () => { d.close(); plcPrint(plcTcbeHtml(r)); };
+  d.showModal();
 }
 /* 5 — LOA */
 function plcS4(r, ed){
@@ -2032,6 +2153,7 @@ function plcS4(r, ed){
   <div class="pl-award"><div><span>Recommended supplier</span><b>${esc(a ? a.supplier : '—')}</b>${a && a.ref ? `<small class="mono">${esc(a.ref)}</small>` : ''}</div><div><span>Amount</span><b>${a ? plcRM(a.amount) : '—'}</b><small>${a && low && a.id === low.id ? 'Lowest compliant bid' : a ? '⚠ Not the lowest compliant bid' : ''}</small></div><div><span>Quotations</span><b>${b.length}</b><small>RFQ ${esc(r.rfq.no || '—')}</small></div></div>
   <div class="pl-tw"><table class="pl-t"><thead><tr><th>Supplier</th><th>Ref</th><th class="n">Amount</th><th class="n">Days</th><th>Terms</th><th>Compliant</th></tr></thead><tbody>${b.slice().sort((x, y) => num(x.amount) - num(y.amount)).map(x => `<tr class="${a && a.id === x.id ? 'aw' : ''}"><td>${esc(x.supplier)}${a && a.id === x.id ? ' <b class="pl-tag">AWARD</b>' : ''}</td><td class="mono">${esc(x.ref)}</td><td class="n">${plcRM(x.amount)}</td><td class="n">${esc(x.days)}</td><td>${esc(x.terms)}</td><td>${x.ok !== false ? 'Yes' : '<span class="pl-late">No</span>'}</td></tr>`).join('')}</tbody></table></div>
   ${r.rfq.just ? `<p class="pl-just"><b>Justification:</b> ${esc(r.rfq.just)}</p>` : ''}
+  <div style="margin-top:10px"><button class="btn sm" data-ptcbe="1">🖨 View / print TCBE</button></div>
   <div class="pl-form">${plcF('loaNo', 'LOA no', r.loa.no || (ed ? plcNext('loa') : ''), ed, {req: 1})}${plcF('loaBy', 'Signed by', r.loa.by || (ed ? PLC.cfg.approver || hubUser() : ''), ed, {req: 1})}
     ${plcF('loaTitle', 'Designation', r.loa.title || (ed ? PLC.cfg.approverTitle : ''), ed)}${plcF('loaNote', 'Remarks', r.loa.note || '', ed, {wide: 1})}</div>
   ${ed ? `<div class="pl-btns"><button class="btn danger" data-pa="loaNo">✕ Reject — back to RFQ</button><span class="sp"></span><button class="btn primary" data-pa="loaOk">✓ Approve &amp; sign LOA</button></div>`
@@ -2069,26 +2191,16 @@ function plcCalc(){
   let anyBuy = false;
   $$('#plc [data-sk]').forEach(e => { const i = +e.dataset.sk, it = r.items[i], n = Math.max(0, num(it.qty) - num(e.value)); if(n > 0) anyBuy = true; const c = document.querySelector('#plc [data-net="' + i + '"]'); if(c) c.innerHTML = '<b>' + n + '</b>'; });
   const sb = $('#plSBtn'); if(sb){ sb.textContent = anyBuy ? 'Confirm → PSR' : 'Close — issue all from store'; const h = $('#plSHint'); if(h) h.textContent = anyBuy ? '' : 'Everything is in store — no purchase needed.'; }
-  // bids
-  const tb = $('#plBids');
-  if(tb){ const bids = plcReadBids(), valid = bids.filter(b => b.supplier && num(b.amount) > 0), okB = valid.filter(b => b.ok !== false).sort((a, b) => num(a.amount) - num(b.amount)), low = okB[0];
-    const aw = (tb.querySelector('input[name="plAward"]:checked') || {}).value || '';
-    tb.querySelectorAll('tr[data-bi]').forEach(tr => { const id = tr.dataset.bi, k = okB.findIndex(b => b.id === id), cell = tr.querySelector('[data-rk]');
-      tr.classList.toggle('low', !!low && low.id === id); tr.classList.toggle('aw', aw === id);
-      if(cell) cell.innerHTML = k >= 0 ? (k === 0 ? '<b class="pl-tag g">L1</b>' : 'L' + (k + 1)) : valid.some(b => b.id === id) ? '<span class="faint">non-compliant</span>' : ''; });
-    const min = num(PLC.cfg.minBids) || 3, a = valid.find(b => b.id === aw), rec = $('#plRec'), why = [];
-    if(valid.length < min) why.push('only ' + valid.length + ' valid quotation' + (valid.length === 1 ? '' : 's') + ' (minimum ' + min + ')');
-    if(a && low && a.id !== low.id) why.push('award is ' + plcRM(num(a.amount) - num(low.amount)) + ' above the lowest compliant bid');
-    if(a && a.ok === false) why.push('awarded bid is marked non-compliant');
-    if(rec) rec.innerHTML = (low ? `<span>Lowest compliant: <b>${esc(low.supplier)}</b> — ${plcRM(low.amount)}</span>` : '<span class="faint">Enter supplier names and amounts to compare.</span>') + (a ? `<span>Award: <b>${esc(a.supplier)}</b> — ${plcRM(a.amount)}</span>` : '') + (why.length ? `<span class="pl-late">⚠ Justification needed: ${esc(why.join('; '))}</span>` : '');
-    rec && (rec.dataset.need = why.length ? '1' : ''); }
+  // RFQ / TCBE
+  plcRfqLive();
   // PO
   const pl = $('#plPoL');
   if(pl){ const tmp = plcReadPo(plcClone(r)), c = plcPoCalc(tmp);
     pl.querySelectorAll('tr[data-li]').forEach((tr, i) => { const l = tmp.po.lines[i], cell = tr.querySelector('[data-lamt]'); if(cell) cell.textContent = num(l.rate) > 0 ? num(l.qty * l.rate).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'; });
     $('#plSub').textContent = plcRM(c.sub); $('#plSstL').textContent = 'SST ' + c.sstP + '%'; $('#plSst').textContent = plcRM(c.sst); $('#plTot').textContent = plcRM(c.total);
     const h = $('#plPoHint'), a = c.award;
-    if(h) h.innerHTML = !c.priced ? 'No unit prices — the PO shows one lump sum as per the awarded quotation (' + (a ? plcRM(a.amount) : '—') + ').' : a && Math.abs(c.sub - num(a.amount)) > 0.009 ? '<span class="pl-late">⚠ Lines add up to ' + plcRM(c.sub) + ' but the LOA amount is ' + plcRM(a.amount) + '.</span>' : '✓ Lines match the LOA amount.'; }
+    const an = a ? plcBidParts(tmp, a).net : 0;
+    if(h) h.innerHTML = !c.priced ? 'No unit prices — the PO shows one lump sum as per the awarded quotation (' + (a ? plcRM(an) : '—') + ' before SST).' : a && Math.abs(c.sub - an) > 0.009 ? '<span class="pl-late">⚠ Lines add up to ' + plcRM(c.sub) + ' but the awarded quotation is ' + plcRM(an) + ' before SST.</span>' : '✓ Lines match the awarded quotation (unit prices taken from the TCBE).'; }
 }
 function plcInput(e){
   const t = e.target;
@@ -2116,7 +2228,10 @@ async function plcClick(e){
   const r0 = plcCur();
   if(d.pdel !== undefined){ plcReadMrf(r0); r0.items.splice(+d.pdel, 1); if(!r0.items.length) r0.items.push({desc: '', qty: '', unit: 'lot', rem: ''}); renderPlc(); return; }
   if(d.ppdel !== undefined){ plcReadPsr(r0); r0.items.splice(+d.ppdel, 1); if(!r0.items.length) r0.items.push({desc: '', qty: '', unit: 'EA', type: 'P', dur: '', rem: ''}); renderPlc(); return; }
-  if(d.bdel){ r0.rfq.bids = plcReadBids().filter(x => x.id !== d.bdel); plcKeepRfq(r0); renderPlc(); return; }
+  if(d.bdel){ plcReadRfq(r0); const k = r0.rfq.bids.findIndex(x => x.id === d.bdel), x = r0.rfq.bids[k]; if(x && (clean(x.supplier) || Object.keys(x.lines || {}).length) && !confirm('Remove supplier #' + (k + 1) + (x.supplier ? ' (' + x.supplier + ')' : '') + ' from this TCBE?')) return;
+    r0.rfq.bids = r0.rfq.bids.filter(x => x.id !== d.bdel); if(r0.rfq.award === d.bdel) r0.rfq.award = ''; r0.rfq.sel = Math.max(0, k - 1); renderPlc(); return; }
+  if(d.bsel !== undefined){ plcReadRfq(r0); r0.rfq.sel = +d.bsel; renderPlc(); return; }
+  if(d.ptcbe){ plcTcbeShow(); return; }
   const a = d.pa; if(!a) return;
   if(a === 'back'){ if(PLC.sel === '__new' && plcDirty() && !confirm('Leave without saving?')) return; PLC.sel = null; PLC.tab = null; PLC.draft = null; renderPlc(); return; }
   if(a === 'reload'){ PLC.loaded = false; renderPlc(); return; }
@@ -2137,7 +2252,7 @@ async function plcClick(e){
   if(a === 'newPsr'){ if(!PLC_ED()) return; PLC.draft = plcBlankPsr(); PLC.sel = '__new'; PLC.tab = 0; renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(a === 'addPsrItem'){ plcReadPsr(r0); r0.items.push({desc: '', qty: '', unit: 'EA', type: 'P', dur: '', rem: ''}); renderPlc(); const ins = $$('#plc tr[data-pidx] input[data-pk="desc"]'); if(ins.length) ins[ins.length - 1].focus(); return; }
   if(a === 'addItem'){ plcReadMrf(r0); r0.items.push({desc: '', qty: '', unit: 'lot', rem: ''}); renderPlc(); const ins = $$('#plc tr[data-pi] [data-ik="desc"]'); if(ins.length) ins[ins.length - 1].focus(); return; }
-  if(a === 'addBid'){ r0.rfq.bids = plcReadBids(); plcKeepRfq(r0); r0.rfq.bids.push({id: 'b' + Date.now().toString(36), supplier: '', ref: '', amount: '', days: '', terms: '', ok: true, rem: ''}); renderPlc(); return; }
+  if(a === 'addBid'){ plcReadRfq(r0); r0.rfq.bids.push(plcBidNew(r0.rfq.bids.length)); r0.rfq.sel = r0.rfq.bids.length - 1; renderPlc(); return; }
   if(!PLC_ED()){ toast('Only ZNESB staff can change procurement records.'); return; }
   const r = plcClone(r0), tag = () => plcRef(r) + ' — ';
   const need = plcNeed(a, r0, d), save = async (line, before) => { b.disabled = true; try{ const ok = await plcCommit(r, line, before, need); if(ok){ if(PLC.sel === '__new'){ PLC.sel = r.id; PLC.draft = null; } PLC.tab = null; renderPlc(); toast('Saved ✓ ' + plcRef(r)); } return ok; } finally{ b.disabled = false; } };
@@ -2206,18 +2321,18 @@ async function plcClick(e){
   if(a === 'savePsr'){ if(!psrOk(false)) return; const no = plcVal('psrNo'); if(no && !r.psr.no) r.psr.no = no; if(!r.stageAt) r.stageAt = plcNow();
     await save(tag() + (r0.id ? 'PSR form saved' : 'New PSR raised: ' + r.title), psrNo); return; }
   if(a === 'saveRfq' || a === 'rfqOk'){
-    r.rfq.bids = plcReadBids(); plcKeepRfq(r); r.rfq.no = plcVal('rfqNo'); r.rfq.date = plcVal('rfqDate'); r.rfq.just = ($('#plc [data-pv="just"]') || {}).value || '';
-    r.rfq.bids = r.rfq.bids.filter(x => x.supplier || x.amount);
+    plcReadRfq(r); r.rfq.just = r.rfq.just || ''; delete r.rfq.sel;
+    r.rfq.bids = r.rfq.bids.filter(x => clean(x.supplier) || num(x.amount) || Object.values(x.lines || {}).some(l => num(l.rate) > 0 || clean(l.offer)));
     if(a === 'rfqOk'){
       const {b: valid} = plcBids(r), aw = plcAward(r);
       if(!r.rfq.no){ toast('Enter the RFQ number.'); return; }
-      if(!valid.length){ toast('Enter at least one quotation with a supplier and an amount.'); return; }
-      if(!aw || !aw.supplier || !(num(aw.amount) > 0)){ toast('Choose the supplier to award (the round button in the Award column).'); return; }
+      if(!valid.length){ toast('Enter at least one supplier with prices.'); return; }
+      if(!aw || !aw.supplier || !(num(aw.amount) > 0)){ toast('Choose the supplier to award — the Award row under the comparison table.'); return; }
       if(($('#plRec') || {dataset: {}}).dataset.need && !r.rfq.just.trim()){ toast('A justification is needed — see the warning under the table.', 6000); $('#plc [data-pv="just"]').focus(); return; }
       r.rfq.by = hubUser() || ''; r.rfq.at = plcNow(); step(4);
-      await save(tag() + 'RFQ ' + r.rfq.no + ': ' + valid.length + ' quotations — recommended ' + aw.supplier + ' ' + plcRM(aw.amount) + ', sent for LOA'); return;
+      await save(tag() + 'RFQ ' + r.rfq.no + ': ' + valid.length + ' quotations (TCBE) — recommended ' + aw.supplier + ' ' + plcRM(plcBidParts(r, aw).total) + ', sent for LOA'); return;
     }
-    await save(tag() + 'RFQ matrix saved (' + plcBids(r).b.length + ' quotations)'); return;
+    await save(tag() + 'TCBE saved (' + plcBids(r).b.length + ' quotations)'); return;
   }
   if(a === 'loaOk' || a === 'loaNo'){
     const by = plcVal('loaBy'), note = plcVal('loaNote');
@@ -2234,7 +2349,7 @@ async function plcClick(e){
     if(a === 'poOk'){
       if(!r.po.no || !r.po.date){ toast('Enter the PO number and date.'); return; }
       const c = plcPoCalc(r); if(!(c.sub > 0)){ toast('The PO amount is 0 — check the award or the unit prices.'); return; }
-      if(c.priced && c.award && Math.abs(c.sub - num(c.award.amount)) > 0.009 && !confirm('The order lines add up to ' + plcRM(c.sub) + ', but the LOA was signed for ' + plcRM(c.award.amount) + '. Issue the PO anyway?')) return;
+      const an = c.award ? plcBidParts(r, c.award).net : 0; if(c.priced && c.award && Math.abs(c.sub - an) > 0.009 && !confirm('The order lines add up to ' + plcRM(c.sub) + ', but the awarded quotation is ' + plcRM(an) + ' before SST. Issue the PO anyway?')) return;
       r.po.by = hubUser() || ''; r.po.at = plcNow(); r.po.total = c.total; step(6);
       const ok = await save(tag() + 'PO ' + r.po.no + ' issued to ' + (c.award ? c.award.supplier : '') + ' — ' + plcRM(c.total), (nx, recs) => { if(recs.some(x => x.id !== nx.id && x.stage >= 6 && x.po && x.po.no === nx.po.no)){ throw new Error('PO number ' + nx.po.no + ' is already used'); } });
       if(ok) plcPoShow(r.id); return;
@@ -2242,7 +2357,6 @@ async function plcClick(e){
     await save(tag() + 'PO details saved'); return;
   }
 }
-function plcKeepRfq(r){ const aw = ($('#plBids input[name="plAward"]:checked') || {}).value; if(aw !== undefined) r.rfq.award = aw; const n = $('#plc [data-pv="rfqNo"]'); if(n) r.rfq.no = clean(n.value); const j = $('#plc [data-pv="just"]'); if(j) r.rfq.just = j.value; }
 
 /* ---------- PO document ---------- */
 function plcPoHtml(r, unp){
@@ -2734,6 +2848,75 @@ const PLC_CSS = `<style>
 .pl-seg button{border:0;background:var(--panel2);color:var(--text-dim);font:inherit;font-size:12.5px;font-weight:600;padding:7px 12px;cursor:pointer}
 .pl-seg button.on{background:var(--accent);color:var(--accent-ink)}
 .po-doc .po-unp{display:inline-block;margin:0 0 6px;padding:2px 8px;border:1.5px solid #B3261E;color:#B3261E;font-weight:700;font-size:11px;letter-spacing:.1em}
+
+#plc .tcb-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 0}
+#plc .tcb-tab{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:150px;border:1px solid var(--border);border-bottom:0;border-radius:10px 10px 0 0;background:var(--panel2);color:var(--text-dim);font:inherit;font-size:12px;font-weight:700;padding:8px 12px;text-align:left}
+#plc .tcb-tab small{font-weight:500;font-size:11.5px;color:var(--text-faint);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#plc .tcb-tab b{font-size:12px;color:var(--text)}
+#plc .tcb-tab.on{background:var(--panel);color:var(--accent);box-shadow:inset 0 3px 0 var(--accent)}
+#plc .tcb-tab.aw::after{content:"★ awarded";font-size:10px;color:var(--ok)}
+#plc .tcb-tab.add{justify-content:center;align-items:center;color:var(--accent);border-style:dashed;min-width:120px}
+#plc .tcb-panel{border:1px solid var(--border);border-radius:0 10px 10px 10px;padding:14px;background:var(--panel)}
+#plc .tcb-panel .pl-fl select,#plc .tcb-it select{font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--border);border-radius:7px;background:var(--panel2);color:var(--text)}
+#plc .tcb-it td:nth-child(2){min-width:200px;max-width:280px}
+#plc .tcb-it input[data-bk="offer"]{min-width:200px}
+#plc .tcb-it input[data-bk="rate"]{min-width:96px}
+#plc .tcb-it tfoot input{font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--border);border-radius:7px;background:var(--panel2);color:var(--text);width:100%}
+#plc .tcb-it tfoot td{font-weight:500;color:var(--text-dim)}
+#plc .tcb-it tfoot tr.tot td{color:var(--text);font-weight:700}
+#plc select.tcb-par.COMPLY{color:var(--ok)}#plc select.tcb-par.NOTCOMPLY{color:var(--bad)}#plc select.tcb-par.NOQUOTE{color:var(--text-faint)}#plc select.tcb-par.INCLUDE{color:var(--info)}
+#plc .tcb-ft{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-top:12px}
+#plc .tcb-ft .pl-fl{flex:1 1 260px}
+#plc .tcb-ok{display:flex;gap:7px;align-items:center;font-size:13px;font-weight:600;padding-bottom:8px}
+#plc .tcb-ok input,#plc .tcb-aw input{accent-color:var(--accent);width:16px;height:16px}
+#plc .tcb-cmp{min-width:640px}
+#plc .tcb-cmp td.tcb-lo{background:color-mix(in srgb,var(--ok) 22%,transparent)!important;font-weight:700}
+#plc .tcb-aw{display:inline-flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer}
+/* printed TCBE */
+.tcb-doc{background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;font-size:7.4px;line-height:1.2;padding:10px;min-width:1080px;max-width:1300px;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.12)}
+.tcb-doc table{border-collapse:collapse;width:100%}
+.tcb-doc .tcb-h{display:grid;grid-template-columns:150px 1fr 150px;align-items:center;margin-bottom:4px}
+.tcb-doc .tcb-h h1{margin:0;text-align:center;font-size:13px;font-weight:700}
+.tcb-doc .tcb-h img{height:30px;justify-self:end}
+.tcb-doc .tcb-info{margin-bottom:3px;table-layout:fixed}.tcb-doc .tcb-info td.sp{border:0}
+.tcb-doc .tcb-t{table-layout:fixed}
+.tcb-doc .tcb-info th{text-align:left;font-weight:700;padding:1px 4px;border:1px solid #999}
+.tcb-doc .tcb-info td{padding:1px 6px;border:1px solid #999;font-weight:700}
+.tcb-doc .tcb-info td.pg{background:#ddd;min-width:40px;text-align:center}
+.tcb-doc .tcb-t th,.tcb-doc .tcb-t td{border:1px solid #777;padding:2px 3px;vertical-align:top}
+.tcb-doc .tcb-t th{background:#C6E0B4;font-weight:700;text-align:center;vertical-align:middle;font-size:7.4px!important;letter-spacing:0!important;text-transform:none}
+.tcb-doc .tcb-info th{font-size:7.4px!important}
+.tcb-doc th{letter-spacing:0!important}
+.tcb-doc .tcb-t th.lh{background:#fff;text-align:left}
+.tcb-doc .tcb-t th.tsec{background:#D9D9D9;font-size:9px!important}
+.tcb-doc .tcb-t tr.ch th{background:#D9E1F2}
+.tcb-doc .tcb-t td.c{text-align:center}
+.tcb-doc .tcb-t td.n{text-align:right;white-space:nowrap}
+.tcb-doc .tcb-t td.ta{background:#C6EFCE;color:#006100;font-weight:600;text-align:center}
+.tcb-doc .tcb-t td.tn{background:#F4B6B0;color:#9C0006;font-weight:600;text-align:center}
+.tcb-doc .tcb-t td.nq{color:#555;text-align:center}
+.tcb-doc .tcb-t td.lo{background:#92D050!important}
+.tcb-doc .tcb-t td.awh{background:#FFF2CC;font-weight:700}
+.tcb-doc .tcb-low{display:grid;grid-template-columns:220px 1fr;gap:10px;margin-top:6px;align-items:start}
+.tcb-doc .tcb-leg div{padding:3px 5px;font-weight:700;margin-bottom:3px}
+.tcb-doc .tcb-leg .ta{background:#C6EFCE}.tcb-doc .tcb-leg .tn{background:#FF7B6B}
+.tcb-doc .tcb-crit td{padding:2px 5px;vertical-align:top}
+.tcb-doc .tcb-crit td.cl{font-weight:700;width:160px}.tcb-doc .tcb-crit td.cc{width:10px;font-weight:700}
+.tcb-doc .tcb-crit td.cv{border-bottom:1px solid #bbb}
+.tcb-doc .tcb-crit td.cv.ta{color:#006100;font-weight:700}.tcb-doc .tcb-crit td.cv.tn{color:#9C0006;font-weight:700}
+.tcb-doc .tcb-crit tr.tot td{border-top:1.5px solid #000;border-bottom:1.5px solid #000;font-size:8.5px}
+.tcb-doc .tcb-crit td.awt{background:#92D050}
+.tcb-doc .tcb-crit td.n{text-align:right}
+.tcb-doc .tcb-just{margin-top:5px;padding:3px 6px;border-left:3px solid #C99A1B;background:#FFF8E1}
+.tcb-doc .tcb-sig{margin-top:6px;table-layout:fixed}
+.tcb-doc .tcb-sig td{border:1px solid #777;padding:0;vertical-align:top}
+.tcb-doc .tcb-sig .tsl{background:#D9E1F2;font-weight:700;text-align:center;padding:2px}
+.tcb-doc .tcb-sig .tss{height:26px}
+.tcb-doc .tcb-sig .tsn{padding:0 4px;min-height:10px;font-weight:700}
+.tcb-doc .tcb-sig .tst{padding:1px 4px;border-top:1px solid #777}
+@media print{ #printArea .tcb-doc{box-shadow:none;padding:0;min-width:0;max-width:none} #printArea .tcb-doc *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #printArea .tcb-doc table,#printArea .tcb-doc th,#printArea .tcb-doc td{font-size:7.4px} #printArea .tcb-doc .tcb-crit tr.tot td{font-size:8.5px} #printArea .tcb-doc .tcb-info td.sp{border:0} #printArea .tcb-doc th,#printArea .tcb-doc td{padding:2px 3px} #printArea .tcb-doc .tcb-t th{background:#C6E0B4;border:1px solid #777;text-align:center} #printArea .tcb-doc .tcb-t tr.ch th{background:#D9E1F2} #printArea .tcb-doc .tcb-t th.tsec{background:#D9D9D9;font-size:9px!important} #printArea .tcb-doc .tcb-t th.lh{background:#fff;text-align:left}
+  #printArea .tcb-doc .tcb-t td{border:1px solid #777} #printArea .tcb-doc .tcb-crit td{border:0} #printArea .tcb-doc .tcb-crit td.cv{border-bottom:1px solid #bbb} #printArea .tcb-doc .tcb-info th,#printArea .tcb-doc .tcb-info td{border:1px solid #999;background:none} #printArea .tcb-doc .tcb-info td.pg{background:#ddd} #printArea .tcb-doc .tcb-sig td{border:1px solid #777;padding:0} }
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
