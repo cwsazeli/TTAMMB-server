@@ -769,6 +769,7 @@ html[data-theme="dark"] .wk-doc,html:not([data-theme="light"]) .wk-doc{border-ra
 #exec .ex-tag,#exec .ex-pill{letter-spacing:.07em}
 #exec .ex-d-in b{font-size:30px}#exec .ex-d-in span{font-size:var(--ex-label)}
 #exec .ex-f-t{height:28px}#exec .ex-f-row{grid-template-columns:200px minmax(0,1fr) 190px}
+@media(max-width:700px){#exec .ex-f-row{grid-template-columns:minmax(0,1fr)}}
 #exec .ex-tl-r{padding:11px 0}#exec .ex-tl-t{height:28px}
 #exec .ex-heat td{padding:9px 10px}#exec .ex-heat th.n,#exec .ex-heat td.n{width:96px}
 #exec .ex-since{margin-top:18px}
@@ -3881,7 +3882,8 @@ function exSlideKpi(n){
       delta: exDelta(rows, r => num(r.aifOverdue), a.od, 'down', 0), spark: exSpark(pts.map(r => num(r.aifOverdue)), 'var(--bad)'),
       tip:`Share of open findings that are overdue. Green ≤ ${EX_RULE.share.g * 100}% · amber ≤ ${EX_RULE.share.a * 100}% · red above`}); }
   if(n.mat){ const m = n.mat;
-    cs.push({label:'Materials received', value: exCu('mr', m.recv, 'p'), sub: `${m.lines} lines · ${esc(m.health.label)}`, rag: exRagUp(m.recv, EX_RULE.recv),
+    const mrOk = m.lines > 0 && Number.isFinite(+m.recv);
+    cs.push({label:'Materials received', value: mrOk ? exCu('mr', m.recv, 'p') : '—', sub: `${m.lines} lines · ${esc(m.health.label)}`, rag: exRagUp(mrOk ? m.recv : null, EX_RULE.recv),
       delta: exDelta(rows, r => num(r.matPct), m.recv, 'up', 1), spark: exSpark(pts.map(r => num(r.matPct)), 'var(--c-mat)'), tip:`By quantity. Green ≥ ${EX_RULE.recv.g}% · amber ≥ ${EX_RULE.recv.a}% · red below`});
     cs.push({label:'Material lines late', value: exCu('ml', m.late, 'n'), sub: `${m.soon} more due in 7 days`, rag: exRagShare(m.late, m.lines, EX_RULE.matShare),
       delta: exDelta(rows, r => num(r.matLate), m.late, 'down', 0), spark: exSpark(pts.map(r => num(r.matLate)), 'var(--bad)'), tip:`Share of all lines. Green ≤ ${EX_RULE.matShare.g * 100}% · amber ≤ ${EX_RULE.matShare.a * 100}% · red above`}); }
