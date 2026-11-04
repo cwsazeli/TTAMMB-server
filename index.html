@@ -1447,8 +1447,8 @@ const PLC_STEPS = [
   {t: 'PO Generated', s: 'Official PO'}
 ];
 const PLC_TIERS = [['pe', 'PE', 'Project Engineer', 'prepares the PSR'], ['cc', 'OTL', 'Operation Team Leader', 'reviews the PSR'], ['pm', 'PM', 'Project Manager', 'approves the PSR'], ['dir', 'DIR', 'Director', 'approves the PSR']];
-const PLC_CFG0 = {company: 'ZULKIFLI NGAH ENGINEERING SDN BHD', reg: '', addr: '', phone: '', mrf: 'MRF-{YY}-', psr: 'PSR-{YY}-', rfq: 'RFQ-{YY}-', loa: 'LOA-{YY}-', po: 'ZNE/PO/{YY}/',
-  approver: '', approverTitle: 'Director', deliverTo: '', terms: '30 days from invoice date', sst: 0, minBids: 3};
+const PLC_CFG0 = {company: 'ZULKIFLI NGAH ENGINEERING SDN. BHD.', reg: '384384-K', addr: 'Lot PT7538, Kawasan Perindustrian Teluk Kalong, Fasa 1, 24007 Kemaman, Terengganu Darul Iman', phone: 'Tel : 09-8634000 H/P : 019-9210107', email: 'admin@znesb.com.my', poContact: '', mrf: 'MRF-{YY}-', psr: 'PSR-{YY}-', rfq: 'RFQ-{YY}-', loa: 'LOA-{YY}-', po: 'ZNE/PO/{YY}/',
+  approver: '', approverTitle: 'Director', deliverTo: 'ZNE Tky Yard', terms: '30 Days', sst: 0, minBids: 3};
 let PLC = {recs: [], cfg: Object.assign({}, PLC_CFG0), loaded: false, busy: false, err: '', f: {st: 'active', q: ''}, sel: null, tab: null, draft: null};
 
 /* ---------- data helpers ---------- */
@@ -1520,7 +1520,7 @@ function plcLowMap(r){
 function plcPoCalc(r){
   const a = plcAward(r), AL = (a && a.lines) || {}, ap = a ? plcBidParts(r, a) : null; let lines;
   if(Array.isArray(r.po.lines) && r.po.lines.length) lines = r.po.lines;
-  else { lines = plcBuyIdx(r).map(i => { const it = r.items[i], l = AL[i] || {}; return {desc: it.desc, qty: plcNet(it), unit: it.unit, rate: num(l.rate) > 0 && l.par !== 'NO QUOTE' && l.par !== 'INCLUDE' ? l.rate : ''}; });
+  else { lines = plcBuyIdx(r).map(i => { const it = r.items[i], l = AL[i] || {}; return {desc: it.desc, qty: plcNet(it), unit: it.unit, dur: it.dur || '', rate: num(l.rate) > 0 && l.par !== 'NO QUOTE' && l.par !== 'INCLUDE' ? l.rate : ''}; });
     if(a && lines.some(l => num(l.rate) > 0)){ if(num((a.other || {}).amt)) lines.push({desc: a.other.d || 'Other charges', qty: 1, unit: 'LOT', rate: a.other.amt}); if(num(a.disc)) lines.push({desc: 'Discount', qty: 1, unit: 'LOT', rate: String(-num(a.disc))}); } }
   const priced = lines.some(l => clean(l.rate) !== '' && num(l.rate) > 0);
   const sub = Math.round((priced ? lines.reduce((s, l) => s + num(l.qty) * num(l.rate), 0) : (ap ? ap.net : 0)) * 100) / 100;
@@ -2130,8 +2130,8 @@ function plcPsrHtml(r){
 }
 /* A4 landscape forms always print on ONE page: measure the form at the printable width and shrink it just enough to fit */
 function plcPrintFit(){
-  const doc = document.querySelector('#printArea .tcb-doc, #printArea .psr-doc'); if(!doc) return;
-  const pw = doc.classList.contains('tcb-doc') ? 1085 : 1070, ph = doc.classList.contains('tcb-doc') ? 748 : 735;   // printable area of A4 landscape (px at 96 dpi), page margins taken off
+  const doc = document.querySelector('#printArea .tcb-doc, #printArea .psr-doc, #printArea .zpo'); if(!doc) return;
+  const Z = doc.classList.contains('zpo'), pw = Z ? 725 : doc.classList.contains('tcb-doc') ? 1085 : 1070, ph = Z ? 1050 : doc.classList.contains('tcb-doc') ? 748 : 735;   // printable area of A4 landscape (px at 96 dpi), page margins taken off
   const m = document.createElement('div'); m.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + pw + 'px;visibility:hidden;background:#fff';
   const c = doc.cloneNode(true); c.style.cssText = 'width:' + pw + 'px;min-width:0;max-width:none;padding:0;box-shadow:none;margin:0'; m.appendChild(c); document.body.appendChild(m);
   const h = c.offsetHeight; m.remove();
@@ -2145,11 +2145,11 @@ function plcPrint(html){
 }
 /* fit the printed page inside the preview window (click the page to switch between "whole page" and 100 %) */
 function plcFit(){
-  const d = $('#dlgPlc'), db = $('#plDlgB'), wrap = db && db.querySelector('.po-wrap'), doc = wrap && wrap.querySelector('.psr-doc,.tcb-doc,.po-doc'); if(!doc) return;
+  const d = $('#dlgPlc'), db = $('#plDlgB'), wrap = db && db.querySelector('.po-wrap'), doc = wrap && wrap.querySelector('.psr-doc,.tcb-doc,.po-doc,.zpo'); if(!doc) return;
   d.classList.add('pv');
   let box = wrap.querySelector('.pv-box'); if(!box){ box = document.createElement('div'); box.className = 'pv-box'; doc.parentNode.insertBefore(box, doc); box.appendChild(doc);
     box.title = 'Click to zoom in / out'; box.onclick = () => { PLC.pvFull = !PLC.pvFull; plcFit(); }; }
-  const W = doc.classList.contains('tcb-doc') ? 1300 : doc.classList.contains('po-doc') ? 820 : 1120;      // the page's own width (A4 landscape forms / A4 portrait PO)
+  const W = doc.classList.contains('tcb-doc') ? 1300 : doc.classList.contains('zpo') ? 794 : doc.classList.contains('po-doc') ? 820 : 1120;      // the page's own width (A4 landscape forms / A4 portrait PO)
   doc.style.transform = ''; doc.style.width = W + 'px'; const H = doc.offsetHeight;
   const cs = getComputedStyle(wrap), aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), ah = db.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 4;
   const sc = PLC.pvFull ? 1 : Math.min(1, aw / W, ah / H);
@@ -2374,27 +2374,44 @@ function plcS5(r, ed){
     <p class="pl-hint" style="margin-top:6px">Split award — <b>${done}/${S.length}</b> PO${S.length === 1 ? '' : 's'} issued. ${done < S.length ? 'The package closes when every supplier\'s PO is issued.' : 'All POs issued.'}</p>`;
   return plcS5one(sv, ed && !sv.po.at, tabs);
 }
+/* supplier details used on an earlier PO (same supplier name) — prefilled on a new PO */
+function plcSupInfo(name, self){
+  const n = clean(name).toUpperCase(); if(!n) return {}; let best = null;
+  PLC.recs.forEach(r => { const add = (po, sup) => { if(po && po !== self && clean(sup).toUpperCase() === n && (po.addr || po.tel || po.hp || po.email) && (!best || String(po.at || po.date || '') > String(best.at || best.date || ''))) best = po; };
+    add(r.po, (plcAward(r) || {}).supplier); Object.keys(r.pos || {}).forEach(id => { const b = (r.rfq.bids || []).find(x => x.id === id); if(b) add(r.pos[id], b.supplier); }); });
+  return best || {};
+}
+const plcNm = s => String(s || '').replace(/\s*\([^)]*\)\s*$/, '');
 function plcS5one(r, ed, tabs){
   const w = plcWait(r, 5); if(w && r.stage < 5 || r.status === 'fromStore') return plcSH(5, 'The official Purchase Order to the awarded supplier.') + w;
-  const c = plcPoCalc(r), a = c.award, issued = r.stage >= 6;
+  const c = plcPoCalc(r), a = c.award, issued = r.stage >= 6, P = r.po, S = ed ? plcSupInfo(a && a.supplier, P) : {}, g = plcTcbSg(r);
+  const d = (k, v) => P[k] !== undefined && P[k] !== '' ? P[k] : ed ? v : '';
   const pb = r._subId ? ` data-pbid="${esc(r._subId)}"` : '';
-  return plcSH(5, issued ? 'Purchase Order issued. Print it or save it as PDF.' : 'Fill in delivery details. Unit prices are optional — left empty, the PO shows the awarded lump sum.') + (tabs || '') + `
-  <div class="pl-form">${plcF('poNo', 'PO no', r.po.no || (ed ? plcNext('po') : ''), ed, {req: 1})}${plcF('poDate', 'PO date', r.po.date || (ed ? todayISO() : ''), ed, {type: 'date'})}
-    ${plcF('poTo', 'Deliver to', r.po.to || (ed ? PLC.cfg.deliverTo || r.site : ''), ed, {wide: 1})}${plcF('poDel', 'Delivery date', r.po.del || (ed ? r.needBy : ''), ed, {type: 'date'})}
-    ${plcF('poTerms', 'Payment terms', r.po.terms || (ed ? (a && a.terms) || PLC.cfg.terms : ''), ed)}${plcF('poAttn', 'Supplier attention / contact', r.po.attn || '', ed)}
-    ${plcF('poSst', 'SST %', r.po.sst !== undefined && r.po.sst !== '' ? r.po.sst : (ed ? String(PLC.cfg.sst || 0) : ''), ed, {type: 'number'})}${plcF('poNote', 'Notes on the PO', r.po.note || '', ed, {wide: 1})}</div>
-  <h4 class="pl-h4">Order lines — ${esc(a ? a.supplier : '')}${a && a.ref ? ' · quotation ' + esc(a.ref) : ''}</h4>
-  <div class="pl-tw"><table class="pl-t pl-it" id="plPoL"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th><th class="n">Unit price (RM)</th><th class="n">Amount (RM)</th></tr></thead><tbody>
+  return plcSH(5, issued ? 'Purchase Order issued. Print it or save it as PDF — company PO format (A4).' : 'Fill in the PO in the company format. Unit prices come from the TCBE; left empty, the PO shows the awarded lump sum.') + (tabs || '') + `
+  <h4 class="pl-h4">PO details</h4>
+  <div class="pl-form" style="margin-top:6px">${plcF('poNo', 'PO no', P.no || (ed ? plcNext('po') : ''), ed, {req: 1})}${plcF('poDate', 'Date', P.date || (ed ? todayISO() : ''), ed, {type: 'date'})}
+    ${plcF('poRef', 'Your ref (quotation)', d('ref', (a && a.ref) || ''), ed)}${plcF('poContact', 'Contact person (ZNESB)', d('contact', PLC.cfg.poContact || hubUser()), ed)}</div>
+  <h4 class="pl-h4">Supplier — ${esc(a ? a.supplier : '—')}</h4>
+  <div class="pl-form" style="margin-top:6px">${plcF('poAddr', 'Address', d('addr', S.addr || ''), ed, {area: 1, wide: 1, ph: 'Street, postcode, town, state'})}
+    ${plcF('poTel', 'Tel / Fax', d('tel', S.tel || ''), ed)}${plcF('poHp', 'Handphone no.', d('hp', S.hp || ''), ed)}${plcF('poEmail', 'Email', d('email', S.email || ''), ed)}${plcF('poAttn', 'Attn to', d('attn', S.attn || ''), ed)}</div>
+  <h4 class="pl-h4">Terms</h4>
+  <div class="pl-form" style="margin-top:6px">${plcF('poValid', 'Price validity', d('valid', (a && a.valid) || ''), ed)}${plcF('poDel', 'Delivery date', d('del', r.needBy || ''), ed, {type: 'date'})}
+    ${plcF('poTo', 'Delivery point', d('to', PLC.cfg.deliverTo || r.site || ''), ed)}${plcF('poTerms', 'Payment term', d('terms', (a && a.terms) || PLC.cfg.terms), ed)}
+    ${plcF('poSst', 'SST %', P.sst !== undefined && P.sst !== '' ? P.sst : (ed ? String(c.sstP || 0) : ''), ed, {type: 'number'})}${plcF('poNote', 'Notes on the PO (optional)', P.note || '', ed, {wide: 1})}</div>
+  <h4 class="pl-h4">Order lines${a && a.ref ? ' — quotation ' + esc(a.ref) : ''}</h4>
+  <div class="pl-tw"><table class="pl-t pl-it" id="plPoL"><thead><tr><th>No.</th><th>Description</th><th class="n">Qty</th><th>UOM</th><th class="n">Unit price (RM)</th><th>Duration</th><th class="n">Amount (RM)</th></tr></thead><tbody>
     ${c.lines.map((l, i) => `<tr data-li="${i}"><td>${i + 1}</td><td><input data-lk="desc" value="${esc(l.desc)}"${plcRO(ed)}></td><td><input data-lk="qty" type="number" step="any" class="n sh" value="${esc(l.qty)}"${plcRO(ed)}></td><td><input data-lk="unit" class="sh" value="${esc(l.unit)}"${plcRO(ed)}></td>
-      <td><input data-lk="rate" type="number" min="0" step="0.01" class="n" value="${esc(l.rate)}" placeholder="—"${plcRO(ed)}></td><td class="n" data-lamt="${i}"></td></tr>`).join('')}</tbody>
-    <tfoot><tr><td colspan="5" class="n">Subtotal</td><td class="n" id="plSub"></td></tr><tr><td colspan="5" class="n" id="plSstL">SST</td><td class="n" id="plSst"></td></tr><tr class="tot"><td colspan="5" class="n">Total</td><td class="n" id="plTot"></td></tr></tfoot></table></div>
+      <td><input data-lk="rate" type="number" step="0.01" class="n" value="${esc(l.rate)}" placeholder="—"${plcRO(ed)}></td><td><input data-lk="dur" class="sh" value="${esc(l.dur || '')}" placeholder="—"${plcRO(ed)}></td><td class="n" data-lamt="${i}"></td></tr>`).join('')}</tbody>
+    <tfoot><tr><td colspan="6" class="n">Subtotal</td><td class="n" id="plSub"></td></tr><tr><td colspan="6" class="n" id="plSstL">SST</td><td class="n" id="plSst"></td></tr><tr class="tot"><td colspan="6" class="n">Total</td><td class="n" id="plTot"></td></tr></tfoot></table></div>
   <div class="pl-hint" id="plPoHint"></div>
+  <h4 class="pl-h4">Sign-off on the PO</h4>
+  <div class="pl-form" style="margin-top:6px">${plcF('poPrep', 'Prepare by', d('prep', plcNm(hubUser()) || plcNm((g.prep || {}).by)), ed)}${plcF('poRev', 'Review by', d('rev', plcNm((g.ver || r.psr.t.pm || {}).by)), ed)}${plcF('poApp', 'Approved by', d('app', plcNm(r.loa.by)), ed)}</div>
   ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn" data-pa="savePo">Save</button><button class="btn" data-ppo="${esc(r.id)}"${pb}>📄 Priced PO</button><button class="btn" data-ppou="${esc(r.id)}"${pb}>📄 Unpriced PO</button><button class="btn primary" data-pa="poOk">Issue PO${r._subN ? ' #' + r._subK + ' — ' + esc(r._bid.supplier) : ''} ✓</button></div>`
-    : issued ? `<p class="pl-done">✓ PO ${esc(r.po.no)} issued by <b>${esc(r.po.by || '')}</b> on ${plcDT(r.po.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}"${pb} style="margin-left:8px">📄 Priced PO</button><button class="btn sm" data-ppou="${esc(r.id)}"${pb} style="margin-left:6px">📄 Unpriced PO</button></p>` : w}`;
+    : issued ? `<p class="pl-done">✓ PO ${esc(P.no)} issued by <b>${esc(P.by || '')}</b> on ${plcDT(P.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}"${pb} style="margin-left:8px">📄 Priced PO</button><button class="btn sm" data-ppou="${esc(r.id)}"${pb} style="margin-left:6px">📄 Unpriced PO</button></p>` : w}`;
 }
 function plcReadPo(r){
   const g = k => plcVal(k);
-  Object.assign(r.po, {no: g('poNo'), date: g('poDate'), to: g('poTo'), del: g('poDel'), terms: g('poTerms'), attn: g('poAttn'), sst: g('poSst'), note: g('poNote')});
+  Object.assign(r.po, {no: g('poNo'), date: g('poDate'), ref: g('poRef'), contact: g('poContact'), addr: g('poAddr'), tel: g('poTel'), hp: g('poHp'), email: g('poEmail'), attn: g('poAttn'), valid: g('poValid'), to: g('poTo'), del: g('poDel'), terms: g('poTerms'), sst: g('poSst'), note: g('poNote'), prep: g('poPrep'), rev: g('poRev'), app: g('poApp')});
   r.po.lines = $$('#plPoL tr[data-li]').map(tr => { const o = {}; tr.querySelectorAll('[data-lk]').forEach(e => { o[e.dataset.lk] = clean(e.value); }); return o; });
   return r;
 }
@@ -2614,24 +2631,45 @@ async function plcClick(e){
 }
 
 /* ---------- PO document ---------- */
+const PLC_CERT = 'data:image/jpeg;base64,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';
+/* a signature / cop already given in this package (PSR or TCBE sign-off) by the same person */
+function plcSigFor(r, name){
+  const n = clean(plcNm(name)).toLowerCase(); if(!n) return {};
+  for(const k of Object.keys(r.psr.t || {})){ const t = r.psr.t[k]; if(t && clean(plcNm(t.by)).toLowerCase() === n && (r.sigs[k] || r.stamps[k])) return {s: r.sigs[k], c: r.stamps[k]}; }
+  const g = plcTcbSg(r); for(const k of Object.keys(g)){ const t = g[k]; if(t && clean(plcNm(t.by)).toLowerCase() === n && (r.tsigs[k] || r.tstamps[k])) return {s: r.tsigs[k], c: r.tstamps[k]}; }
+  return {};
+}
 function plcPoHtml(r, unp){
-  const c = plcPoCalc(r), a = c.award || {}, C = PLC.cfg, issued = r.stage >= 6, logo = (document.querySelector('.brand .logo img') || {}).src || '';
-  const m2 = v => num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  const lines = c.priced ? c.lines.filter(l => l.desc).map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.desc)}</td><td class="n">${esc(l.qty)}</td><td>${esc(l.unit)}</td><td class="n">${num(l.rate) > 0 ? m2(l.rate) : ''}</td><td class="n">${num(l.rate) > 0 ? m2(num(l.qty) * num(l.rate)) : ''}</td></tr>`).join('')
-    : `<tr><td>1</td><td><b>${esc(r.title)}</b>${r.desc ? '<br>' + esc(r.desc) : ''}<ul>${c.lines.filter(l => l.desc).map(l => `<li>${esc(l.desc)} — ${esc(l.qty)} ${esc(l.unit)}</li>`).join('')}</ul>As per quotation ${esc(a.ref || '')}</td><td class="n">1</td><td>lot</td><td class="n">${m2(c.sub)}</td><td class="n">${m2(c.sub)}</td></tr>`;
-  const linesU = c.lines.filter(l => l.desc).map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.desc)}</td><td class="n">${esc(l.qty)}</td><td>${esc(l.unit)}</td></tr>`).join('');
-  const sig = (l, n, t, dt) => `<div class="po-sig"><div class="ln"></div><b>${esc(n || '')}</b><span>${esc(t)}</span>${dt ? `<span>${fmtD(String(dt).slice(0, 10))}</span>` : ''}<small>${l}</small></div>`;
-  return `<div class="po-doc">${issued ? '' : '<div class="po-wm">DRAFT</div>'}
-    <div class="po-h"><div class="po-co">${logo ? `<img src="${logo}" alt="">` : ''}<div><b>${esc(C.company || '')}</b>${C.reg ? `<span>(${esc(C.reg)})</span>` : ''}${C.addr ? `<span>${esc(C.addr)}</span>` : ''}${C.phone ? `<span>${esc(C.phone)}</span>` : ''}</div></div>
-      <div class="po-ti"><h1>PURCHASE ORDER</h1>${unp ? '<div class="po-unp">UNPRICED COPY</div>' : ''}<table><tr><th>PO No</th><td>${esc(r.po.no || '—')}</td></tr><tr><th>Date</th><td>${r.po.date ? fmtD(r.po.date) : '—'}</td></tr><tr><th>Quotation</th><td>${esc(a.ref || '—')}</td></tr></table></div></div>
-    <div class="po-2"><div><h5>Supplier</h5><b>${esc(a.supplier || '—')}</b>${r.po.attn ? `<span>Attn: ${esc(r.po.attn)}</span>` : ''}</div>
-      <div><h5>Deliver to</h5><span>${esc(r.po.to || r.site || '—')}</span><span>Delivery date: <b>${r.po.del ? fmtD(r.po.del) : '—'}</b></span></div>
-      <div><h5>References</h5><span>MRF: ${esc(r.mrfNo || '—')} · PSR: ${esc(r.psr.no || '—')}</span><span>RFQ: ${esc(r.rfq.no || '—')} · LOA: ${esc(r.loa.no || '—')}</span><span>Charge code: ${esc(r.charge || '—')}${r.wopNo ? ' · WOP ' + esc(r.wopNo) : ''}</span>${r._subN > 1 ? `<span>Split award: PO ${r._subK} of ${r._subN}</span>` : ''}</div></div>
-    ${unp ? `<table class="po-l"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th></tr></thead><tbody>${linesU}</tbody></table>` : `<table class="po-l"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th><th class="n">Unit price (RM)</th><th class="n">Amount (RM)</th></tr></thead><tbody>${lines}</tbody>
-      <tfoot><tr><td colspan="5" class="n">Subtotal</td><td class="n">${m2(c.sub)}</td></tr><tr><td colspan="5" class="n">SST ${c.sstP}%</td><td class="n">${m2(c.sst)}</td></tr><tr class="tot"><td colspan="5" class="n">TOTAL (RM)</td><td class="n">${m2(c.total)}</td></tr></tfoot></table>`}
-    <div class="po-tc"><b>Payment terms:</b> ${esc(r.po.terms || '—')}${r.po.note ? `<br><b>Notes:</b> ${esc(r.po.note)}` : ''}<br>${unp ? 'Unpriced copy for store / site receiving — prices are on the original PO. ' : ''}Please quote the PO number on all delivery orders and invoices. Goods are subject to inspection on receipt.</div>
-    <div class="po-sigs">${sig('Prepared by', (r.psr.t.pe || {}).by, 'Project Engineer', (r.psr.t.pe || {}).at)}${sig('Verified by', (r.psr.t.pm || {}).by, 'Project Manager', (r.psr.t.pm || {}).at)}${sig('Approved by', r.loa.by, r.loa.title || C.approverTitle || '', r.loa.at)}${sig('Accepted by supplier', '', 'Name, signature & company stamp', '')}</div>
-    <div class="po-f">${issued ? 'Issued ' + plcDT(r.po.at) + (r.po.by ? ' by ' + esc(r.po.by) : '') : 'Draft — not yet issued'} · ${esc(plcRef(r))}</div></div>`;
+  const c = plcPoCalc(r), a = c.award || {}, C = PLC.cfg, D = PLC_CFG0, P = r.po, issued = r.stage >= 6, f = r.psr.form || {}, logo = (document.querySelector('.brand .logo img') || {}).src || '';
+  const m2 = v => num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}), sp = num(c.sstP), dt = x => x ? fmtD(String(x).slice(0, 10)) : '';
+  let rows = [], subT = 0;
+  if(c.priced){ c.lines.filter(l => clean(l.desc) && !(num(l.rate) < 0)).forEach(l => { const am = num(l.qty) * num(l.rate), st = Math.round(am * sp) / 100, tot = am + st; subT += tot;
+      rows.push({d: esc(l.desc), q: l.qty, u: l.unit, rate: num(l.rate) > 0 ? m2(l.rate) : '', dur: l.dur || '', sst: num(l.rate) > 0 ? m2(st) : '', tot: num(l.rate) > 0 ? m2(tot) : ''}); }); }
+  else { subT = c.total; rows.push({d: `<b>${esc(r.title || '')}</b>${c.lines.filter(l => clean(l.desc)).map(l => `<br>· ${esc(l.desc)} — ${esc(l.qty)} ${esc(l.unit || '')}${l.dur ? ' (' + esc(l.dur) + ')' : ''}`).join('')}${a.ref ? '<br>As per quotation ' + esc(a.ref) : ''}`, q: 1, u: 'LOT', rate: m2(c.sub), dur: '', sst: m2(c.sst), tot: m2(c.total)}); }
+  subT = Math.round(subT * 100) / 100; const disc = Math.max(0, Math.round((subT - c.total) * 100) / 100);
+  const fill = Math.max(0, 430 - rows.length * 26 - rows.reduce((t, x) => t + Math.max(0, Math.ceil(String(x.d).replace(/<[^>]+>/g, '').length / 52) - 1) * 13, 0));
+  const body = rows.map((x, i) => `<tr><td class="c">${i + 1}</td><td>${x.d}</td><td class="c">${esc(x.q)}</td><td class="c">${esc(String(x.u || '').toUpperCase())}</td><td class="n">${unp ? '' : x.rate}</td><td class="c">${esc(x.dur)}</td><td class="n">${unp ? '' : x.sst}</td><td class="n">${unp ? '' : x.tot}</td></tr>`).join('')
+    + `<tr class="fill"><td style="height:${fill}px"></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+  const kv = (k, v) => `<tr><th>${k}</th><td class="cl">:</td><td>${v}</td></tr>`;
+  const addr = String(P.addr || '').split(/\n|,\s*(?=\d{5}\b)/).map(x => esc(x.trim())).filter(Boolean).join('<br>');
+  const sg = (lbl, nm, d) => { const im = nm ? plcSigFor(r, nm) : {}; return `<div class="zs"><div class="zl">${lbl}</div><div class="zim">${im.s ? `<img class="ps" src="${im.s}" alt="">` : ''}${im.c ? `<img class="pc" src="${im.c}" alt="">` : ''}</div><div class="zln"></div><div class="zr"><span>Name</span><i>:</i><b>${esc(nm || '')}</b></div><div class="zr"><span>Date</span><i>:</i><b>${esc(d || '')}</b></div></div>`; };
+  const pages = rows.length > 16 ? Math.ceil(rows.length / 16) : 1;
+  return `<style>@page{size:A4 portrait;margin:9mm}</style><div class="zpo">${issued ? '' : '<div class="zwm">DRAFT</div>'}
+    <div class="zh">${logo ? `<img class="zlg" src="${logo}" alt="">` : '<span></span>'}<div class="zco"><b>${esc(C.company || D.company)}</b><small>(${esc(C.reg || D.reg)})</small><span>${esc(C.addr || D.addr).replace(/,\s*(\d{5})/, ',<br>$1')}</span><span>${esc(C.phone || D.phone)}</span><span>Email : ${esc(C.email || D.email)}</span></div><img class="zct" src="${PLC_CERT}" alt=""></div>
+    <div class="zti">PURCHASE ORDER${unp ? '<span class="zun">UNPRICED COPY</span>' : ''}</div>
+    <div class="zinfo"><div class="zsup"><div class="zk">Company's Name:</div><b>${esc(String(a.supplier || '').toUpperCase())}</b><div class="zad">${addr}</div></div>
+      <table class="zkv">${kv('PO NO.', `<b>${esc(P.no || '')}</b>`)}${kv('Your Ref', esc(P.ref || a.ref || ''))}${kv('Date', dt(P.date))}${kv('Contact Person', esc(P.contact || ''))}${kv('Page', pages > 1 ? '1 of ' + pages : '1 of 1')}${r._subN > 1 ? kv('Split award', 'PO ' + r._subK + ' of ' + r._subN) : ''}</table></div>
+    <table class="zkv zk2">${kv('Tel / Fax', esc(P.tel || ''))}${kv('Handphone No.', esc(P.hp || ''))}${kv('Email', esc(P.email || ''))}${kv('Attn To.', esc(P.attn || ''))}</table>
+    <table class="zkv zk2">${kv('Project Title', esc(f.projTitle || r.title || ''))}</table>
+    <table class="zkv zk2">${kv('Charge Code', esc(f.projCode || r.charge || ''))}</table>
+    <table class="zt"><colgroup><col style="width:5%"><col style="width:41%"><col style="width:6%"><col style="width:6.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:12.5%"></colgroup>
+      <thead><tr><th rowspan="2">NO.</th><th rowspan="2">DESCRIPTION</th><th rowspan="2">QTY</th><th rowspan="2">UOM</th><th class="b0">UNIT PRICE</th><th class="b0">DURATION</th><th class="b0">SST</th><th class="b0">TOTAL</th></tr>
+        <tr><th class="t0">RM</th><th class="t0">(MONTH/<br>WEEK/DAY)</th><th class="t0">RM</th><th class="t0">RM</th></tr></thead><tbody>${body}</tbody></table>
+    <div class="zft"><table class="zkv zt2">${kv('PRICE VALIDITY', '<b>' + esc(P.valid || a.valid || '') + '</b>')}${kv('DELIVERY DATE', '<b>' + dt(P.del) + '</b>')}${kv('DELIVERY POINT', '<b>' + esc(P.to || '') + '</b>')}${kv('PAYMENT TERM', '<b>' + esc(P.terms || '') + '</b>')}</table>
+      <table class="ztot"><tr><th>Sub Total (RM)</th><td>${unp ? '' : subT ? m2(subT) : '-'}</td></tr><tr><th>Discount (RM)</th><td>${unp ? '' : disc ? '(' + m2(disc) + ')' : '-'}</td></tr><tr><th>Total (RM)</th><td><b>${unp ? '' : c.total ? m2(c.total) : '-'}</b></td></tr></table></div>
+    ${P.note ? `<div class="znote"><b>Note:</b> ${esc(P.note)}</div>` : ''}
+    <div class="zsig">${sg('Prepare By,', P.prep || plcNm(P.by), dt(P.date))}${sg('Review By,', P.rev, dt(P.date))}${sg('Approved By,', P.app || plcNm(r.loa.by), dt(r.loa.at))}${sg('Acknowledged by Contractor,', '', '')}</div>
+    <div class="zf">${esc([r.mrfNo && 'MRF ' + r.mrfNo, r.psr.no && 'PSR ' + r.psr.no, r.rfq.no && 'RFQ ' + r.rfq.no, r.loa.no && 'LOA ' + r.loa.no].filter(Boolean).join(' · '))}${unp ? ' · Unpriced copy for store / site receiving — prices are on the original PO' : ''} · ${issued ? 'Issued ' + plcDT(P.at) : 'Draft — not yet issued'}</div></div>`;
 }
 function plcPoShow(id, unp, bid){
   const R0 = PLC.recs.find(x => x.id === id); if(!R0) return;
@@ -2643,7 +2681,7 @@ function plcPoShow(id, unp, bid){
   const d = $('#dlgPlc'); let U = !!unp;
   const draw = () => {
     $('#plDlgT').textContent = '📄 Purchase Order ' + (r.po.no || '') + (U ? ' — unpriced' : ' — priced') + (r.stage >= 6 ? '' : ' (preview)');
-    $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap">${plcPoHtml(r, U)}</div>`;
+    $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap">${plcPoHtml(r, U).replace(/<style>@page[^<]*<\/style>/, '')}</div>`;
     $('#plDlgF').innerHTML = (SP ? `<select id="plPoSup" aria-label="Supplier PO" class="pl-posel">${S.map((b, k) => `<option value="${esc(b.id)}"${b.id === cur.id ? ' selected' : ''}>PO #${k + 1} — ${esc(b.supplier)}${((R0.pos || {})[b.id] || {}).at ? ' ✓' : ''}</option>`).join('')}</select>` : '') + `<div class="pl-seg" role="group" aria-label="PO version"><button type="button" class="${U ? '' : 'on'}" id="plPoP">Priced PO</button><button type="button" class="${U ? 'on' : ''}" id="plPoU">Unpriced PO</button></div><span style="flex:1"></span>
       <button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF — ${U ? 'unpriced' : 'priced'}</button>`;
     if(SP) $('#plPoSup').onchange = e => { cur = S.find(b => b.id === e.target.value) || cur; pick(); draw(); requestAnimationFrame(plcFit); };
@@ -2707,7 +2745,7 @@ function plcSettings(){
   const f = (k, l, t) => `<label class="pl-fl"><span>${l}</span><input data-pc="${k}" type="${t || 'text'}" value="${esc(C[k] ?? '')}"></label>`;
   d.classList.remove('pv'); $('#plDlgT').textContent = '⚙ Procurement Lifecycle — settings';
   $('#plDlgB').innerHTML = PLC_CSS + `<div class="pl-form" style="margin-top:0">${f('company', 'Company name (PO header)')}${f('reg', 'Company registration no')}
-    <label class="pl-fl w"><span>Company address (PO header)</span><input data-pc="addr" value="${esc(C.addr)}"></label>${f('phone', 'Phone / e-mail on PO')}${f('deliverTo', 'Default delivery address')}
+    <label class="pl-fl w"><span>Company address (PO header)</span><input data-pc="addr" value="${esc(C.addr)}"></label>${f('phone', 'Phone line on PO')}${f('email', 'E-mail on PO')}${f('poContact', 'PO contact person (ZNESB)')}${f('deliverTo', 'Default delivery address')}
     ${f('approver', 'Default LOA signatory')}${f('approverTitle', 'Signatory designation')}${f('terms', 'Default payment terms')}${f('sst', 'Default SST %', 'number')}${f('minBids', 'Minimum quotations for RFQ', 'number')}</div>
     <h4 class="pl-h4">Running numbers — {YY} = year, the 3-digit number is added after</h4>
     <div class="pl-form" style="margin-top:0">${f('mrf', 'MRF prefix')}${f('psr', 'PSR prefix')}${f('rfq', 'RFQ prefix')}${f('loa', 'LOA prefix')}${f('po', 'PO prefix')}</div>
@@ -2896,6 +2934,56 @@ const PLC_CSS = `<style>
 #dlgPlc.pv .db{height:calc(92vh - 150px);max-height:none;overflow:hidden;padding:10px}
 #dlgPlc.pv .po-wrap{height:100%;overflow:hidden;display:flex;justify-content:center;align-items:flex-start;padding:10px;box-sizing:border-box}
 #dlgPlc.pv .po-wrap.pv-scroll{overflow:auto;display:block}
+/* company PO (A4 portrait) */
+.zpo{position:relative;background:#fff;color:#000;font-family:Calibri,Carlito,Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;padding:30px 40px;width:794px;max-width:100%;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.12);box-sizing:border-box}
+.zpo .zwm{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);font-size:110px;font-weight:800;color:rgba(179,38,30,.08);pointer-events:none;letter-spacing:.1em}
+.zpo .zh{display:grid;grid-template-columns:160px 1fr 170px;align-items:center;gap:8px}
+.zpo .zlg{height:58px;width:auto}
+.zpo .zct{height:70px;width:auto;justify-self:end}
+.zpo .zco{text-align:center;font-family:Calibri,Carlito,Arial,sans-serif}
+.zpo .zco b{display:block;font-size:13px}
+.zpo .zco small{display:block;font-size:9px}
+.zpo .zco span{display:block;font-size:10.5px}
+.zpo .zti{border-top:2px solid #000;border-bottom:1px solid #000;margin:6px 0 16px;padding:3px 0;text-align:center;font-weight:700;font-size:15px;position:relative}
+.zpo .zun{position:absolute;right:0;top:3px;font-size:11px;color:#B3261E;border:1.5px solid #B3261E;padding:0 6px;font-weight:700}
+.zpo .zinfo{display:grid;grid-template-columns:1fr 290px;gap:16px}
+.zpo .zk{font-weight:700;margin-bottom:18px}
+.zpo .zsup b{display:block;font-size:12px;margin-bottom:4px}
+.zpo .zad{font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.55}
+.zpo table,#printArea .zpo table{border-collapse:collapse;width:auto;font-size:12px}
+.zpo .zkv th,#printArea .zpo .zkv th{text-align:left!important;font-weight:700;padding:1.5px 0!important;border:0!important;background:none!important;white-space:nowrap;font-size:12px!important;width:120px;color:#000}
+.zpo .zkv td,#printArea .zpo .zkv td{padding:1.5px 0!important;border:0!important;background:none!important;font-size:12px;font-family:Arial,Helvetica,sans-serif;vertical-align:top;color:#000}
+.zpo .zkv td.cl,#printArea .zpo .zkv td.cl{width:12px;font-family:inherit}
+.zpo .zinfo .zkv th,#printArea .zpo .zinfo .zkv th{width:92px}
+.zpo .zk2{margin-top:12px}
+.zpo .zk2 th,#printArea .zpo .zk2 th{width:130px}
+.zpo .zt,#printArea .zpo .zt{width:100%;table-layout:fixed;margin-top:14px;border:1px solid #000!important}
+.zpo .zt th,#printArea .zpo .zt th{background:#D9D9D9!important;color:#000!important;border:1px solid #000!important;font-weight:700;font-size:11.5px!important;text-align:center!important;padding:2px 3px!important;vertical-align:middle!important;line-height:1.15}
+.zpo .zt th.b0,#printArea .zpo .zt th.b0{border-bottom:1px solid #000!important}
+.zpo .zt th.t0,#printArea .zpo .zt th.t0{border-top:0!important}
+.zpo .zt td,#printArea .zpo .zt td{border:0!important;border-left:1px solid #000!important;border-right:1px solid #000!important;padding:4px 5px!important;font-size:11.5px;vertical-align:top!important;font-family:Arial,Helvetica,sans-serif;color:#000;text-align:left}
+.zpo .zt td.c,#printArea .zpo .zt td.c{text-align:center!important}
+.zpo .zt td.n,#printArea .zpo .zt td.n{text-align:right!important;white-space:nowrap}
+.zpo .zt tr.fill td,#printArea .zpo .zt tr.fill td{padding:0!important}
+.zpo .zt tbody tr:last-child td,#printArea .zpo .zt tbody tr:last-child td{border-bottom:1px solid #000!important}
+.zpo .zft{display:grid;grid-template-columns:1fr 260px;gap:10px}
+.zpo .zt2 th,#printArea .zpo .zt2 th{font-weight:400;width:130px}
+.zpo .ztot,#printArea .zpo .ztot{margin-left:auto}
+.zpo .ztot th,#printArea .zpo .ztot th{text-align:right!important;font-weight:400;padding:1px 4px!important;border:0!important;background:none!important;font-size:12px!important;color:#000}
+.zpo .ztot td,#printArea .zpo .ztot td{border:2px solid #000!important;border-top-width:1px!important;width:82px;text-align:right!important;padding:1px 5px!important;font-size:12px;font-family:Arial,Helvetica,sans-serif;color:#000}
+.zpo .znote{margin-top:8px;font-size:11px}
+.zpo .zsig{display:grid;grid-template-columns:1fr 1fr 1fr 1.45fr;gap:34px;margin-top:22px}
+.zpo .zl{font-size:12px}
+.zpo .zim{height:58px;display:flex;align-items:flex-end;justify-content:flex-start;position:relative}
+.zpo .zim img.ps{max-height:54px;max-width:120px;mix-blend-mode:multiply;position:relative;z-index:2}
+.zpo .zim img.pc{max-height:58px;max-width:80px;mix-blend-mode:multiply;margin-left:-14px;opacity:.9}
+.zpo .zln{border-top:1px solid #000;margin-top:2px}
+.zpo .zr{display:grid;grid-template-columns:38px 10px 1fr;font-size:11.5px;margin-top:3px}
+.zpo .zr i{font-style:normal}
+.zpo .zr b{font-weight:400;font-family:Arial,Helvetica,sans-serif;font-size:11px}
+.zpo .zf{margin-top:18px;font-size:9px;color:#777;border-top:1px solid #ddd;padding-top:4px}
+@media print{ #printArea .zpo{box-shadow:none;padding:0;width:auto;max-width:none} #printArea .zpo *{-webkit-print-color-adjust:exact;print-color-adjust:exact} }
+
 #dlgPlc .pv-box{position:relative;cursor:zoom-in;flex:0 0 auto;margin:0 auto}
 #dlgPlc .pv-box.full{cursor:zoom-out}
 #dlgPlc .pv-box>div{margin:0!important;max-width:none!important}
