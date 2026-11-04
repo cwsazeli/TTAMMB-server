@@ -1436,8 +1436,8 @@ $('#btnStaff').addEventListener('click', () => (LEVEL !== 'client' || PREVIEW) ?
    without a Sheet it is kept on this device. Viewing: Management/Operation and Admin. Every change asks for the name and
    the access password (same as all modules) and is written to the Activity log. */
 const PLC_KEY = 'ttammhub_plc';
-const PLC_FIELDS = ['id','mrfNo','title','desc','wopNo','site','charge','reqBy','reqDate','needBy','priority','stage','status','stageAt','retNote','items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos','createdAt','createdBy','updatedAt','updatedBy'];
-const PLC_JSON = ['items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos'];
+const PLC_FIELDS = ['id','mrfNo','title','desc','wopNo','site','charge','reqBy','reqDate','needBy','priority','stage','status','stageAt','retNote','items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos','psigs','pstamps','createdAt','createdBy','updatedAt','updatedBy'];
+const PLC_JSON = ['items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos','psigs','pstamps'];
 const PLC_STEPS = [
   {t: 'MRF Submission', s: 'Site / Workshop'},
   {t: 'Store Verification', s: 'Stock check'},
@@ -1457,7 +1457,7 @@ function plcParse(r){
   const o = Object.assign({}, r); PLC_JSON.forEach(k => { o[k] = plcJ(o[k]); });
   o.stage = Number(o.stage) || 0; if(!Array.isArray(o.items)) o.items = []; if(!Array.isArray(o.log)) o.log = [];
   ['store', 'psr', 'rfq', 'loa', 'po'].forEach(k => { if(!o[k] || typeof o[k] !== 'object' || Array.isArray(o[k])) o[k] = {}; });
-  ['sigs', 'stamps', 'tsigs', 'tstamps', 'pos'].forEach(f => { if(!o[f] || typeof o[f] !== 'object' || Array.isArray(o[f])) o[f] = {}; });
+  ['sigs', 'stamps', 'tsigs', 'tstamps', 'pos', 'psigs', 'pstamps'].forEach(f => { if(!o[f] || typeof o[f] !== 'object' || Array.isArray(o[f])) o[f] = {}; });
   if(!Array.isArray(o.rfq.bids)) o.rfq.bids = []; if(!o.psr.t || typeof o.psr.t !== 'object') o.psr.t = {};
   o._base = String(o.updatedAt || ''); return o;
 }
@@ -1536,6 +1536,7 @@ function plcState(r){
   if(r.stage === 5 && plcIsSplit(r) && r.status !== 'returned' && r.status !== 'draft'){ const n = plcSplitBids(r).length; return {k: 'info', t: 'Awaiting PO — ' + plcPoIssued(r).length + '/' + n + ' issued'}; }
   if(r.status === 'draft') return {k: 'draft', t: r.direct ? 'Draft PSR' : 'Draft MRF'};
   if(r.status === 'returned') return {k: 'bad', t: 'Returned — ' + (r.stage === 0 && r.direct ? 'PSR Submission' : PLC_STEPS[r.stage].t)};
+  if(r.stage === 5 && !plcIsSplit(r) && plcPoLocked(r.po) && r.status !== 'cancelled'){ const t = PLC_PO_SG.find(x => x[0] === plcPoNext(r.po)); return {k: 'warn', t: 'PO — awaiting ' + (t ? t[1].replace(' by', '') : 'issue')}; }
   if(r.stage === 3 && plcTcbLocked(r)){ const t = PLC_TCB_SG.find(x => x[0] === plcTcbNext(r)); return {k: 'info', t: 'TCBE — awaiting ' + (t ? t[1].replace(' by', '') : 'LOA')}; }
   if(r.stage === 2){ const n = plcTierNext(r); return {k: 'info', t: 'PSR — awaiting ' + (n ? PLC_TIERS.find(t => t[0] === n)[1] : 'PE')}; }
   return {k: r.stage === 4 ? 'warn' : 'info', t: 'Awaiting ' + PLC_STEPS[r.stage].t};
@@ -1615,14 +1616,16 @@ function plcAuth(roles, lines){
 function plcNeed(a, r, d){
   if(a === 'saveMrf' || a === 'submitMrf') return PLC_ANY;
   if(a === 'savePsr' || a === 'submitPsr') return ['PE'];
-  if(a === 'return') return r.stage === 1 ? ['MATCO'] : r.stage === 2 ? ['PE', 'OTL', 'PM', 'PD', 'MD'] : r.stage === 3 ? ['PROC'] : r.stage === 4 ? ['PD', 'MD'] : r.stage === 5 ? ['PROC', 'PD', 'MD'] : PLC_ANY;
+  if(a === 'return') return r.stage === 1 ? ['MATCO'] : r.stage === 2 ? ['PE', 'OTL', 'PM', 'PD', 'MD'] : r.stage === 3 ? ['PROC'] : r.stage === 4 ? ['PD', 'MD'] : r.stage === 5 ? ['PROC'] : PLC_ANY;
   if(a === 'storeOk') return ['MATCO'];
   if(a === 'tierOk') return {pe: ['PE'], cc: ['OTL'], pm: ['PM'], dir: ['PD', 'MD']}[d.tier] || ['ADMIN'];
   if(a === 'saveRfq' || a === 'rfqOk') return ['PROC'];
   if(a === 'tcbSign') return [(PLC_TCB_SG.find(t => t[0] === d.tier) || [])[3] || 'ADMIN'];
   if(a === 'tcbRet'){ const t = PLC_TCB_SG.find(x => x[0] === plcTcbNext(r)); return t ? [t[3]] : ['ADMIN']; }
   if(a === 'loaOk' || a === 'loaNo') return ['PD', 'MD'];
-  if(a === 'savePo' || a === 'poOk') return ['PROC', 'PD', 'MD'];
+  if(a === 'savePo' || a === 'poOk') return ['PROC'];
+  if(a === 'poSign') return [(PLC_PO_SG.find(t => t[0] === d.tier) || [])[3] || 'ADMIN'];
+  if(a === 'poRet'){ const V = plcPoView(r), t = PLC_PO_SG.find(x => x[0] === plcPoNext(V.po)); return t ? [t[3]] : ['ADMIN']; }
   return ['ADMIN'];
 }
 /* Delete packages (Admin). The latest copy is read from the Sheet first so nothing else is lost; what was deleted is kept on this
@@ -2074,7 +2077,7 @@ function plcKeepForms(){
   try{ if($('#plBid')) plcReadRfq(r0); }catch(e){}
   try{ if(document.querySelector('#plc [data-pv="pf_projTitle"]')) plcReadPsr(r0); }catch(e){}
   try{ $$('#plc [data-sk]').forEach(e => { const it = r0.items[+e.dataset.sk]; if(it) it.stock = clean(e.value); }); $$('#plc [data-skr]').forEach(e => { const it = r0.items[+e.dataset.skr]; if(it) it.srem = clean(e.value); }); }catch(e){}
-  try{ if($('#plPoL')) plcReadPo(r0); }catch(e){}
+  try{ if($('#plPoL')){ const V = plcPoView(r0, true); if(!plcPoLocked(V.po) && !V.po.at) plcReadPo(V); } }catch(e){}
 }
 /* keep the name / position / remark typed in the active sign-off row when the page redraws (e.g. after adding a signature) */
 function plcKeepTier(){ plcKeepForms(); const g = k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); return e ? e.value : null; };
@@ -2374,6 +2377,33 @@ function plcS5(r, ed){
     <p class="pl-hint" style="margin-top:6px">Split award — <b>${done}/${S.length}</b> PO${S.length === 1 ? '' : 's'} issued. ${done < S.length ? 'The package closes when every supplier\'s PO is issued.' : 'All POs issued.'}</p>`;
   return plcS5one(sv, ed && !sv.po.at, tabs);
 }
+/* PO sign-off — as on the company PO: Prepare by (Procurement) → Review by (Project Director) → Approved by (OD/MD); the PO is issued at Approved */
+const PLC_PO_SG = [['prep', 'Prepare by', 'Procurement', 'PROC'], ['rev', 'Review by', 'Project Director', 'PD'], ['app', 'Approved by', 'Operation/Managing Director', 'MD']];
+const plcPoSg = po => (po && po.sg && typeof po.sg === 'object') ? po.sg : {};
+const plcPoLocked = po => !!(plcPoSg(po).prep && plcPoSg(po).prep.at);
+function plcPoNext(po){ const g = plcPoSg(po); for(const t of PLC_PO_SG){ if(!(g[t[0]] && g[t[0]].at)) return t[0]; } return ''; }
+const plcImgId = u => { let h = 5381; for(let i = 0; i < u.length; i++) h = ((h << 5) + h + u.charCodeAt(i)) | 0; return 'i' + (h >>> 0).toString(36) + u.length.toString(36); };
+const plcPoImg = (r, t) => ({s: t && t.s ? (r.psigs || {})[t.s] || '' : '', c: t && t.c ? (r.pstamps || {})[t.c] || '' : ''});
+const plcPoSigKey = (V, k) => 'p_' + (V._subId || 'm') + '_' + k;
+function plcPoKeepSig(r, r0, V, k){
+  const key = plcPoSigKey(V, k), P = PLC.pend && PLC.pend.k === key && PLC.pend.id === (r0.id || '__new') ? PLC.pend : {}, t = V.po.sg[k];
+  r.psigs = Object.assign({}, r.psigs); r.pstamps = Object.assign({}, r.pstamps);
+  if(P.s){ const id = plcImgId(P.s); r.psigs[id] = P.s; t.s = id; } if(P.c){ const id = plcImgId(P.c); r.pstamps[id] = P.c; t.c = id; }
+}
+/* drop pictures no PO uses any more */
+function plcPoGc(r){
+  const used = new Set(); [r.po].concat(Object.values(r.pos || {})).forEach(p => Object.values(plcPoSg(p)).forEach(t => { if(t && t.s) used.add(t.s); if(t && t.c) used.add(t.c); }));
+  ['psigs', 'pstamps'].forEach(f => { const o = Object.assign({}, r[f] || {}); Object.keys(o).forEach(k => { if(!used.has(k)) delete o[k]; }); r[f] = o; });
+}
+function plcPoTiers(V, edS, edF){
+  const g = plcPoSg(V.po), nx = plcPoNext(V.po), issued = !!V.po.at;
+  return `<h4 class="pl-h4">PO sign-off${V._subN > 1 ? ' — PO #' + V._subK + ' ' + esc(V._bid.supplier) : ''}</h4><div class="pl-tiers">${PLC_PO_SG.map(([k, lbl, pos, role]) => { const t = g[k] || {}, isNow = k === 'prep' ? edF : edS && !issued && k === nx && plcPoLocked(V.po), kk = plcPoSigKey(V, k), im = plcPoImg(V, t);
+    return `<div class="pl-tier${t.at ? ' ok' : isNow ? ' now' : ''}"><span class="pl-tb" style="font-size:${role.length > 2 ? 10.5 : 13}px">${role === 'MD' ? 'OD/MD' : role}</span><div class="pl-tt"><b>${lbl}</b>
+      ${t.at ? `<p>✓ <b>${esc(t.by)}</b>${t.pos ? ' · ' + esc(t.pos) : ''} · ${plcDT(t.at)}${t.note ? '<br><i>' + esc(t.note) + '</i>' : ''}</p>${im.s || im.c ? `<span class="pl-sigdone">${im.s ? `<img src="${im.s}" alt="signature" data-kind="s">` : ''}${im.c ? `<img src="${im.c}" alt="cop" data-kind="c">` : ''}</span>` : ''}`
+        : isNow ? `<div class="pl-tin pl-tin3"><input data-pv="tBy" placeholder="Name" value="${esc(plcNm(hubUser()))}"><input data-pv="tPos" placeholder="Position" value="${esc(pos)}"><input data-pv="tNote" placeholder="Remarks (optional)"></div>${plcSigBox(V, kk)}`
+        : `<p class="faint">${issued ? '—' : 'Waiting'}</p>`}</div>
+      ${isNow && k !== 'prep' ? `<div class="pl-tact"><button class="btn sm" data-pa="poRet">↩ Return</button><button class="btn sm primary" data-pa="poSign" data-tier="${k}">Sign — ${lbl.replace(' by', '')}${k === 'app' ? ' &amp; issue PO' : ''}</button></div>` : ''}</div>`; }).join('')}</div>`;
+}
 /* supplier details used on an earlier PO (same supplier name) — prefilled on a new PO */
 function plcSupInfo(name, self){
   const n = clean(name).toUpperCase(); if(!n) return {}; let best = null;
@@ -2384,10 +2414,11 @@ function plcSupInfo(name, self){
 const plcNm = s => String(s || '').replace(/\s*\([^)]*\)\s*$/, '');
 function plcS5one(r, ed, tabs){
   const w = plcWait(r, 5); if(w && r.stage < 5 || r.status === 'fromStore') return plcSH(5, 'The official Purchase Order to the awarded supplier.') + w;
-  const c = plcPoCalc(r), a = c.award, issued = r.stage >= 6, P = r.po, S = ed ? plcSupInfo(a && a.supplier, P) : {}, g = plcTcbSg(r);
+  const edS = ed; ed = ed && !plcPoLocked(r.po);
+  const c = plcPoCalc(r), a = c.award, issued = r.stage >= 6, P = r.po, S = ed ? plcSupInfo(a && a.supplier, P) : {};
   const d = (k, v) => P[k] !== undefined && P[k] !== '' ? P[k] : ed ? v : '';
   const pb = r._subId ? ` data-pbid="${esc(r._subId)}"` : '';
-  return plcSH(5, issued ? 'Purchase Order issued. Print it or save it as PDF — company PO format (A4).' : 'Fill in the PO in the company format. Unit prices come from the TCBE; left empty, the PO shows the awarded lump sum.') + (tabs || '') + `
+  return plcSH(5, issued ? 'Purchase Order issued. Print it or save it as PDF — company PO format (A4).' : 'Fill in the PO in the company format. Unit prices come from the TCBE; left empty, the PO shows the awarded lump sum.') + (tabs || '') + (P.ret && !plcPoLocked(P) && !issued ? `<div class="note warn" style="margin-top:10px">↩ Returned: ${esc(P.ret)}</div>` : '') + `
   <h4 class="pl-h4">PO details</h4>
   <div class="pl-form" style="margin-top:6px">${plcF('poNo', 'PO no', P.no || (ed ? plcNext('po') : ''), ed, {req: 1})}${plcF('poDate', 'Date', P.date || (ed ? todayISO() : ''), ed, {type: 'date'})}
     ${plcF('poRef', 'Your ref (quotation)', d('ref', (a && a.ref) || ''), ed)}${plcF('poContact', 'Contact person (ZNESB)', d('contact', PLC.cfg.poContact || hubUser()), ed)}</div>
@@ -2404,14 +2435,14 @@ function plcS5one(r, ed, tabs){
       <td><input data-lk="rate" type="number" step="0.01" class="n" value="${esc(l.rate)}" placeholder="—"${plcRO(ed)}></td><td><input data-lk="dur" class="sh" value="${esc(l.dur || '')}" placeholder="—"${plcRO(ed)}></td><td class="n" data-lamt="${i}"></td></tr>`).join('')}</tbody>
     <tfoot><tr><td colspan="6" class="n">Subtotal</td><td class="n" id="plSub"></td></tr><tr><td colspan="6" class="n" id="plSstL">SST</td><td class="n" id="plSst"></td></tr><tr class="tot"><td colspan="6" class="n">Total</td><td class="n" id="plTot"></td></tr></tfoot></table></div>
   <div class="pl-hint" id="plPoHint"></div>
-  <h4 class="pl-h4">Sign-off on the PO</h4>
-  <div class="pl-form" style="margin-top:6px">${plcF('poPrep', 'Prepare by', d('prep', plcNm(hubUser()) || plcNm((g.prep || {}).by)), ed)}${plcF('poRev', 'Review by', d('rev', plcNm((g.ver || r.psr.t.pm || {}).by)), ed)}${plcF('poApp', 'Approved by', d('app', plcNm(r.loa.by)), ed)}</div>
-  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn" data-pa="savePo">Save</button><button class="btn" data-ppo="${esc(r.id)}"${pb}>📄 Priced PO</button><button class="btn" data-ppou="${esc(r.id)}"${pb}>📄 Unpriced PO</button><button class="btn primary" data-pa="poOk">Issue PO${r._subN ? ' #' + r._subK + ' — ' + esc(r._bid.supplier) : ''} ✓</button></div>`
-    : issued ? `<p class="pl-done">✓ PO ${esc(P.no)} issued by <b>${esc(P.by || '')}</b> on ${plcDT(P.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}"${pb} style="margin-left:8px">📄 Priced PO</button><button class="btn sm" data-ppou="${esc(r.id)}"${pb} style="margin-left:6px">📄 Unpriced PO</button></p>` : w}`;
+  ${plcPoTiers(r, edS, ed)}
+  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn" data-pa="savePo">Save</button><button class="btn" data-ppo="${esc(r.id)}"${pb}>📄 Priced PO</button><button class="btn" data-ppou="${esc(r.id)}"${pb}>📄 Unpriced PO</button><button class="btn primary" data-pa="poOk">✍ Sign Prepare by — send for review →</button></div>`
+    : issued ? `<p class="pl-done">✓ PO ${esc(P.no)} issued — approved by <b>${esc(plcNm((plcPoSg(P).app || {}).by || P.by || ''))}</b> on ${plcDT(P.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}"${pb} style="margin-left:8px">📄 Priced PO</button><button class="btn sm" data-ppou="${esc(r.id)}"${pb} style="margin-left:6px">📄 Unpriced PO</button></p>`
+    : plcPoLocked(P) ? `<div class="pl-btns"><button class="btn" data-ppo="${esc(r.id)}"${pb}>📄 Priced PO</button><button class="btn" data-ppou="${esc(r.id)}"${pb}>📄 Unpriced PO</button><span class="sp"></span><span class="pl-hint">Signed by Procurement — waiting for ${esc((PLC_PO_SG.find(t => t[0] === plcPoNext(P)) || [])[1] || '')}</span></div>` : w}`;
 }
 function plcReadPo(r){
   const g = k => plcVal(k);
-  Object.assign(r.po, {no: g('poNo'), date: g('poDate'), ref: g('poRef'), contact: g('poContact'), addr: g('poAddr'), tel: g('poTel'), hp: g('poHp'), email: g('poEmail'), attn: g('poAttn'), valid: g('poValid'), to: g('poTo'), del: g('poDel'), terms: g('poTerms'), sst: g('poSst'), note: g('poNote'), prep: g('poPrep'), rev: g('poRev'), app: g('poApp')});
+  Object.assign(r.po, {no: g('poNo'), date: g('poDate'), ref: g('poRef'), contact: g('poContact'), addr: g('poAddr'), tel: g('poTel'), hp: g('poHp'), email: g('poEmail'), attn: g('poAttn'), valid: g('poValid'), to: g('poTo'), del: g('poDel'), terms: g('poTerms'), sst: g('poSst'), note: g('poNote')});
   r.po.lines = $$('#plPoL tr[data-li]').map(tr => { const o = {}; tr.querySelectorAll('[data-lk]').forEach(e => { o[e.dataset.lk] = clean(e.value); }); return o; });
   return r;
 }
@@ -2600,7 +2631,7 @@ async function plcClick(e){
   if(a === 'loaOk' || a === 'loaNo'){
     const by = plcVal('loaBy'), note = plcVal('loaNote');
     if(a === 'loaNo'){ const why = note || (prompt('Reason for rejecting the recommendation?') || '').trim(); if(!why) return;
-      r.loa = {}; r.pos = {}; r.rfq.at = ''; r.rfq.sg = {}; r.tsigs = {}; r.tstamps = {}; r.stage = 3; r.status = 'returned'; r.retNote = 'LOA rejected' + (by ? ' by ' + by : '') + ': ' + why; r.stageAt = plcNow();
+      r.loa = {}; r.pos = {}; r.po = Object.assign({}, r.po, {sg: {}}); r.psigs = {}; r.pstamps = {}; r.rfq.at = ''; r.rfq.sg = {}; r.tsigs = {}; r.tstamps = {}; r.stage = 3; r.status = 'returned'; r.retNote = 'LOA rejected' + (by ? ' by ' + by : '') + ': ' + why; r.stageAt = plcNow();
       await save(tag() + 'LOA rejected — back to RFQ: ' + why); return; }
     const no = plcVal('loaNo'); if(!no || !by){ toast('Enter the LOA number and who signed it.'); return; }
     r.loa = {no, by, title: plcVal('loaTitle'), note, at: plcNow()}; step(5);
@@ -2612,21 +2643,38 @@ async function plcClick(e){
   }
   if(a === 'savePo' || a === 'poOk'){
     const SP = plcIsSplit(r), V = SP ? plcPoView(r, true) : r, sid = V._subId || '';
-    if(SP && V.po.at){ toast('This PO is already issued.'); return; }
+    if(V.po.at){ toast('This PO is already issued.'); return; }
+    if(plcPoLocked(V.po)){ toast('The PO is signed by Procurement — Return it to make changes.'); return; }
     plcReadPo(V);
     if(a === 'poOk'){
       if(!V.po.no || !V.po.date){ toast('Enter the PO number and date.'); return; }
       if(SP && plcSplitBids(r).some(b => b.id !== sid && ((r.pos || {})[b.id] || {}).no === V.po.no)){ toast('PO number ' + V.po.no + ' is already given to another supplier in this package.', 6000); return; }
+      if(PLC.recs.some(x => x.id !== r.id && plcPoNos(x).includes(V.po.no))){ toast('PO number ' + V.po.no + ' is already used on another package.', 6000); return; }
       const c = plcPoCalc(V); if(!(c.sub > 0)){ toast('The PO amount is 0 — check the award or the unit prices.'); return; }
-      const an = c.award ? plcBidParts(V, c.award).net : 0; if(c.priced && c.award && Math.abs(c.sub - an) > 0.009 && !confirm('The order lines add up to ' + plcRM(c.sub) + ', but the awarded quotation is ' + plcRM(an) + ' before SST. Issue the PO anyway?')) return;
-      V.po.by = hubUser() || ''; V.po.at = plcNow(); V.po.total = c.total;
-      const S = SP ? plcSplitBids(r) : [], left = S.filter(b => !((r.pos || {})[b.id] || {}).at).length;
-      if(!SP || !left) step(6);
-      const no = V.po.no, used = (nx, recs) => { const mine = plcPoNos(nx); if(recs.some(x => x.id !== nx.id && plcPoNos(x).some(n => mine.includes(n)))){ throw new Error('PO number ' + no + ' is already used'); } };
-      const ok = await save(tag() + 'PO ' + no + ' issued to ' + (c.award ? c.award.supplier : '') + ' — ' + plcRM(c.total) + (SP ? ' (split award, ' + (S.length - left) + '/' + S.length + ' POs issued)' : ''), used);
-      if(ok){ if(SP){ const nx = S.find(b => !((r.pos || {})[b.id] || {}).at); PLC.poSel = nx ? nx.id : sid; renderPlc(); } plcPoShow(r.id, false, sid); } return;
+      const an = c.award ? plcBidParts(V, c.award).net : 0; if(c.priced && c.award && Math.abs(c.sub - an) > 0.009 && !confirm('The order lines add up to ' + plcRM(c.sub) + ', but the awarded quotation is ' + plcRM(an) + ' before SST. Send the PO for review anyway?')) return;
+      const by = plcVal('tBy'); if(!by){ toast('Enter your name in the PO sign-off (Prepare by).'); return; }
+      V.po.sg = {prep: {by, pos: plcVal('tPos'), note: plcVal('tNote'), at: plcNow()}}; V.po.ret = ''; plcPoKeepSig(r, r0, V, 'prep'); plcPoGc(r);
+      await save(tag() + 'PO ' + V.po.no + ' (' + (c.award ? c.award.supplier : '') + ' — ' + plcRM(c.total) + ') prepared by ' + by + ', sent for review'); return;
     }
     await save(tag() + 'PO details saved' + (SP ? ' — ' + (V._bid.supplier || '') : '')); return;
+  }
+  if(a === 'poSign'){
+    const SP = plcIsSplit(r), V = SP ? plcPoView(r, true) : r, sid = V._subId || '', k = d.tier, t = PLC_PO_SG.find(x => x[0] === k), by = plcVal('tBy');
+    if(!t || V.po.at || !plcPoLocked(V.po)) return; if(!by){ toast('Enter your name.'); return; }
+    V.po.sg = Object.assign({}, plcPoSg(V.po)); V.po.sg[k] = {by, pos: plcVal('tPos'), note: plcVal('tNote'), at: plcNow()}; plcPoKeepSig(r, r0, V, k);
+    if(k !== 'app'){ await save(tag() + 'PO ' + V.po.no + ' — ' + t[1] + ' ' + by); return; }
+    const c = plcPoCalc(V); V.po.by = (V.po.sg.prep || {}).by || by; V.po.at = plcNow(); V.po.total = c.total;
+    const S = SP ? plcSplitBids(r) : [], left = S.filter(b => !((r.pos || {})[b.id] || {}).at).length;
+    if(!SP || !left) step(6);
+    const no = V.po.no, used = (nx, recs) => { const mine = plcPoNos(nx); if(recs.some(x => x.id !== nx.id && plcPoNos(x).some(n => mine.includes(n)))){ throw new Error('PO number ' + no + ' is already used'); } };
+    const ok = await save(tag() + 'PO ' + no + ' approved by ' + by + ' and issued to ' + (c.award ? c.award.supplier : '') + ' — ' + plcRM(c.total) + (SP ? ' (split award, ' + (S.length - left) + '/' + S.length + ' POs issued)' : ''), used);
+    if(ok){ if(SP){ const nx = S.find(b => !((r.pos || {})[b.id] || {}).at); PLC.poSel = nx ? nx.id : sid; renderPlc(); } plcPoShow(r.id, false, sid); } return;
+  }
+  if(a === 'poRet'){
+    const SP = plcIsSplit(r), V = SP ? plcPoView(r, true) : r; if(V.po.at) return;
+    const why = (prompt('Why is the PO being returned to Procurement?') || '').trim(); if(!why) return;
+    V.po.sg = {}; V.po.ret = why; plcPoGc(r);
+    await save(tag() + 'PO ' + (V.po.no || '') + ' returned to Procurement: ' + why); return;
   }
 }
 
@@ -2652,7 +2700,8 @@ function plcPoHtml(r, unp){
     + `<tr class="fill"><td style="height:${fill}px"></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
   const kv = (k, v) => `<tr><th>${k}</th><td class="cl">:</td><td>${v}</td></tr>`;
   const addr = String(P.addr || '').split(/\n|,\s*(?=\d{5}\b)/).map(x => esc(x.trim())).filter(Boolean).join('<br>');
-  const sg = (lbl, nm, d) => { const im = nm ? plcSigFor(r, nm) : {}; return `<div class="zs"><div class="zl">${lbl}</div><div class="zim">${im.s ? `<img class="ps" src="${im.s}" alt="">` : ''}${im.c ? `<img class="pc" src="${im.c}" alt="">` : ''}</div><div class="zln"></div><div class="zr"><span>Name</span><i>:</i><b>${esc(nm || '')}</b></div><div class="zr"><span>Date</span><i>:</i><b>${esc(d || '')}</b></div></div>`; };
+  const G = plcPoSg(P), sgT = (k, nm0, d0) => { const t = G[k]; if(t && t.at) return [lblOf(k), plcNm(t.by), dt(t.at), plcPoImg(r, t)]; return [lblOf(k), nm0, d0, nm0 && !Object.keys(G).length ? plcSigFor(r, nm0) : {}]; }, lblOf = k => ({prep: 'Prepare By,', rev: 'Review By,', app: 'Approved By,'})[k];
+  const sg = (lbl, nm, d, im) => { im = im || {}; return `<div class="zs"><div class="zl">${lbl}</div><div class="zim">${im.s || im.c ? `<div class="zsi">${im.s ? `<img class="ps" src="${im.s}" alt="">` : ''}${im.c ? `<img class="pc" src="${im.c}" alt="">` : ''}</div>` : ''}</div><div class="zln"></div><div class="zr"><span>Name</span><i>:</i><b>${esc(nm || '')}</b></div><div class="zr"><span>Date</span><i>:</i><b>${esc(d || '')}</b></div></div>`; };
   const pages = rows.length > 16 ? Math.ceil(rows.length / 16) : 1;
   return `<style>@page{size:A4 portrait;margin:9mm}</style><div class="zpo">${issued ? '' : '<div class="zwm">DRAFT</div>'}
     <div class="zh">${logo ? `<img class="zlg" src="${logo}" alt="">` : '<span></span>'}<div class="zco"><b>${esc(C.company || D.company)}</b><small>(${esc(C.reg || D.reg)})</small><span>${esc(C.addr || D.addr).replace(/,\s*(\d{5})/, ',<br>$1')}</span><span>${esc(C.phone || D.phone)}</span><span>Email : ${esc(C.email || D.email)}</span></div><img class="zct" src="${PLC_CERT}" alt=""></div>
@@ -2668,7 +2717,7 @@ function plcPoHtml(r, unp){
     <div class="zft"><table class="zkv zt2">${kv('PRICE VALIDITY', '<b>' + esc(P.valid || a.valid || '') + '</b>')}${kv('DELIVERY DATE', '<b>' + dt(P.del) + '</b>')}${kv('DELIVERY POINT', '<b>' + esc(P.to || '') + '</b>')}${kv('PAYMENT TERM', '<b>' + esc(P.terms || '') + '</b>')}</table>
       <table class="ztot"><tr><th>Sub Total (RM)</th><td>${unp ? '' : subT ? m2(subT) : '-'}</td></tr><tr><th>Discount (RM)</th><td>${unp ? '' : disc ? '(' + m2(disc) + ')' : '-'}</td></tr><tr><th>Total (RM)</th><td><b>${unp ? '' : c.total ? m2(c.total) : '-'}</b></td></tr></table></div>
     ${P.note ? `<div class="znote"><b>Note:</b> ${esc(P.note)}</div>` : ''}
-    <div class="zsig">${sg('Prepare By,', P.prep || plcNm(P.by), dt(P.date))}${sg('Review By,', P.rev, dt(P.date))}${sg('Approved By,', P.app || plcNm(r.loa.by), dt(r.loa.at))}${sg('Acknowledged by Contractor,', '', '')}</div>
+    <div class="zsig">${sg(...sgT('prep', P.prep || plcNm(P.by), P.by ? dt(P.date) : ''))}${sg(...sgT('rev', P.rev || '', P.rev ? dt(P.date) : ''))}${sg(...sgT('app', P.app || '', P.app ? dt(r.loa.at) : ''))}${sg('Acknowledged by Contractor,', '', '')}</div>
     <div class="zf">${esc([r.mrfNo && 'MRF ' + r.mrfNo, r.psr.no && 'PSR ' + r.psr.no, r.rfq.no && 'RFQ ' + r.rfq.no, r.loa.no && 'LOA ' + r.loa.no].filter(Boolean).join(' · '))}${unp ? ' · Unpriced copy for store / site receiving — prices are on the original PO' : ''} · ${issued ? 'Issued ' + plcDT(P.at) : 'Draft — not yet issued'}</div></div>`;
 }
 function plcPoShow(id, unp, bid){
@@ -2974,9 +3023,12 @@ const PLC_CSS = `<style>
 .zpo .znote{margin-top:8px;font-size:11px}
 .zpo .zsig{display:grid;grid-template-columns:1fr 1fr 1fr 1.45fr;gap:34px;margin-top:22px}
 .zpo .zl{font-size:12px}
-.zpo .zim{height:58px;display:flex;align-items:flex-end;justify-content:flex-start;position:relative}
-.zpo .zim img.ps{max-height:54px;max-width:120px;mix-blend-mode:multiply;position:relative;z-index:2}
-.zpo .zim img.pc{max-height:58px;max-width:80px;mix-blend-mode:multiply;margin-left:-14px;opacity:.9}
+.zpo .zim{height:62px;position:relative}
+.zpo .zsi{position:absolute;left:4px;bottom:-4px;right:0;display:flex;align-items:center}
+.zpo .zsi img{object-fit:contain;mix-blend-mode:multiply;flex:0 0 auto}
+.zpo .zsi img.ps{height:58px;max-width:70%}
+.zpo .zsi img.pc{height:62px;width:62px;margin-left:-12px;opacity:.92}
+.zpo .zsi img.pc:first-child{margin-left:0}
 .zpo .zln{border-top:1px solid #000;margin-top:2px}
 .zpo .zr{display:grid;grid-template-columns:38px 10px 1fr;font-size:11.5px;margin-top:3px}
 .zpo .zr i{font-style:normal}
