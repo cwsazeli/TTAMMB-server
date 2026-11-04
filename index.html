@@ -1436,8 +1436,8 @@ $('#btnStaff').addEventListener('click', () => (LEVEL !== 'client' || PREVIEW) ?
    without a Sheet it is kept on this device. Viewing: Management/Operation and Admin. Every change asks for the name and
    the access password (same as all modules) and is written to the Activity log. */
 const PLC_KEY = 'ttammhub_plc';
-const PLC_FIELDS = ['id','mrfNo','title','desc','wopNo','site','charge','reqBy','reqDate','needBy','priority','stage','status','stageAt','retNote','items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','createdAt','createdBy','updatedAt','updatedBy'];
-const PLC_JSON = ['items','store','psr','rfq','loa','po','log','cfg','sigs','stamps'];
+const PLC_FIELDS = ['id','mrfNo','title','desc','wopNo','site','charge','reqBy','reqDate','needBy','priority','stage','status','stageAt','retNote','items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos','createdAt','createdBy','updatedAt','updatedBy'];
+const PLC_JSON = ['items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos'];
 const PLC_STEPS = [
   {t: 'MRF Submission', s: 'Site / Workshop'},
   {t: 'Store Verification', s: 'Stock check'},
@@ -1457,7 +1457,7 @@ function plcParse(r){
   const o = Object.assign({}, r); PLC_JSON.forEach(k => { o[k] = plcJ(o[k]); });
   o.stage = Number(o.stage) || 0; if(!Array.isArray(o.items)) o.items = []; if(!Array.isArray(o.log)) o.log = [];
   ['store', 'psr', 'rfq', 'loa', 'po'].forEach(k => { if(!o[k] || typeof o[k] !== 'object' || Array.isArray(o[k])) o[k] = {}; });
-  ['sigs', 'stamps'].forEach(f => { if(!o[f] || typeof o[f] !== 'object' || Array.isArray(o[f])) o[f] = {}; });
+  ['sigs', 'stamps', 'tsigs', 'tstamps', 'pos'].forEach(f => { if(!o[f] || typeof o[f] !== 'object' || Array.isArray(o[f])) o[f] = {}; });
   if(!Array.isArray(o.rfq.bids)) o.rfq.bids = []; if(!o.psr.t || typeof o.psr.t !== 'object') o.psr.t = {};
   o._base = String(o.updatedAt || ''); return o;
 }
@@ -1465,8 +1465,8 @@ function plcSer(r){ const o = {}; PLC_FIELDS.forEach(k => { const v = r[k]; o[k]
 const plcClone = r => { const c = JSON.parse(JSON.stringify(r)); return c; };
 const plcYY = () => String(new Date().getFullYear()).slice(2);
 function plcNext(kind, recs){
-  const pre = String(PLC.cfg[kind] || PLC_CFG0[kind]).replace(/\{YY\}/g, plcYY()), get = {mrf: r => r.mrfNo, psr: r => r.psr.no, rfq: r => r.rfq.no, loa: r => r.loa.no, po: r => r.po.no}[kind];
-  let mx = 0; (recs || PLC.recs).forEach(r => { const n = String(get(r) || ''); if(n.startsWith(pre)){ const m = /(\d+)\s*$/.exec(n.slice(pre.length)); if(m) mx = Math.max(mx, +m[1]); } });
+  const pre = String(PLC.cfg[kind] || PLC_CFG0[kind]).replace(/\{YY\}/g, plcYY()), get = {mrf: r => r.mrfNo, psr: r => r.psr.no, rfq: r => r.rfq.no, loa: r => r.loa.no, po: r => [r.po.no].concat(Object.values(r.pos || {}).map(p => p && p.no))}[kind];
+  let mx = 0; (recs || PLC.recs).forEach(r => [].concat(get(r) || []).forEach(v => { const n = String(v || ''); if(n.startsWith(pre)){ const m = /(\d+)\s*$/.exec(n.slice(pre.length)); if(m) mx = Math.max(mx, +m[1]); } }));
   return pre + String(mx + 1).padStart(3, '0');
 }
 const plcRM = v => 'RM ' + num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -1481,7 +1481,42 @@ function plcBids(r){
   const low = ok.reduce((m, x) => !m || T(x) < T(m) ? x : m, null);
   return {b, ok, low};
 }
-const plcAward = r => (r.rfq.bids || []).find(x => x.id && x.id === r.rfq.award) || null;
+const plcAward = r => plcIsSplit(r) ? null : (r.rfq.bids || []).find(x => x.id && x.id === r.rfq.award) || null;
+/* Split award: each item goes to its own supplier (r.rfq.aw = {itemIdx: bidId}); one PO per awarded supplier, kept in r.pos = {bidId: po} */
+const plcIsSplit = r => !!(r.rfq && r.rfq.split);
+const plcAwMap = r => (r.rfq.aw && typeof r.rfq.aw === 'object') ? r.rfq.aw : {};
+const plcAwOk = (b, i) => { const l = (b.lines || {})[i] || {}; return l.par !== 'NO QUOTE' && (num(l.rate) > 0 || l.par === 'INCLUDE'); };
+function plcSplitBids(r){ const aw = plcAwMap(r), idx = plcBuyIdx(r); return (r.rfq.bids || []).filter(b => b.id && idx.some(i => aw[i] === b.id && plcAwOk(b, i))); }
+/* a view of the package as seen by one awarded supplier: only its items are bought (the others have net 0), its SST shared pro rata,
+   and its own PO object (attach = keep that PO object in r.pos so edits are saved) */
+function plcSub(r, bid, attach){
+  const aw = plcAwMap(r), s = Object.assign({}, r), full = plcBidParts(r, bid);
+  s.items = r.items.map((it, i) => aw[i] === bid.id && plcAwOk(bid, i) ? it : Object.assign({}, it, {stock: it.qty}));
+  const b2 = Object.assign({}, bid); s.rfq = Object.assign({}, r.rfq, {split: false, award: bid.id, bids: (r.rfq.bids || []).map(x => x.id === bid.id ? b2 : x)});
+  const part = plcBidParts(s, bid); if(num(bid.sst) && full.items) b2.sst = String(Math.round(num(bid.sst) * part.items / full.items * 100) / 100);
+  b2.amount = String(plcBidParts(s, b2).total);
+  if(!r.pos || typeof r.pos !== 'object') r.pos = {};
+  let po = r.pos[bid.id]; if(!po){ po = {}; if(attach) r.pos[bid.id] = po; }
+  s.po = po; s.stage = po.at ? 6 : Math.min(r.stage, 5); s._bid = b2; s._subId = bid.id;
+  const S = plcSplitBids(r); s._subK = S.findIndex(x => x.id === bid.id) + 1; s._subN = S.length;
+  return s;
+}
+const plcSplitTotal = r => Math.round(plcSplitBids(r).reduce((t, b) => { const s = plcSub(r, b); return t + plcBidParts(s, s._bid).total; }, 0) * 100) / 100;
+const plcPoIssued = r => plcIsSplit(r) ? plcSplitBids(r).filter(b => r.pos && r.pos[b.id] && r.pos[b.id].at) : (r.stage >= 6 ? [plcAward(r)].filter(Boolean) : []);
+function plcPoNos(r){ if(r.status === 'cancelled') return []; return plcIsSplit(r) ? plcSplitBids(r).map(b => (r.pos || {})[b.id]).filter(p => p && p.at && p.no).map(p => p.no) : r.stage >= 6 && r.po.no ? [r.po.no] : []; }
+const plcPoNet = r => plcIsSplit(r) ? plcSplitBids(r).filter(b => r.pos && r.pos[b.id] && r.pos[b.id].at).reduce((t, b) => t + plcPoCalc(plcSub(r, b)).sub, 0) : plcPoCalc(r).sub;
+const plcPoGross = r => plcIsSplit(r) ? plcSplitBids(r).filter(b => r.pos && r.pos[b.id] && r.pos[b.id].at).reduce((t, b) => t + plcPoCalc(plcSub(r, b)).total, 0) : plcPoCalc(r).total;
+const plcSupTxt = r => plcIsSplit(r) ? plcSplitBids(r).map(b => b.supplier).join(', ') : (plcAward(r) || {}).supplier || '';
+/* the PO supplier tab open in the PO step */
+function plcPoBid(r){ const S = plcSplitBids(r); return S.find(b => b.id === PLC.poSel) || S.find(b => !(r.pos && r.pos[b.id] && r.pos[b.id].at)) || S[0] || null; }
+const plcPoView = (r, attach) => { if(!plcIsSplit(r)) return r; const b = plcPoBid(r); return b ? plcSub(r, b, attach) : r; };
+/* lowest compliant unit price per item: {itemIdx: bidId} (ties → lower total) */
+function plcLowMap(r){
+  const B = (r.rfq.bids || []).filter(b => b.id && b.ok !== false), T = b => plcBidParts(r, b).total || Infinity, m = {};
+  plcBuyIdx(r).forEach(i => { let best = null; B.forEach(b => { const l = (b.lines || {})[i] || {}; if((l.par || 'COMPLY') !== 'COMPLY' || !(num(l.rate) > 0)) return;
+    if(!best || num(l.rate) < best.p - 1e-9 || (Math.abs(num(l.rate) - best.p) < 1e-9 && T(b) < T(best.b))) best = {b, p: num(l.rate)}; }); if(best) m[i] = best.b.id; });
+  return m;
+}
 function plcPoCalc(r){
   const a = plcAward(r), AL = (a && a.lines) || {}, ap = a ? plcBidParts(r, a) : null; let lines;
   if(Array.isArray(r.po.lines) && r.po.lines.length) lines = r.po.lines;
@@ -1492,14 +1527,16 @@ function plcPoCalc(r){
   const sstP = r.po.sst !== undefined && r.po.sst !== '' ? num(r.po.sst) : ap && ap.sst && ap.net ? +(ap.sst / ap.net * 100).toFixed(2) : num(PLC.cfg.sst), sst = Math.round(sub * sstP) / 100;
   return {lines, priced, sub, sstP, sst, total: sub + sst, award: a};
 }
-const plcValue = r => r.stage >= 6 ? plcPoCalc(r).sub : (plcAward(r) ? num(plcAward(r).amount) : 0);
+const plcValue = r => plcIsSplit(r) ? (r.stage >= 6 ? plcPoNet(r) : plcSplitTotal(r)) : r.stage >= 6 ? plcPoCalc(r).sub : (plcAward(r) ? num(plcAward(r).amount) : 0);
 function plcTierNext(r){ for(const [k] of PLC_TIERS){ if(!(r.psr.t[k] && r.psr.t[k].at)) return k; } return ''; }
 function plcState(r){
   if(r.status === 'cancelled') return {k: 'x', t: 'Cancelled'};
   if(r.status === 'fromStore') return {k: 'ok', t: 'Issued from store'};
-  if(r.stage >= 6) return {k: 'ok', t: 'PO issued'};
+  if(r.stage >= 6) return {k: 'ok', t: plcIsSplit(r) ? plcSplitBids(r).length + ' POs issued (split)' : 'PO issued'};
+  if(r.stage === 5 && plcIsSplit(r) && r.status !== 'returned' && r.status !== 'draft'){ const n = plcSplitBids(r).length; return {k: 'info', t: 'Awaiting PO — ' + plcPoIssued(r).length + '/' + n + ' issued'}; }
   if(r.status === 'draft') return {k: 'draft', t: r.direct ? 'Draft PSR' : 'Draft MRF'};
   if(r.status === 'returned') return {k: 'bad', t: 'Returned — ' + (r.stage === 0 && r.direct ? 'PSR Submission' : PLC_STEPS[r.stage].t)};
+  if(r.stage === 3 && plcTcbLocked(r)){ const t = PLC_TCB_SG.find(x => x[0] === plcTcbNext(r)); return {k: 'info', t: 'TCBE — awaiting ' + (t ? t[1].replace(' by', '') : 'LOA')}; }
   if(r.stage === 2){ const n = plcTierNext(r); return {k: 'info', t: 'PSR — awaiting ' + (n ? n.toUpperCase() : 'PE')}; }
   return {k: r.stage === 4 ? 'warn' : 'info', t: 'Awaiting ' + PLC_STEPS[r.stage].t};
 }
@@ -1508,8 +1545,9 @@ function plcStepSub(r, i){
   if(i === 0) return r.reqBy || (r.direct ? 'Direct PSR' : 'Site / Workshop');
   if(i === 1) return r.store.at ? (r.store.by ? 'By ' + r.store.by : 'Checked') : 'Stock check';
   if(i === 2) return PLC_TIERS.map(([k, l]) => l + (r.psr.t[k] && r.psr.t[k].at ? ' ✓' : '')).join(' → ');
-  if(i === 3){ const n = plcBids(r).b.length; return n ? n + ' vendor' + (n === 1 ? '' : 's') + ' evaluated' : 'Vendors evaluated'; }
+  if(i === 3){ const n = plcBids(r).b.length, g = plcTcbSg(r), d = PLC_TCB_SG.filter(t => g[t[0]] && g[t[0]].at).length; return (n ? n + ' vendor' + (n === 1 ? '' : 's') : 'Vendors evaluated') + (d ? ' · signed ' + d + '/6' : ''); }
   if(i === 4) return r.loa.at ? 'Signed — ' + (r.loa.by || '') : r.stage === 4 ? 'Enroute sign-off' : 'Sign-off';
+  if(plcIsSplit(r) && r.stage >= 5){ const n = plcSplitBids(r).length, k = plcPoIssued(r).length; return k ? k + '/' + n + ' POs issued' : n + ' POs (split award)'; }
   return r.po.no && r.stage >= 6 ? r.po.no : 'Official PO';
 }
 
@@ -1581,6 +1619,8 @@ function plcNeed(a, r, d){
   if(a === 'storeOk') return ['MATCO'];
   if(a === 'tierOk') return [{pe: 'PE', cc: 'CC', pm: 'PM', dir: 'DIR'}[d.tier]];
   if(a === 'saveRfq' || a === 'rfqOk') return ['PROC'];
+  if(a === 'tcbSign') return [(PLC_TCB_SG.find(t => t[0] === d.tier) || [])[3] || 'ADMIN'];
+  if(a === 'tcbRet'){ const t = PLC_TCB_SG.find(x => x[0] === plcTcbNext(r)); return t ? [t[3]] : ['ADMIN']; }
   if(a === 'loaOk' || a === 'loaNo') return ['DIR'];
   if(a === 'savePo' || a === 'poOk') return ['PROC'];
   return ['ADMIN'];
@@ -1693,13 +1733,13 @@ const PLC_RUN = {
   psr: {lbl: 'PSR', no: r => r.psr.no, dt: r => (r.psr.t.pe || {}).at || r.createdAt},
   rfq: {lbl: 'RFQ', no: r => r.rfq.no, dt: r => r.rfq.date || r.rfq.at || r.updatedAt},
   loa: {lbl: 'LOA', no: r => r.loa.no, dt: r => r.loa.at},
-  po:  {lbl: 'PO',  no: r => r.stage >= 6 ? r.po.no : '', dt: r => r.po.date || r.po.at}
+  po:  {lbl: 'PO',  no: r => plcPoNos(r), dt: r => r.po.date || r.po.at || (Object.values(r.pos || {})[0] || {}).date}
 };
 function plcRunHtml(kind){
   const K = PLC_RUN[kind], cur = String(PLC.cfg[kind] || PLC_CFG0[kind]).replace(/\{YY\}/g, plcYY()), ser = new Map();
-  PLC.recs.forEach(r => { const n = clean(K.no(r)); if(!n) return; const m = /^(.*?)(\d+)(\D*)$/.exec(n); if(!m) return;
+  PLC.recs.forEach(r => [].concat(K.no(r) || []).forEach(n0 => { const n = clean(n0); if(!n) return; const m = /^(.*?)(\d+)(\D*)$/.exec(n); if(!m) return;
     const key = m[1] + '|' + m[3]; let g = ser.get(key); if(!g) ser.set(key, g = {pre: m[1], suf: m[3], w: m[2].length, list: []});
-    g.w = Math.max(g.w, m[2].length); g.list.push({n, q: +m[2], d: K.dt(r)}); });
+    g.w = Math.max(g.w, m[2].length); g.list.push({n, q: +m[2], d: K.dt(r)}); }));
   const dts = d => { const x = /^\d{4}-\d{2}-\d{2}/.test(String(d || '')) ? fmtD(String(d).slice(0, 10)) : d ? plcDT(d).slice(0, 11) : ''; return x && x !== '—' ? ` <span class="pl-rd">· ${x}</span>` : ''; };
   const row = (g, main) => { const qs = [...new Set(g.list.map(x => x.q))].sort((a, b) => a - b), mx = qs[qs.length - 1], last = g.list.filter(x => x.q === mx)[0], have = new Set(qs), gap = [];
     for(let i = 1; i < mx && gap.length < 13; i++) if(!have.has(i)) gap.push(g.pre + String(i).padStart(g.w, '0').slice(-g.w) + g.suf);
@@ -1729,7 +1769,7 @@ function plcHead(){
     <div class="tb-meta"><span>📦 Records <b>${R.length}</b></span>${last && last.updatedAt ? `<span>🕐 Updated <b>${esc(dt(last.updatedAt))}</b>${last.updatedBy ? ' · by <b>' + esc(last.updatedBy) + '</b>' : ''}</span>` : '<span>No records yet</span>'}<span>🗂 Storage <b>${url ? 'Google Sheets · WOP_plc' : 'this device only'}</b></span><span title="PE · CC · Matco · Procurement · PM · Director — the Admin password works for every step">🔐 Each step asks for its <b>role password</b></span></div></div>
   ${PLC.help ? `<div class="pl-help"><b>How a package moves</b><br>
     <b>1 MRF</b> — site raises what is needed, charge code and need-by date. · <b>2 Store</b> — store enters what is in stock; only the balance is bought (all in stock → closed, issued from store). ·
-    <b>3 PSR Review</b> — PE requests, Cost Control reviews budget / charge code, PM verifies, Director approves, in turn. · <b>4 RFQ</b> — at least ${num(c.minBids) || 3} quotations; the lowest compliant bid is marked L1, any other award needs a justification. ·
+    <b>3 PSR Review</b> — PE requests, Cost Control reviews budget / charge code, PM verifies, Director approves, in turn. · <b>4 RFQ</b> — at least ${num(c.minBids) || 3} quotations; the lowest compliant bid is marked L1, any other award needs a justification. <b>Split award</b> gives each item to its own supplier (⚡ Pick lowest per item), and the PO step then issues one PO per supplier. ·
     <b>5 LOA</b> — management signs (or rejects back to RFQ). · <b>6 PO</b> — official PO with running number, print or save as PDF.<br>
     Any step can be returned to the requester with a reason. <b>Passwords:</b> MRF — any role · PSR submission and PE approval — PE · CC approval — CC · store check — Matco · PM approval — PM · PSR final approval — Director · RFQ and PO — Procurement · LOA — Director · cancel, delete and settings — Admin. The Admin password works for every step. Each change is written to the Activity log with your name and role.</div>` : ''}
   <div class="tabs">${tabs}</div>`;
@@ -1739,16 +1779,16 @@ const PLC_COLS = '<tr><th>Job package / material description</th><th>Ref (MRF / 
 function plcRow(r){
   const td = todayISO(), a = plcAward(r), d = plcDays(r.stageAt || r.updatedAt), lateR = !plcClosed(r) && r.needBy && r.needBy < td, po = r.stage >= 6 && r.status !== 'cancelled';
   return `<tr data-popen="${esc(r.id)}"><td class="pl-pk"><b>${esc(r.title || '(untitled)')}</b>${r.priority && r.priority !== 'Normal' ? ` <span class="pl-pri ${r.priority === 'Critical' ? 'c' : ''}">${esc(r.priority)}</span>` : ''}<span>${esc((r.desc || r.items.map(i => i.desc).filter(Boolean).join(', ')).slice(0, 140))}</span></td>
-    <td class="mono">${esc(r.mrfNo || r.psr.no || '—')}${r.direct ? '<span class="pl-sub">Direct PSR</span>' : ''}${r.wopNo ? `<span class="pl-sub">WOP ${esc(r.wopNo)}</span>` : ''}${po ? `<span class="pl-sub mono">PO ${esc(r.po.no)}</span>` : ''}</td>
+    <td class="mono">${esc(r.mrfNo || r.psr.no || '—')}${r.direct ? '<span class="pl-sub">Direct PSR</span>' : ''}${r.wopNo ? `<span class="pl-sub">WOP ${esc(r.wopNo)}</span>` : ''}${plcPoNos(r).length ? `<span class="pl-sub mono">PO ${esc(plcPoNos(r).join(', '))}</span>` : ''}</td>
     <td>${r.charge || r.site ? `<span class="pl-cc">${esc([r.charge, r.site].filter(Boolean).join(' · '))}</span>` : '<span class="faint">—</span>'}</td>
     <td>${plcPill(r)}${!plcClosed(r) && d !== null ? `<span class="pl-sub">${d} day${d === 1 ? '' : 's'} at this step</span>` : ''}</td>
-    <td>${a ? esc(a.supplier) + (a.ref ? `<span class="pl-sub mono">${esc(a.ref)}</span>` : '') : '<span class="faint">—</span>'}</td>
+    <td>${plcIsSplit(r) && plcSplitBids(r).length ? esc(plcSupTxt(r)) + `<span class="pl-sub">split award · ${plcSplitBids(r).length} suppliers</span>` : a ? esc(a.supplier) + (a.ref ? `<span class="pl-sub mono">${esc(a.ref)}</span>` : '') : '<span class="faint">—</span>'}</td>
     <td class="${lateR ? 'pl-late' : ''}">${r.needBy ? fmtD(r.needBy) : '—'}${lateR ? '<span class="pl-sub">overdue</span>' : ''}</td>
     <td class="n">${plcValue(r) ? plcRM(plcValue(r)) : '<span class="faint">—</span>'}</td>
     <td><button class="btn sm${po ? ' primary' : ''}" data-${po ? 'ppo' : 'popen'}="${esc(r.id)}">${po ? 'View PO' : 'Open'}</button></td></tr>`;
 }
 const plcSort = (a, b) => (plcClosed(a) - plcClosed(b)) || (({Critical: 0, Urgent: 1}[a.priority] ?? 2) - ({Critical: 0, Urgent: 1}[b.priority] ?? 2)) || String(a.needBy || '9').localeCompare(String(b.needBy || '9')) || String(b.updatedAt).localeCompare(String(a.updatedAt));
-const plcQ = r => { const q = PLC.f.q.trim().toLowerCase(); return !q || [r.mrfNo, r.title, r.desc, r.wopNo, r.site, r.charge, r.reqBy, r.psr.no, r.rfq.no, r.po.no, (plcAward(r) || {}).supplier, r.items.map(i => i.desc).join(' ')].join(' ').toLowerCase().includes(q); };
+const plcQ = r => { const q = PLC.f.q.trim().toLowerCase(); return !q || [r.mrfNo, r.title, r.desc, r.wopNo, r.site, r.charge, r.reqBy, r.psr.no, r.rfq.no, r.po.no, plcPoNos(r).join(' '), plcSupTxt(r), r.items.map(i => i.desc).join(' ')].join(' ').toLowerCase().includes(q); };
 function plcTable(list, empty){
   return list.length ? `<div class="pl-tw"><table class="pl-t"><thead>${PLC_COLS}</thead><tbody>${list.map(plcRow).join('')}</tbody></table></div>`
     : `<div class="note empty-st"><span class="es-i">🧾</span><b>${empty}</b>${!PLC.recs.length ? (PLC_ED() ? (PLC.view === 'mrf' ? 'Press <b>＋ Raise New MRF</b> to start the first job package.' : 'Go to the <b>Material Requisitions (MRF)</b> tab and press <b>＋ Raise New MRF</b>.') : 'Packages appear here once an MRF is raised.') : ''}</div>`;
@@ -1766,7 +1806,7 @@ function renderPlc(){
   let body;
   if(V.k === 'dash'){
     const at = i => act.filter(r => r.stage === i).length;
-    const done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled'), commit = done.reduce((s, r) => s + plcPoCalc(r).sub, 0);
+    const done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled'), commit = done.reduce((s, r) => s + plcPoNet(r), 0);
     const loaV = act.filter(r => r.stage === 4).reduce((s, r) => s + plcValue(r), 0), late = act.filter(r => r.needBy && r.needBy < td);
     const nDraft = act.filter(r => r.stage === 0 && r.status === 'draft').length, nRet = act.filter(r => r.status === 'returned').length;
     const goV = i => ['mrf', 'psr', 'psr', 'rfq', 'loa', 'po'][i];
@@ -1792,7 +1832,7 @@ function renderPlc(){
       ${plcTable(list, R.length ? 'Nothing matches this filter' : 'No requisitions yet')}</div>`;
   } else {
     const list = R.filter(r => V.m(r) && plcQ(r)).sort(V.k === 'po' ? (a, b) => (a.stage >= 6) - (b.stage >= 6) || String(b.po.date || '').localeCompare(String(a.po.date || '')) : plcSort);
-    const sum = V.k === 'po' ? (() => { const iss = list.filter(r => r.stage >= 6), net = iss.reduce((s, r) => s + plcPoCalc(r).sub, 0); return `<p class="pl-bn">${list.length - iss.length} to issue · ${iss.length} issued · <b>${plcRM(net)}</b> committed (net)</p>`; })()
+    const sum = V.k === 'po' ? (() => { const iss = list.filter(r => r.stage >= 6), net = iss.reduce((s, r) => s + plcPoNet(r), 0); return `<p class="pl-bn">${list.length - iss.length} to issue · ${iss.length} issued · <b>${plcRM(net)}</b> committed (net)</p>`; })()
       : V.k === 'loa' ? `<p class="pl-bn">${list.length} package${list.length === 1 ? '' : 's'} · <b>${plcRM(list.reduce((s, r) => s + plcValue(r), 0))}</b> to sign</p>` : '';
     body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p>${sum}</div><div class="pl-bhr">${search}${V.k === 'psr' ? '<button class="btn" data-pa="spAll" title="Check the items of these packages against the stock left in the Surplus Ledger">♻ Check Surplus Ledger</button>' : ''}${PLC_ED() && V.k === 'psr' ? '<button class="btn primary" data-pa="newPsr">＋ Raise New PSR</button>' : ''}</div></div>
       ${plcTable(list, PLC.f.q ? 'Nothing matches the search' : 'Nothing waiting here')}</div>`;
@@ -1803,7 +1843,7 @@ function renderPlc(){
 function plcCopy(){
   const R = PLC.recs, act = R.filter(r => !plcClosed(r)), at = i => act.filter(r => r.stage === i).length, done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled');
   const t = ['Procurement Lifecycle — ' + todayISO(), 'Active MRFs: ' + act.length, 'Store check: ' + at(1) + ' · PSR review: ' + at(2), 'RFQ: ' + at(3), 'Awaiting LOA: ' + at(4), 'PO to issue: ' + at(5),
-    'POs issued: ' + done.length + ' — ' + plcRM(done.reduce((s, r) => s + plcPoCalc(r).sub, 0)) + ' (net)'].join('\n');
+    'POs issued: ' + done.length + ' — ' + plcRM(done.reduce((s, r) => s + plcPoNet(r), 0)) + ' (net)'].join('\n');
   (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Summary copied ✓')).catch(() => prompt('Copy the summary:', t));
 }
 
@@ -1815,7 +1855,7 @@ function plcBlankPsr(){
 function plcDirty(){ const d = PLC.draft; if(!d) return false; if(d.direct){ plcReadPsr(d); return d.items.some(i => i.desc) || !!(d.psr.form && (d.psr.form.purpose || d.psr.form.projTitle)); } return !!plcReadMrf(d).title; }
 function plcBlank(){
   return plcParse({id: '', mrfNo: '', title: '', desc: '', wopNo: '', site: '', charge: '', reqBy: hubUser(), reqDate: todayISO(), needBy: '', priority: 'Normal', stage: 0, status: 'draft',
-    items: [{desc: '', qty: '', unit: 'lot', rem: ''}], store: {}, psr: {t: {}}, rfq: {bids: []}, loa: {}, po: {}, log: []});
+    items: [{desc: '', qty: '', unit: 'lot', rem: ''}], store: {}, psr: {t: {}}, rfq: {bids: []}, loa: {}, po: {}, pos: {}, log: []});
 }
 function plcCur(){ return PLC.sel === '__new' ? PLC.draft : PLC.recs.find(r => r.id === PLC.sel); }
 function plcCanEdit(r, i){ return PLC_ED() && !plcClosed(r) && r.stage === i; }
@@ -1839,8 +1879,8 @@ function plcDetail(el){
     <aside class="pl-side"><div class="box pl-card"><h4>Summary</h4><dl class="pl-dl">
       <dt>Charge code</dt><dd>${esc(r.charge || '—')}</dd><dt>Site</dt><dd>${esc(r.site || '—')}</dd><dt>WOP</dt><dd>${esc(r.wopNo || '—')}</dd>
       <dt>Requested by</dt><dd>${esc(r.reqBy || '—')}${r.reqDate ? ' · ' + fmtD(r.reqDate) : ''}</dd><dt>Need by</dt><dd>${r.needBy ? fmtD(r.needBy) : '—'}</dd>
-      <dt>PSR</dt><dd class="mono">${esc(r.psr.no || '—')}</dd><dt>RFQ</dt><dd class="mono">${esc(r.rfq.no || '—')}</dd><dt>Supplier</dt><dd>${a ? esc(a.supplier) : '—'}</dd>
-      <dt>LOA</dt><dd class="mono">${esc(r.loa.no || '—')}</dd><dt>PO</dt><dd class="mono">${esc(r.stage >= 6 ? r.po.no : '—')}</dd><dt>Value</dt><dd><b>${plcValue(r) ? plcRM(plcValue(r)) : '—'}</b></dd></dl></div>
+      <dt>PSR</dt><dd class="mono">${esc(r.psr.no || '—')}</dd><dt>RFQ</dt><dd class="mono">${esc(r.rfq.no || '—')}</dd><dt>Supplier</dt><dd>${plcIsSplit(r) ? esc(plcSupTxt(r) || '—') + (plcSplitBids(r).length ? ' <span class="faint">(split)</span>' : '') : a ? esc(a.supplier) : '—'}</dd>
+      <dt>LOA</dt><dd class="mono">${esc(r.loa.no || '—')}</dd><dt>PO</dt><dd class="mono">${esc(plcPoNos(r).join(', ') || '—')}</dd><dt>Value</dt><dd><b>${plcValue(r) ? plcRM(plcValue(r)) : '—'}</b></dd></dl></div>
       <div class="box pl-card"><h4>History</h4>${r.log.length ? `<ol class="pl-log">${r.log.slice().reverse().map(l => `<li><span>${esc(plcDT(l.at))} · ${esc(l.by || '')}</span>${esc(l.t)}</li>`).join('')}</ol>` : '<p class="faint" style="margin:0;font-size:12.5px">Not saved yet.</p>'}</div></aside></div>
   <datalist id="plWops">${wopList.map(w => `<option value="${esc(w.wopNo)}">${esc(clean(w.wopTitle || '').slice(0, 80))}</option>`).join('')}</datalist>`;
   plcCalc();
@@ -1973,8 +2013,11 @@ function plcSigProcess(im, kind){
   for(const [W, H] of (kind === 'c' ? [[230, 230], [190, 190], [160, 160], [130, 130]] : [[360, 140], [300, 116], [240, 92], [190, 72]])){
     const sc = Math.min(1, W / cw, H / ch), o = document.createElement('canvas'); o.width = Math.max(1, Math.round(cw * sc)); o.height = Math.max(1, Math.round(ch * sc));
     const ox = o.getContext('2d'); ox.imageSmoothingQuality = 'high'; ox.drawImage(c, x0, y0, cw, ch, 0, 0, o.width, o.height);
-    for(const q of [0.82, 0.68, 0.52]){ const u = o.toDataURL('image/webp', q); if(/^data:image\/webp/.test(u) && u.length < 9500) return u; }
-    const u = o.toDataURL('image/png'); if(u.length < 9500) return u;
+    for(const q of [0.82, 0.68, 0.52]){ const u = o.toDataURL('image/webp', q); if(/^data:image\/webp/.test(u) && u.length < 7200) return u; }
+    // browsers that cannot write WebP (e.g. Safari): JPEG on white — prints the same, the page blends white away (multiply)
+    const j = document.createElement('canvas'); j.width = o.width; j.height = o.height; const jx = j.getContext('2d'); jx.fillStyle = '#fff'; jx.fillRect(0, 0, j.width, j.height); jx.drawImage(o, 0, 0);
+    for(const q of [0.86, 0.74, 0.62]){ const u = j.toDataURL('image/jpeg', q); if(u.length < 7200) return u; }
+    const u = o.toDataURL('image/png'); if(u.length < 7200) return u;
   }
   return '';
 }
@@ -2002,9 +2045,8 @@ function plcSigClean(url, kind){
       o = plcSigProcess(im, kind) || url; }catch(e){ o = url; } PLC_CLEAN.set(url, o); PLC_CLEAN.set(o, o); res(o); }; im.onerror = () => res(url); im.src = url; });
 }
 async function plcSigCleanAll(r){
-  const S = Object.assign({}, r.sigs), C = Object.assign({}, r.stamps);
-  await Promise.all(Object.keys(S).map(async k => { S[k] = await plcSigClean(S[k], 's'); }).concat(Object.keys(C).map(async k => { C[k] = await plcSigClean(C[k], 'c'); })));
-  r.sigs = S; r.stamps = C; return r;
+  const go = async (f, kind) => { const o = Object.assign({}, r[f]); await Promise.all(Object.keys(o).map(async k => { o[k] = await plcSigClean(o[k], kind); })); r[f] = o; };
+  await Promise.all([go('sigs', 's'), go('stamps', 'c'), go('tsigs', 's'), go('tstamps', 'c')]); return r;
 }
 function plcSigBox(r, k){
   const name = hubUser(), P = PLC.pend && PLC.pend.id === (r.id || '__new') && PLC.pend.k === k ? PLC.pend : {};
@@ -2022,8 +2064,20 @@ function plcTiersHtml(r, ed, w, nx, f){
   <div class="pl-btns"><button class="btn" data-ppsr="1">🖨 Print PSR form</button>${ed ? '<span class="sp"></span><button class="btn" data-pa="savePsr">Save PSR form</button>' : ''}</div>
   ${!ed && r.stage === 2 ? w : ''}`;
 }
+function plcTcbKeepSig(r, r0, k){
+  const P = PLC.pend && PLC.pend.k === 't_' + k && PLC.pend.id === (r0.id || '__new') ? PLC.pend : {}; r.tsigs = Object.assign({}, r.tsigs); r.tstamps = Object.assign({}, r.tstamps);
+  if(P.s) r.tsigs[k] = P.s; else delete r.tsigs[k]; if(P.c) r.tstamps[k] = P.c; else delete r.tstamps[k];
+}
+/* keep everything typed on the open step (not saved yet) when the page redraws — e.g. after adding a signature or cop */
+function plcKeepForms(){
+  const r0 = plcCur(); if(!r0) return;
+  try{ if($('#plBid')) plcReadRfq(r0); }catch(e){}
+  try{ if(document.querySelector('#plc [data-pv="pf_projTitle"]')) plcReadPsr(r0); }catch(e){}
+  try{ $$('#plc [data-sk]').forEach(e => { const it = r0.items[+e.dataset.sk]; if(it) it.stock = clean(e.value); }); $$('#plc [data-skr]').forEach(e => { const it = r0.items[+e.dataset.skr]; if(it) it.srem = clean(e.value); }); }catch(e){}
+  try{ if($('#plPoL')) plcReadPo(r0); }catch(e){}
+}
 /* keep the name / position / remark typed in the active sign-off row when the page redraws (e.g. after adding a signature) */
-function plcKeepTier(){ const g = k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); return e ? e.value : null; };
+function plcKeepTier(){ plcKeepForms(); const g = k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); return e ? e.value : null; };
   const v = {by: g('tBy'), pos: g('tPos'), note: g('tNote')}; if(v.by === null) return; setTimeout(() => { const s2 = (k, x) => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); if(e && x !== null) e.value = x; }; s2('tBy', v.by); s2('tPos', v.pos); s2('tNote', v.note); }, 0); }
 /* read what is typed on the PSR form into a copy of the record */
 function plcReadPsr(r){
@@ -2074,8 +2128,17 @@ function plcPsrHtml(r){
     <table class="psr-s"><tr>${sg('Requested by', t('pe').by, t('pe').pos || 'Project Engineer', t('pe').at ? dIso(t('pe').at) : '', r.sigs.pe, r.stamps.pe)}${sg('Reviewed by', t('cc').by, t('cc').pos || '', t('cc').at ? dIso(t('cc').at) : '', r.sigs.cc, r.stamps.cc)}${sg('Verified by', t('pm').by, t('pm').pos || '', t('pm').at ? dIso(t('pm').at) : '', r.sigs.pm, r.stamps.pm)}${t('dir').at ? sg('Approved by', t('dir').by, t('dir').pos || 'Director', dIso(t('dir').at), r.sigs.dir, r.stamps.dir) : sg('Approved by', f.appr.name, f.appr.pos, d(f.appr.date))}</tr></table>
     <div class="psr-f"><span><b>Type :</b>&nbsp;&nbsp; <b>P</b> :PURCHASE &nbsp;&nbsp;&nbsp; <b>R</b> :RENTAL &nbsp;&nbsp;&nbsp; <b>S</b> :SERVICES</span><b>NOTE : IF RENTAL OR SERVICE, PLEASE INDICATE IN DAYS / WEEKS / MONTH</b></div></div>`;
 }
+/* A4 landscape forms always print on ONE page: measure the form at the printable width and shrink it just enough to fit */
+function plcPrintFit(){
+  const doc = document.querySelector('#printArea .tcb-doc, #printArea .psr-doc'); if(!doc) return;
+  const pw = doc.classList.contains('tcb-doc') ? 1085 : 1070, ph = doc.classList.contains('tcb-doc') ? 748 : 735;   // printable area of A4 landscape (px at 96 dpi), page margins taken off
+  const m = document.createElement('div'); m.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + pw + 'px;visibility:hidden;background:#fff';
+  const c = doc.cloneNode(true); c.style.cssText = 'width:' + pw + 'px;min-width:0;max-width:none;padding:0;box-shadow:none;margin:0'; m.appendChild(c); document.body.appendChild(m);
+  const h = c.offsetHeight; m.remove();
+  doc.style.zoom = h > ph ? (ph / h).toFixed(3) : '';
+}
 function plcPrint(html){
-  $('#printArea').innerHTML = PLC_CSS + html;
+  $('#printArea').innerHTML = PLC_CSS + html; plcPrintFit();
   document.body.classList.add('printing');
   const done = () => { document.body.classList.remove('printing'); window.removeEventListener('afterprint', done); };
   window.addEventListener('afterprint', done); setTimeout(() => { window.print(); setTimeout(done, 1500); }, 60);
@@ -2118,7 +2181,23 @@ function plcBidParts(r, b){
 }
 const plcBidNew = n => ({id: 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) + n, supplier: '', reg: 'YES', ref: '', qdate: '', terms: '', valid: '', dtime: '', rec: '', ok: true, rem: '', other: {d: '', amt: ''}, sst: '', disc: '', lines: {}, amount: ''});
 function plcRfqCat(r){ const t = new Set(plcBuyIdx(r).map(i => r.items[i].type || 'P')); return t.size !== 1 ? 'MIXED' : t.has('R') ? 'RENTAL' : t.has('S') ? 'SERVICES' : 'PURCHASE'; }
+/* TCBE sign-off — same list as the company TCBE: Prepared → Check → Review → Verified → Appraised → Approved, then the LOA */
+const PLC_TCB_SG = [['prep', 'Prepared by', 'Procurement Assistant', 'PROC', 'prepares the TCBE'], ['chk', 'Check by', 'Cost Controller', 'CC', 'checks prices and budget'], ['rev', 'Review by', 'Project Engineer', 'PE', 'reviews the technical offers'],
+  ['ver', 'Verified by', 'Project Manager', 'PM', 'verifies the evaluation'], ['app', 'Appraised by', 'Project Director', 'DIR', 'appraises the recommendation'], ['apv', 'Approved by', 'Operation/Managing Director', 'DIR', 'approves the award']];
+const plcTcbSg = r => (r.rfq.sg && typeof r.rfq.sg === 'object') ? r.rfq.sg : {};
+const plcTcbLocked = r => !!(plcTcbSg(r).prep && plcTcbSg(r).prep.at);
+function plcTcbNext(r){ const g = plcTcbSg(r); for(const t of PLC_TCB_SG){ if(!(g[t[0]] && g[t[0]].at)) return t[0]; } return ''; }
+function plcTcbTiers(r, edS, ed){
+  const g = plcTcbSg(r), nx = plcTcbNext(r);
+  return `<h4 class="pl-h4">TCBE sign-off</h4><div class="pl-tiers">${PLC_TCB_SG.map(([k, lbl, pos, role, task]) => { const t = g[k] || {}, isNow = k === 'prep' ? ed : edS && k === nx, kk = 't_' + k;
+    return `<div class="pl-tier${t.at ? ' ok' : isNow ? ' now' : ''}"><span class="pl-tb" style="font-size:${role.length > 2 ? 10.5 : 13}px">${role}</span><div class="pl-tt"><b>${lbl}</b><small>${task}</small>
+      ${t.at ? `<p>✓ <b>${esc(t.by)}</b>${t.pos ? ' · ' + esc(t.pos) : ''} · ${plcDT(t.at)}${t.note ? '<br><i>' + esc(t.note) + '</i>' : ''}</p>${r.tsigs[k] || r.tstamps[k] ? `<span class="pl-sigdone">${r.tsigs[k] ? `<img src="${r.tsigs[k]}" alt="signature" data-kind="s">` : ''}${r.tstamps[k] ? `<img src="${r.tstamps[k]}" alt="cop" data-kind="c">` : ''}</span>` : ''}`
+        : isNow ? `<div class="pl-tin pl-tin3"><input data-pv="tBy" placeholder="Name" value="${esc(hubUser())}"><input data-pv="tPos" placeholder="Position" value="${esc(pos)}"><input data-pv="tNote" placeholder="Remarks (optional)"></div>${plcSigBox(r, kk)}`
+        : `<p class="faint">${r.stage > 3 ? '—' : 'Waiting'}</p>`}</div>
+      ${isNow && k !== 'prep' ? `<div class="pl-tact"><button class="btn sm" data-pa="tcbRet">↩ Return</button><button class="btn sm primary" data-pa="tcbSign" data-tier="${k}">Sign — ${lbl.replace(' by', '')}</button></div>` : ''}</div>`; }).join('')}</div>`;
+}
 function plcS3(r, ed){
+  const edS = ed; ed = ed && !plcTcbLocked(r);      // once "Prepared by" has signed, the TCBE is locked for sign-off (Return reopens it)
   const w = plcWait(r, 3); if(w && r.stage < 3 || r.status === 'fromStore') return plcSH(3, 'Technical Commercial Bid Evaluation — quotations from at least three suppliers, compared item by item.') + w;
   const min = num(PLC.cfg.minBids) || 3;
   if(ed){ while(r.rfq.bids.length < min) r.rfq.bids.push(plcBidNew(r.rfq.bids.length)); }
@@ -2126,10 +2205,10 @@ function plcS3(r, ed){
   const b = B[sel] || plcBidNew(0), L = b.lines || {}, idx = plcBuyIdx(r), parts = plcBidParts(r, b);
   const f = (k, l, v, x) => `<label class="pl-fl"><span>${l}</span>${x && x.opts ? `<select data-bf="${k}"${plcRO(ed)}>${x.opts.map(o => `<option${o === v ? ' selected' : ''}>${o}</option>`).join('')}</select>` : `<input data-bf="${k}" type="${x && x.type || 'text'}" value="${esc(v || '')}"${x && x.ph ? ` placeholder="${esc(x.ph)}"` : ''}${plcRO(ed)}>`}</label>`;
   const m2 = v => num(v) ? num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—';
-  return plcSH(3, `Technical Commercial Bid Evaluation (TCBE) — at least ${min} quotations. Fill each supplier's offer item by item; the lowest compliant price per item shows in green. Choosing a supplier other than the lowest compliant total needs a justification.`) + `
+  return plcSH(3, `Technical Commercial Bid Evaluation (TCBE) — at least ${min} quotations. Fill each supplier's offer item by item; the lowest compliant price per item shows in green. Award one supplier for everything, or <b>split</b> the award so each item goes to its lowest bidder (one PO per supplier). Not awarding the lowest compliant price needs a justification.`) + `
   <div class="pl-form">${plcF('rfqNo', 'RFQ no', r.rfq.no || (ed ? plcNext('rfq') : ''), ed, {req: 1})}${plcF('rfqDate', 'Closing date', r.rfq.date || '', ed, {type: 'date'})}
     ${plcF('rfqCat', 'Category', r.rfq.cat || plcRfqCat(r), ed, {opts: ['PURCHASE', 'RENTAL', 'SERVICES', 'MIXED']})}${plcF('rfqDel', 'Delivery terms (all suppliers)', r.rfq.dterms || '', ed, {ph: 'e.g. DAP ZNESB YARD TKY'})}</div>
-  <div class="tcb-tabs" role="tablist">${B.map((x, i) => `<button type="button" class="tcb-tab${i === sel ? ' on' : ''}${r.rfq.award === x.id ? ' aw' : ''}" data-bsel="${i}">Supplier #${i + 1}<small>${esc(x.supplier || '—')}</small><b data-btot="${i}">${plcBidParts(r, x).total ? plcRM(plcBidParts(r, x).total) : ''}</b></button>`).join('')}${ed ? '<button type="button" class="tcb-tab add" data-pa="addBid">＋ Add supplier</button>' : ''}</div>
+  <div class="tcb-tabs" role="tablist">${B.map((x, i) => `<button type="button" class="tcb-tab${i === sel ? ' on' : ''}${plcIsSplit(r) ? (plcSplitBids(r).some(y => y.id === x.id) ? ' aw' : '') : r.rfq.award === x.id ? ' aw' : ''}" data-bsel="${i}">Supplier #${i + 1}<small>${esc(x.supplier || '—')}</small><b data-btot="${i}">${plcBidParts(r, x).total ? plcRM(plcBidParts(r, x).total) : ''}</b></button>`).join('')}${ed ? '<button type="button" class="tcb-tab add" data-pa="addBid">＋ Add supplier</button>' : ''}</div>
   <div class="tcb-panel" id="plBid" data-bid="${esc(b.id)}">
     <div class="pl-form" style="margin-top:0">${f('supplier', 'Supplier name', b.supplier, {ph: 'e.g. Eastern Pipes & Fittings Sdn Bhd'})}${f('reg', 'Registered supplier', b.reg || 'YES', {opts: ['YES', 'NO']})}${f('ref', 'Quotation ref no', b.ref)}${f('qdate', 'Quotation date', b.qdate, {type: 'date'})}
       ${f('terms', 'Payment terms', b.terms, {ph: 'e.g. 30 DAYS'})}${f('valid', 'Price & quotation validity', b.valid, {ph: 'e.g. 30 DAYS'})}${f('dtime', 'Delivery time', b.dtime, {ph: 'e.g. 3-6 WORKING DAYS'})}${f('rec', 'Recommendation', b.rec)}</div>
@@ -2149,21 +2228,29 @@ function plcS3(r, ed){
   <div class="pl-tw" id="plCmp">${plcCmpHtml(r, ed)}</div>
   <div class="pl-rec" id="plRec"></div>
   <div class="pl-form">${plcF('just', 'Justification (needed if the award is not the lowest compliant total, or fewer than ' + min + ' valid quotations)', r.rfq.just || '', ed, {area: 1, wide: 1})}</div>
-  <div class="pl-btns"><button class="btn" data-ptcbe="1">🖨 Print TCBE</button>${ed ? `<button class="btn" data-pa="return">↩ Return to requester</button><span class="sp"></span><button class="btn" data-pa="saveRfq">Save TCBE</button><button class="btn primary" data-pa="rfqOk">Submit for LOA →</button>` : ''}</div>
-  ${!ed && r.rfq.at ? `<p class="pl-done">✓ Submitted for LOA by <b>${esc(r.rfq.by || '')}</b> on ${plcDT(r.rfq.at)}</p>` : !ed ? w : ''}`;
+  ${plcTcbTiers(r, edS, ed)}
+  <div class="pl-btns"><button class="btn" data-ptcbe="1">🖨 Print TCBE</button>${ed ? `<button class="btn" data-pa="return">↩ Return to requester</button><span class="sp"></span><button class="btn" data-pa="saveRfq">Save TCBE</button><button class="btn primary" data-pa="rfqOk">✍ Sign Prepared by — send for check →</button>` : ''}</div>
+  ${r.stage > 3 && r.rfq.at ? `<p class="pl-done">✓ TCBE signed off — sent for LOA on ${plcDT((plcTcbSg(r).apv || {}).at || r.rfq.at)}</p>` : !edS ? w : ''}`;
 }
 /* comparison table (live): unit prices per item per supplier, lowest compliant in green; totals, rank and the award choice */
 function plcCmpHtml(r, ed){
   const B = r.rfq.bids.filter(b => clean(b.supplier) || Object.values(b.lines || {}).some(l => num(l.rate) > 0) || num(b.amount)), idx = plcBuyIdx(r);
   if(!B.length) return '<div class="note">Enter at least one supplier to compare.</div>';
   const P = B.map(b => plcBidParts(r, b)), lowT = B.map((b, k) => ({b, t: P[k].total, ok: b.ok !== false && P[k].total > 0})).filter(x => x.ok).sort((a, b) => a.t - b.t).map(x => x.b.id);
-  const m2 = v => num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  const body = idx.map((i, n) => { const it = r.items[i], pr = B.map(b => { const l = (b.lines || {})[i] || {}; return {p: num(l.rate), par: l.par || 'COMPLY', ok: b.ok !== false}; });
+  const m2 = v => num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}), SP = plcIsSplit(r), aw = plcAwMap(r), LM = plcLowMap(r);
+  const body = idx.map((i, n) => { const it = r.items[i], pr = B.map(b => { const l = (b.lines || {})[i] || {}; return {b, p: num(l.rate), par: l.par || 'COMPLY', ok: b.ok !== false}; });
     const ok = pr.filter(x => x.p > 0 && x.ok && (x.par === 'COMPLY')).map(x => x.p), lo = ok.length ? Math.min(...ok) : null;
-    return `<tr><td>${n + 1}</td><td>${esc(it.desc)}</td><td class="n">${plcNet(it)} ${esc(it.unit)}</td>${pr.map(x => `<td class="n${lo !== null && x.p === lo && x.par === 'COMPLY' && x.ok ? ' tcb-lo' : ''}">${x.par === 'NO QUOTE' ? '<span class="faint">no quote</span>' : x.par === 'INCLUDE' ? '<span class="faint">include</span>' : x.p ? m2(x.p) : '<span class="faint">—</span>'}${x.par === 'NOT COMPLY' ? '<span class="pl-sub pl-late">not comply</span>' : ''}</td>`).join('')}</tr>`; }).join('');
-  return `<table class="pl-t tcb-cmp"><thead><tr><th>Item</th><th>Description</th><th class="n">Qty</th>${B.map((b, k) => `<th class="n">#${r.rfq.bids.indexOf(b) + 1} ${esc(b.supplier || '—')}<span class="pl-sub">unit price (RM)</span></th>`).join('')}</tr></thead><tbody>${body}</tbody>
-    <tfoot><tr class="tot"><td></td><td>Total award (RM)</td><td></td>${B.map((b, k) => `<td class="n${lowT[0] === b.id ? ' tcb-lo' : ''}">${P[k].total ? m2(P[k].total) : '—'}${P[k].total ? `<span class="pl-sub">${lowT.indexOf(b.id) >= 0 ? 'L' + (lowT.indexOf(b.id) + 1) : 'not TA'}</span>` : ''}</td>`).join('')}</tr>
-      <tr><td></td><td>Award</td><td></td>${B.map(b => `<td class="n"><label class="tcb-aw"><input type="radio" name="plAward" value="${esc(b.id)}"${r.rfq.award === b.id ? ' checked' : ''}${plcRO(ed)}> ${r.rfq.award === b.id ? '<b>Awarded</b>' : 'Award'}</label></td>`).join('')}</tr></tfoot></table>`;
+    return `<tr${SP && !B.some(b => aw[i] === b.id && plcAwOk(b, i)) ? ' class="tcb-noaw"' : ''}><td>${n + 1}</td><td>${esc(it.desc)}${SP && !B.some(b => aw[i] === b.id && plcAwOk(b, i)) ? '<span class="pl-sub pl-late">not awarded yet</span>' : ''}</td><td class="n">${plcNet(it)} ${esc(it.unit)}</td>${pr.map(x => { const isAw = SP && aw[i] === x.b.id && plcAwOk(x.b, i), can = SP && plcAwOk(x.b, i);
+      return `<td class="n${lo !== null && x.p === lo && x.par === 'COMPLY' && x.ok ? ' tcb-lo' : ''}${isAw ? ' tcb-awc' : ''}">${x.par === 'NO QUOTE' ? '<span class="faint">no quote</span>' : x.par === 'INCLUDE' ? '<span class="faint">include</span>' : x.p ? m2(x.p) : '<span class="faint">—</span>'}${x.par === 'NOT COMPLY' ? '<span class="pl-sub pl-late">not comply</span>' : ''}${x.p && x.par === 'COMPLY' && !x.ok ? '<span class="pl-sub pl-late">not TA</span>' : ''}
+        ${can ? `<label class="tcb-aw tcb-awi"><input type="radio" name="plAw_${i}" value="${esc(x.b.id)}"${isAw ? ' checked' : ''}${plcRO(ed)}>${isAw ? '<b>Awarded</b>' : 'Award'}${LM[i] === x.b.id ? '' : ''}</label>` : ''}</td>`; }).join('')}</tr>`; }).join('');
+  const subs = SP ? B.map(b => { const has = idx.some(i => aw[i] === b.id && plcAwOk(b, i)); if(!has) return null; const sv = plcSub(r, b); return {n: idx.filter(i => aw[i] === b.id && plcAwOk(b, i)).length, t: plcBidParts(sv, sv._bid).total}; }) : [];
+  const grand = subs.reduce((t, x) => t + (x ? x.t : 0), 0), nAw = idx.filter(i => B.some(b => aw[i] === b.id && plcAwOk(b, i))).length;
+  const mode = `<div class="tcb-mode"><div class="pl-seg" role="radiogroup" aria-label="Award mode"><label class="${SP ? '' : 'on'}"><input type="radio" name="plMode" value="single"${SP ? '' : ' checked'}${plcRO(ed)}> One supplier for all items</label><label class="${SP ? 'on' : ''}"><input type="radio" name="plMode" value="split"${SP ? ' checked' : ''}${plcRO(ed)}> Split award — per item</label></div>
+    ${SP ? `${ed ? '<button type="button" class="btn sm" data-pawlow="1">⚡ Pick lowest per item</button>' : ''}<span class="tcb-ms">${nAw}/${idx.length} items awarded · ${subs.filter(Boolean).length} supplier${subs.filter(Boolean).length === 1 ? '' : 's'} · <b>${plcRM(grand)}</b></span>` : ''}</div>`;
+  return mode + `<table class="pl-t tcb-cmp${SP ? ' tcb-split' : ''}"><thead><tr><th>Item</th><th>Description</th><th class="n">Qty</th>${B.map((b, k) => `<th class="n">#${r.rfq.bids.indexOf(b) + 1} ${esc(b.supplier || '—')}<span class="pl-sub">unit price (RM)</span></th>`).join('')}</tr></thead><tbody>${body}</tbody>
+    <tfoot><tr class="tot"><td></td><td>${SP ? 'Full quotation (RM)' : 'Total award (RM)'}</td><td></td>${B.map((b, k) => `<td class="n${lowT[0] === b.id ? ' tcb-lo' : ''}">${P[k].total ? m2(P[k].total) : '—'}${P[k].total ? `<span class="pl-sub">${lowT.indexOf(b.id) >= 0 ? 'L' + (lowT.indexOf(b.id) + 1) : 'not TA'}</span>` : ''}</td>`).join('')}</tr>
+      ${SP ? `<tr class="tot aw"><td></td><td>Split award (RM)<span class="pl-sub">incl. each supplier's other charges, SST share and discount</span></td><td class="n"><b>${m2(grand)}</b></td>${subs.map(x => `<td class="n">${x ? `<b>${m2(x.t)}</b><span class="pl-sub">${x.n} item${x.n === 1 ? '' : 's'}</span>` : '<span class="faint">—</span>'}</td>`).join('')}</tr>`
+        : `<tr><td></td><td>Award</td><td></td>${B.map(b => `<td class="n"><label class="tcb-aw"><input type="radio" name="plAward" value="${esc(b.id)}"${r.rfq.award === b.id ? ' checked' : ''}${plcRO(ed)}> ${r.rfq.award === b.id ? '<b>Awarded</b>' : 'Award'}</label></td>`).join('')}</tr>`}</tfoot></table>`;
 }
 /* read the open supplier tab + the RFQ header into r */
 function plcReadRfq(r){
@@ -2171,6 +2258,8 @@ function plcReadRfq(r){
   if(g('rfqNo') !== undefined) r.rfq.no = g('rfqNo'); if(g('rfqDate') !== undefined) r.rfq.date = g('rfqDate'); if(g('rfqCat') !== undefined) r.rfq.cat = g('rfqCat'); if(g('rfqDel') !== undefined) r.rfq.dterms = g('rfqDel');
   const j = $('#plc [data-pv="just"]'); if(j) r.rfq.just = j.value;
   const aw = $('#plc input[name="plAward"]:checked'); if(aw) r.rfq.award = aw.value;
+  const md = $('#plc input[name="plMode"]:checked'); if(md) r.rfq.split = md.value === 'split';
+  if($('#plc .tcb-cmp.tcb-split')){ const m = {}; $$('#plc input[name^="plAw_"]:checked').forEach(e => { m[e.name.slice(5)] = e.value; }); r.rfq.aw = m; }
   const P = $('#plBid'); if(P){ const b = r.rfq.bids.find(x => x.id === P.dataset.bid); if(b){
     P.querySelectorAll('[data-bf]').forEach(e => { const k = e.dataset.bf, v = e.type === 'checkbox' ? e.checked : clean(e.value);
       if(k === 'otherD') (b.other = b.other || {}).d = v; else if(k === 'otherA') (b.other = b.other || {}).amt = v; else b[k] = v; });
@@ -2189,12 +2278,22 @@ function plcRfqLive(){
       const s = tr.querySelector('select[data-bk="par"]'); if(s) s.className = 'tcb-par ' + String(s.value).replace(/\s/g, ''); });
     const t = plcBidParts(r, b).total; $('#plBTot').textContent = t ? m2(t) : '—'; const k = r.rfq.bids.indexOf(b), tt = document.querySelector('#plc [data-btot="' + k + '"]'); if(tt) tt.textContent = t ? plcRM(t) : '';
     const tab = document.querySelector('#plc [data-bsel="' + k + '"] small'); if(tab) tab.textContent = b.supplier || '—'; }
-  const cmp = $('#plCmp'); if(cmp) cmp.innerHTML = plcCmpHtml(r, plcCanEdit(r, 3));
+  const cmp = $('#plCmp'); if(cmp) cmp.innerHTML = plcCmpHtml(r, plcCanEdit(r, 3) && !plcTcbLocked(r));
   const B = r.rfq.bids, valid = B.filter(x => clean(x.supplier) && plcBidParts(r, x).total > 0), okB = valid.filter(x => x.ok !== false).sort((a, c) => plcBidParts(r, a).total - plcBidParts(r, c).total), low = okB[0];
   const min = num(PLC.cfg.minBids) || 3, a = valid.find(x => x.id === r.rfq.award), rec = $('#plRec'), why = [], T = x => plcBidParts(r, x).total;
   if(valid.length < min) why.push('only ' + valid.length + ' valid quotation' + (valid.length === 1 ? '' : 's') + ' (minimum ' + min + ')');
   if(a && low && a.id !== low.id) why.push('award is ' + plcRM(T(a) - T(low)) + ' above the lowest compliant total');
   if(a && a.ok === false) why.push('awarded supplier is not technically acceptable');
+  if(plcIsSplit(r)){ const idx = plcBuyIdx(r), awm = plcAwMap(r), LM = plcLowMap(r), S = plcSplitBids(r), w2 = [];
+    if(valid.length < min) w2.push('only ' + valid.length + ' valid quotation' + (valid.length === 1 ? '' : 's') + ' (minimum ' + min + ')');
+    const notLow = idx.filter(i => awm[i] && LM[i] && awm[i] !== LM[i] && plcBidParts(r, B.find(x => x.id === awm[i]) || {}).total !== undefined && (() => { const ab = B.find(x => x.id === awm[i]), lb = B.find(x => x.id === LM[i]); return ab && lb && num(((ab.lines || {})[i] || {}).rate) > num(((lb.lines || {})[i] || {}).rate) + 1e-9; })());
+    if(notLow.length) w2.push(notLow.length + ' item' + (notLow.length === 1 ? ' is' : 's are') + ' not awarded at the lowest compliant price (item ' + notLow.map(i => idx.indexOf(i) + 1).join(', ') + ')');
+    const st = plcSplitTotal(r); if(low && S.length > 1 && st > T(low) + 0.009) w2.push('the split award is ' + plcRM(st - T(low)) + ' above the lowest single-supplier total (' + low.supplier + ') — other charges count per supplier');
+    const nta = S.filter(x => x.ok === false); if(nta.length) w2.push('awarded to a supplier that is not technically acceptable (' + nta.map(x => x.supplier).join(', ') + ')');
+    const un = idx.filter(i => !S.some(b => awm[i] === b.id));
+    if(rec){ rec.innerHTML = `<span>Split award: <b>${S.length}</b> supplier${S.length === 1 ? '' : 's'} — <b>${plcRM(plcSplitTotal(r))}</b>${S.length ? ' (' + S.map(x => esc(x.supplier)).join(', ') + ')' : ''}</span>` + (low ? `<span class="faint">Lowest single-supplier total: ${esc(low.supplier)} — ${plcRM(T(low))}</span>` : '')
+      + (un.length ? `<span class="pl-late">⚠ ${un.length} item${un.length === 1 ? '' : 's'} not awarded yet — press ⚡ Pick lowest per item or choose in the table</span>` : '') + (w2.length ? `<span class="pl-late">⚠ Justification needed: ${esc(w2.join('; '))}</span>` : ''); rec.dataset.need = w2.length ? '1' : ''; rec.dataset.un = un.length; }
+    return; }
   if(rec){ rec.innerHTML = (low ? `<span>Lowest compliant total: <b>${esc(low.supplier)}</b> — ${plcRM(T(low))}</span>` : '<span class="faint">Enter suppliers and prices to compare.</span>') + (a ? `<span>Award: <b>${esc(a.supplier)}</b> — ${plcRM(T(a))}</span>` : '') + (why.length ? `<span class="pl-late">⚠ Justification needed: ${esc(why.join('; '))}</span>` : ''); rec.dataset.need = why.length ? '1' : ''; }
 }
 /* the TCBE sheet (A4 landscape), same layout as the company Excel */
@@ -2202,18 +2301,21 @@ function plcTcbeHtml(r){
   const B = r.rfq.bids.filter(b => clean(b.supplier)), idx = plcBuyIdx(r), f = r.psr.form || {}, logo = (document.querySelector('.brand .logo img') || {}).src || '', N = B.length || 1;
   const m2 = v => num(v) ? num(v).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '';
   const dmy = s => /^\d{4}-\d{2}-\d{2}/.test(String(s || '')) ? String(s).slice(8, 10) + '.' + String(s).slice(5, 7) + '.' + String(s).slice(0, 4) : esc(s || '');
-  const P = B.map(b => plcBidParts(r, b)), awd = r.rfq.award;
+  const P = B.map(b => plcBidParts(r, b)), SP = plcIsSplit(r), AWM = plcAwMap(r), SB = SP ? plcSplitBids(r) : [], awd = SP ? '' : r.rfq.award, isA = b => SP ? SB.some(x => x.id === b.id) : awd === b.id;
+  const subT = b => { if(!SP || !SB.some(x => x.id === b.id)) return null; const sv = plcSub(r, b); return plcBidParts(sv, sv._bid).total; }, awI = b => plcBuyIdx(r).map((i, n) => AWM[i] === b.id ? n + 1 : 0).filter(Boolean);
   const lo = {}; idx.forEach(i => { const ps = B.map(b => { const l = (b.lines || {})[i] || {}; return b.ok !== false && (l.par || 'COMPLY') === 'COMPLY' && num(l.rate) > 0 ? num(l.rate) : null; }).filter(x => x !== null); lo[i] = ps.length ? Math.min(...ps) : null; });
   const sp = (cls, txt) => `<td class="${cls}">${txt}</td>`, parC = p => p === 'NOT COMPLY' ? 'tn' : p === 'NO QUOTE' ? 'nq' : 'ta';
-  const head = (lbl, fn, tech) => `<tr><th colspan="5" class="lh">${lbl}</th>${B.map((b, k) => `<td colspan="2" class="c">${fn(b, k)}</td>`).join('')}${B.map((b, k) => `<td colspan="3" class="c${awd === b.id ? ' awh' : ''}">${fn(b, k)}</td>`).join('')}</tr>`;
+  const head = (lbl, fn, tech) => `<tr><th colspan="5" class="lh">${lbl}</th>${B.map((b, k) => `<td colspan="2" class="c">${fn(b, k)}</td>`).join('')}${B.map((b, k) => `<td colspan="3" class="c${isA(b) ? ' awh' : ''}">${fn(b, k)}</td>`).join('')}</tr>`;
   const rows = idx.map((i, n) => { const it = r.items[i];
     return `<tr><td class="c">${n + 1}</td><td>${esc(it.desc)}</td><td class="c">${plcNet(it)}</td><td class="c">${esc(String(it.unit || '').toUpperCase())}</td><td class="c">${esc(String(it.dur || '').toUpperCase())}</td>
       ${B.map(b => { const l = (b.lines || {})[i] || {}, p = l.par || 'COMPLY'; return `<td>${esc(l.offer || '')}</td><td class="c ${parC(p)}">${p === 'NO QUOTE' ? 'NO<br>QUOTE' : esc(p)}</td>`; }).join('')}
       ${B.map(b => { const l = (b.lines || {})[i] || {}, p = l.par || 'COMPLY', g = lo[i] !== null && num(l.rate) === lo[i] && p === 'COMPLY' && b.ok !== false ? ' lo' : '', cp = p === 'NO QUOTE' || (!num(l.rate) && p !== 'INCLUDE') ? 'NO QUOTE' : p === 'INCLUDE' ? 'INCLUDE' : p;
-        return `<td class="n${g}">${p === 'NO QUOTE' ? '' : m2(l.rate)}</td><td class="n${g}">${p === 'NO QUOTE' || p === 'INCLUDE' ? '' : m2(num(l.rate) * plcNet(it))}</td><td class="c ${parC(cp)}${g}">${cp === 'NO QUOTE' ? 'NO<br>QUOTE' : esc(cp)}</td>`; }).join('')}</tr>`; }).join('');
+        const ac = SP && AWM[i] === b.id ? ' awc' : '';
+        return `<td class="n${g}${ac}">${p === 'NO QUOTE' ? '' : m2(l.rate)}</td><td class="n${g}${ac}">${p === 'NO QUOTE' || p === 'INCLUDE' ? '' : m2(num(l.rate) * plcNet(it))}</td><td class="c ${parC(cp)}${g}">${cp === 'NO QUOTE' ? 'NO<br>QUOTE' : esc(cp)}</td>`; }).join('')}</tr>`; }).join('');
   const sumRow = (lbl, fn, cls) => `<tr class="${cls || ''}"><td></td><td colspan="4"><b>${lbl}</b></td>${B.map(() => '<td></td><td></td>').join('')}${B.map((b, k) => `<td colspan="2" class="n">${fn(b, k)}</td><td></td>`).join('')}</tr>`;
   const other = B.some(b => num((b.other || {}).amt)) ? `<tr><td></td><td colspan="4"><b>Other charges</b></td>${B.map(() => '<td></td><td></td>').join('')}${B.map(b => num((b.other || {}).amt) ? `<td colspan="2" style="white-space:normal">${esc(b.other.d || '')}</td><td class="n">${m2(b.other.amt)}</td>` : '<td colspan="2"></td><td></td>').join('')}</tr>` : '';
   const crit = (lbl, fn, common) => `<tr><td class="cl">${lbl}</td><td class="cc">:</td>${common !== undefined ? `<td colspan="${N}" class="cv">${esc(common)}</td>` : B.map((b, k) => `<td class="cv">${fn(b, k)}</td>`).join('')}</tr>`;
+  const sgP = (l, o, t, img, cop) => `<td><div class="tsl">${l}</div><div class="tss">${img || cop ? `<div class="tsim">${img ? `<img class="ps" src="${img}" alt="">` : ''}${cop ? `<img class="pc" src="${cop}" alt="">` : ''}</div>` : ''}</div><div class="tsr"><span>Name</span><i>:</i><b>${esc(String(by(o.by) || '').toUpperCase())}</b></div><div class="tsr"><span>Position</span><i>:</i><b>${esc(String(o.pos || '').toUpperCase())}</b></div><div class="tsr"><span>Date</span><i>:</i><b>${o.at ? fmtD(String(o.at).slice(0, 10)) : ''}</b></div><div class="tst">${t}</div></td>`;
   const sig = (l, nm, t) => `<td><div class="tsl">${l}</div><div class="tss"></div><div class="tsn">${esc(nm || '')}</div><div class="tst">${t}</div></td>`;
   const by = s => String(s || '').replace(/\s*\([^)]*\)\s*$/, '');
   return `<style>@page{size:A4 landscape;margin:5mm}</style><div class="tcb-doc" style="--n:${N}">
@@ -2222,20 +2324,22 @@ function plcTcbeHtml(r){
       <tr><th>PROJECT CODE</th><td>${esc(f.projCode || r.charge || '')}</td><td class="sp" colspan="3"></td></tr><tr><th>RFQ NO.</th><td>${esc(r.rfq.no || '')}</td><td class="sp" colspan="3"></td></tr><tr><th>CATEGORY</th><td>${esc(r.rfq.cat || plcRfqCat(r))}</td><td class="sp" colspan="3"></td></tr></table>
     <table class="tcb-t"><colgroup><col style="width:2.4%"><col style="width:14%"><col style="width:2.6%"><col style="width:2.8%"><col style="width:3.6%">${B.map(() => `<col style="width:${Math.max(5, 74.6 / N - 15.8).toFixed(2)}%"><col style="width:3.6%">`).join('')}${B.map(() => '<col style="width:4%"><col style="width:4.6%"><col style="width:3.6%">').join('')}</colgroup><thead>
       <tr><th colspan="5" class="lh"></th><th colspan="${2 * N}" class="tsec">TECHNICAL EVALUATION</th><th colspan="${3 * N}" class="tsec">COMMERCIAL EVALUATION</th></tr>
-      ${head('SUPPLIER NOS', (b, k) => '<b>SUPPLIER #' + (k + 1) + '</b>' + (awd === b.id ? ' ★' : ''))}${head('SUPPLIER NAME', b => esc(String(b.supplier).toUpperCase()))}${head('REGISTERED SUPPLIER', b => esc(b.reg || ''))}
+      ${head('SUPPLIER NOS', (b, k) => '<b>SUPPLIER #' + (k + 1) + '</b>' + (isA(b) ? ' ★' : ''))}${head('SUPPLIER NAME', b => esc(String(b.supplier).toUpperCase()))}${head('REGISTERED SUPPLIER', b => esc(b.reg || ''))}
       ${head('QUOTATION REF NO.', b => esc(b.ref || ''))}${head('QUOTATION DATE', b => dmy(b.qdate))}
       <tr class="ch"><th style="width:2.4%">ITEM</th><th style="width:14%">DESCRIPTION</th><th style="width:2.6%">QTY</th><th style="width:2.8%">UOM</th><th style="width:3.6%">DURATION</th>${B.map(() => `<th style="width:${Math.max(5, 74.6 / N - 15.8).toFixed(2)}%">OFFER/BRAND</th><th style="width:3.6%">PARITY BAND</th>`).join('')}${B.map(() => '<th style="width:4%">UNIT PRICE (RM)</th><th style="width:4.6%">AMOUNT (RM)</th><th style="width:3.6%">PARITY BAND</th>').join('')}</tr></thead>
       <tbody>${rows}${other}${sumRow('SALES &amp; SERVICE TAX (SST), if applicable', b => m2(b.sst))}${sumRow('Discount', b => num(b.disc) ? '(' + m2(b.disc) + ')' : '')}</tbody></table>
     <div class="tcb-low"><div class="tcb-leg"><div class="ta">TECHNICALLY ACCEPTABLE (TA)</div><div class="tn">TECHNICALLY NOT ACCEPTABLE (TNA)</div></div>
-      <table class="tcb-crit"><tr class="tot"><td class="cl">TOTAL AWARD, RM</td><td class="cc"></td>${B.map((b, k) => `<td class="cv n${awd === b.id ? ' awt' : ''}"><b>${P[k].total ? m2(P[k].total) : ''}</b></td>`).join('')}</tr>
+      <table class="tcb-crit"><tr class="tot"><td class="cl">${SP ? 'TOTAL QUOTATION, RM' : 'TOTAL AWARD, RM'}</td><td class="cc"></td>${B.map((b, k) => `<td class="cv n${awd === b.id ? ' awt' : ''}"><b>${P[k].total ? m2(P[k].total) : ''}</b></td>`).join('')}</tr>
+        ${SP ? `<tr class="tot"><td class="cl">SPLIT AWARD, RM<br><span style="font-weight:400">TOTAL ${m2(SB.reduce((t, b) => t + subT(b), 0))}</span></td><td class="cc"></td>${B.map(b => subT(b) !== null ? `<td class="cv n awt"><b>${m2(subT(b))}</b></td>` : '<td class="cv n"></td>').join('')}</tr>` : ''}
         <tr><td class="cl">CRITERIAS :</td><td></td>${B.map(b => `<td class="cv ${b.ok !== false ? 'ta' : 'tn'}">${b.ok !== false ? 'TA' : 'TNA'}</td>`).join('')}</tr>
         ${crit('PAYMENT TERMS', b => esc(b.terms || ''))}${crit('PRICE &amp; QUOTATION VALIDITY', b => esc(b.valid || ''))}${crit('DELIVERY TERMS', null, r.rfq.dterms || '')}${crit('DELIVERY TIME', b => esc(b.dtime || ''))}
-        ${crit('RECOMMENDATION', b => (awd === b.id ? '<b>RECOMMENDED FOR AWARD</b>' + (b.rec ? '<br>' : '') : '') + esc(b.rec || ''))}</table></div>
+        ${crit('RECOMMENDATION', b => (awd === b.id ? '<b>RECOMMENDED FOR AWARD</b>' + (b.rec ? '<br>' : '') : SP && isA(b) ? '<b>RECOMMENDED FOR AWARD — ITEM ' + awI(b).join(', ') + '</b>' + (b.rec ? '<br>' : '') : '') + esc(b.rec || ''))}</table></div>
+    ${SP ? '<div class="tcb-just"><b>Split award:</b> each item is awarded separately — awarded prices are boxed. One PO per awarded supplier.</div>' : ''}
     ${r.rfq.just ? `<div class="tcb-just"><b>Justification:</b> ${esc(r.rfq.just)}</div>` : ''}
-    <table class="tcb-sig"><tr>${sig('Prepared by', by(r.rfq.by), 'Procurement Assistant')}${sig('Check by', '', 'Cost Controller')}${sig('Review by', '', 'Project Engineer')}${sig('Verified by', '', 'Project Manager')}${sig('Appraised by', '', 'Project Director')}${sig('Approved by', by(r.loa.by), 'Operation/Managing Director')}</tr></table></div>`;
+    <table class="tcb-sig"><tr>${(() => { const g = plcTcbSg(r); return PLC_TCB_SG.map(([k, lbl, pos]) => sgP(lbl, g[k] || (k === 'prep' && r.rfq.by ? {by: r.rfq.by, at: r.rfq.at} : {}), pos, r.tsigs[k], r.tstamps[k])).join(''); })()}</tr></table></div>`;
 }
-function plcTcbeShow(){
-  const r0 = plcCur(); if(!r0) return; const r = $('#plBid') ? plcReadRfq(plcClone(r0)) : r0, d = $('#dlgPlc');
+async function plcTcbeShow(){
+  const r0 = plcCur(); if(!r0) return; const r = await plcSigCleanAll($('#plBid') ? plcReadRfq(plcClone(r0)) : plcClone(r0)), d = $('#dlgPlc');
   if(!r.rfq.bids.some(b => clean(b.supplier))){ toast('Enter at least one supplier first.'); return; }
   $('#plDlgT').textContent = '📄 TCBE ' + (r.rfq.no || '') + ' — ' + (r.title || '');
   $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap psr-wrap">${plcTcbeHtml(r).replace(/<style>@page[^<]*<\/style>/, '')}</div>`;
@@ -2246,10 +2350,14 @@ function plcTcbeShow(){
 /* 5 — LOA */
 function plcS4(r, ed){
   const w = plcWait(r, 4); if(w && r.stage < 4 || r.status === 'fromStore') return plcSH(4, 'Letter of Award — management signs off the recommended supplier.') + w;
-  const a = plcAward(r), {b, low} = plcBids(r);
-  return plcSH(4, 'Letter of Award — management signs off the recommended supplier and amount.') + `
-  <div class="pl-award"><div><span>Recommended supplier</span><b>${esc(a ? a.supplier : '—')}</b>${a && a.ref ? `<small class="mono">${esc(a.ref)}</small>` : ''}</div><div><span>Amount</span><b>${a ? plcRM(a.amount) : '—'}</b><small>${a && low && a.id === low.id ? 'Lowest compliant bid' : a ? '⚠ Not the lowest compliant bid' : ''}</small></div><div><span>Quotations</span><b>${b.length}</b><small>RFQ ${esc(r.rfq.no || '—')}</small></div></div>
-  <div class="pl-tw"><table class="pl-t"><thead><tr><th>Supplier</th><th>Ref</th><th class="n">Amount</th><th class="n">Days</th><th>Terms</th><th>Compliant</th></tr></thead><tbody>${b.slice().sort((x, y) => num(x.amount) - num(y.amount)).map(x => `<tr class="${a && a.id === x.id ? 'aw' : ''}"><td>${esc(x.supplier)}${a && a.id === x.id ? ' <b class="pl-tag">AWARD</b>' : ''}</td><td class="mono">${esc(x.ref)}</td><td class="n">${plcRM(x.amount)}</td><td class="n">${esc(x.days)}</td><td>${esc(x.terms)}</td><td>${x.ok !== false ? 'Yes' : '<span class="pl-late">No</span>'}</td></tr>`).join('')}</tbody></table></div>
+  const a = plcAward(r), {b, low} = plcBids(r), SP = plcIsSplit(r), SB = SP ? plcSplitBids(r) : [], idx = plcBuyIdx(r), AWM = plcAwMap(r), LM = SP ? plcLowMap(r) : {};
+  const splitBox = () => { const tot = plcSplitTotal(r), nl = idx.filter(i => AWM[i] && LM[i] && AWM[i] !== LM[i]).length;
+    return `<div class="pl-award"><div><span>Recommended</span><b>Split award — ${SB.length} supplier${SB.length === 1 ? '' : 's'}</b><small>each item to its own supplier</small></div><div><span>Total amount</span><b>${plcRM(tot)}</b><small>${nl ? '⚠ ' + nl + ' item' + (nl === 1 ? '' : 's') + ' not at the lowest price' : 'Lowest compliant price per item'}</small></div><div><span>Quotations</span><b>${b.length}</b><small>RFQ ${esc(r.rfq.no || '—')}</small></div></div>
+    <div class="pl-tw"><table class="pl-t"><thead><tr><th>Supplier</th><th>Ref</th><th>Items awarded</th><th class="n">Awarded amount</th><th class="n">Full quotation</th><th>Terms</th><th>Compliant</th></tr></thead><tbody>${SB.map(x => { const sv = plcSub(r, x), its = idx.map((i, n) => AWM[i] === x.id ? n + 1 : 0).filter(Boolean);
+      return `<tr class="aw"><td>${esc(x.supplier)} <b class="pl-tag">AWARD</b></td><td class="mono">${esc(x.ref || '')}</td><td>Item ${its.join(', ')} <span class="faint">(${its.length})</span></td><td class="n"><b>${plcRM(plcBidParts(sv, sv._bid).total)}</b></td><td class="n">${plcRM(plcBidParts(r, x).total)}</td><td>${esc(x.terms || '')}</td><td>${x.ok !== false ? 'Yes' : '<span class="pl-late">No</span>'}</td></tr>`; }).join('')}
+      <tr class="tot"><td colspan="3"><b>Total split award</b></td><td class="n"><b>${plcRM(tot)}</b></td><td colspan="3"></td></tr></tbody></table></div>`; };
+  return plcSH(4, 'Letter of Award — management signs off the recommended supplier' + (SP ? 's' : '') + ' and amount.') + (SP ? splitBox() : `<div class="pl-award"><div><span>Recommended supplier</span><b>${esc(a ? a.supplier : '—')}</b>${a && a.ref ? `<small class="mono">${esc(a.ref)}</small>` : ''}</div><div><span>Amount</span><b>${a ? plcRM(a.amount) : '—'}</b><small>${a && low && a.id === low.id ? 'Lowest compliant bid' : a ? '⚠ Not the lowest compliant bid' : ''}</small></div><div><span>Quotations</span><b>${b.length}</b><small>RFQ ${esc(r.rfq.no || '—')}</small></div></div>
+  <div class="pl-tw"><table class="pl-t"><thead><tr><th>Supplier</th><th>Ref</th><th class="n">Amount</th><th class="n">Days</th><th>Terms</th><th>Compliant</th></tr></thead><tbody>${b.slice().sort((x, y) => num(x.amount) - num(y.amount)).map(x => `<tr class="${a && a.id === x.id ? 'aw' : ''}"><td>${esc(x.supplier)}${a && a.id === x.id ? ' <b class="pl-tag">AWARD</b>' : ''}</td><td class="mono">${esc(x.ref)}</td><td class="n">${plcRM(x.amount)}</td><td class="n">${esc(x.days)}</td><td>${esc(x.terms)}</td><td>${x.ok !== false ? 'Yes' : '<span class="pl-late">No</span>'}</td></tr>`).join('')}</tbody></table></div>`) + `
   ${r.rfq.just ? `<p class="pl-just"><b>Justification:</b> ${esc(r.rfq.just)}</p>` : ''}
   <div style="margin-top:10px"><button class="btn sm" data-ptcbe="1">🖨 View / print TCBE</button></div>
   <div class="pl-form">${plcF('loaNo', 'LOA no', r.loa.no || (ed ? plcNext('loa') : ''), ed, {req: 1})}${plcF('loaBy', 'Signed by', r.loa.by || (ed ? PLC.cfg.approver || hubUser() : ''), ed, {req: 1})}
@@ -2257,11 +2365,20 @@ function plcS4(r, ed){
   ${ed ? `<div class="pl-btns"><button class="btn danger" data-pa="loaNo">✕ Reject — back to RFQ</button><span class="sp"></span><button class="btn primary" data-pa="loaOk">✓ Approve &amp; sign LOA</button></div>`
     : r.loa.at ? `<p class="pl-done">✓ LOA ${esc(r.loa.no || '')} signed by <b>${esc(r.loa.by || '')}</b>${r.loa.title ? ' (' + esc(r.loa.title) + ')' : ''} on ${plcDT(r.loa.at)}</p>` : w}`;
 }
-/* 6 — PO */
+/* 6 — PO. Split award → one PO per awarded supplier, chosen with the tabs; the package is done when every PO is issued. */
 function plcS5(r, ed){
+  if(!plcIsSplit(r) || r.stage < 5 || r.status === 'fromStore' || !plcSplitBids(r).length) return plcS5one(r, ed);
+  const S = plcSplitBids(r), cur = plcPoBid(r), sv = plcSub(r, cur), done = plcPoIssued(r).length;
+  const tabs = `<div class="tcb-tabs po-tabs" role="tablist">${S.map((b, k) => { const p = (r.pos || {})[b.id] || {}, x = plcSub(r, b);
+    return `<button type="button" class="tcb-tab${b.id === cur.id ? ' on' : ''}${p.at ? ' aw' : ''}" data-posel="${esc(b.id)}">PO #${k + 1}${p.no ? ' · ' + esc(p.no) : ''}<small>${esc(b.supplier)}</small><b>${plcRM(plcBidParts(x, x._bid).total)}</b></button>`; }).join('')}</div>
+    <p class="pl-hint" style="margin-top:6px">Split award — <b>${done}/${S.length}</b> PO${S.length === 1 ? '' : 's'} issued. ${done < S.length ? 'The package closes when every supplier\'s PO is issued.' : 'All POs issued.'}</p>`;
+  return plcS5one(sv, ed && !sv.po.at, tabs);
+}
+function plcS5one(r, ed, tabs){
   const w = plcWait(r, 5); if(w && r.stage < 5 || r.status === 'fromStore') return plcSH(5, 'The official Purchase Order to the awarded supplier.') + w;
   const c = plcPoCalc(r), a = c.award, issued = r.stage >= 6;
-  return plcSH(5, issued ? 'Purchase Order issued. Print it or save it as PDF.' : 'Fill in delivery details. Unit prices are optional — left empty, the PO shows the awarded lump sum.') + `
+  const pb = r._subId ? ` data-pbid="${esc(r._subId)}"` : '';
+  return plcSH(5, issued ? 'Purchase Order issued. Print it or save it as PDF.' : 'Fill in delivery details. Unit prices are optional — left empty, the PO shows the awarded lump sum.') + (tabs || '') + `
   <div class="pl-form">${plcF('poNo', 'PO no', r.po.no || (ed ? plcNext('po') : ''), ed, {req: 1})}${plcF('poDate', 'PO date', r.po.date || (ed ? todayISO() : ''), ed, {type: 'date'})}
     ${plcF('poTo', 'Deliver to', r.po.to || (ed ? PLC.cfg.deliverTo || r.site : ''), ed, {wide: 1})}${plcF('poDel', 'Delivery date', r.po.del || (ed ? r.needBy : ''), ed, {type: 'date'})}
     ${plcF('poTerms', 'Payment terms', r.po.terms || (ed ? (a && a.terms) || PLC.cfg.terms : ''), ed)}${plcF('poAttn', 'Supplier attention / contact', r.po.attn || '', ed)}
@@ -2272,8 +2389,8 @@ function plcS5(r, ed){
       <td><input data-lk="rate" type="number" min="0" step="0.01" class="n" value="${esc(l.rate)}" placeholder="—"${plcRO(ed)}></td><td class="n" data-lamt="${i}"></td></tr>`).join('')}</tbody>
     <tfoot><tr><td colspan="5" class="n">Subtotal</td><td class="n" id="plSub"></td></tr><tr><td colspan="5" class="n" id="plSstL">SST</td><td class="n" id="plSst"></td></tr><tr class="tot"><td colspan="5" class="n">Total</td><td class="n" id="plTot"></td></tr></tfoot></table></div>
   <div class="pl-hint" id="plPoHint"></div>
-  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn" data-pa="savePo">Save</button><button class="btn" data-ppo="${esc(r.id)}">📄 Priced PO</button><button class="btn" data-ppou="${esc(r.id)}">📄 Unpriced PO</button><button class="btn primary" data-pa="poOk">Issue PO ✓</button></div>`
-    : issued ? `<p class="pl-done">✓ PO ${esc(r.po.no)} issued by <b>${esc(r.po.by || '')}</b> on ${plcDT(r.po.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}" style="margin-left:8px">📄 Priced PO</button><button class="btn sm" data-ppou="${esc(r.id)}" style="margin-left:6px">📄 Unpriced PO</button></p>` : w}`;
+  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn" data-pa="savePo">Save</button><button class="btn" data-ppo="${esc(r.id)}"${pb}>📄 Priced PO</button><button class="btn" data-ppou="${esc(r.id)}"${pb}>📄 Unpriced PO</button><button class="btn primary" data-pa="poOk">Issue PO${r._subN ? ' #' + r._subK + ' — ' + esc(r._bid.supplier) : ''} ✓</button></div>`
+    : issued ? `<p class="pl-done">✓ PO ${esc(r.po.no)} issued by <b>${esc(r.po.by || '')}</b> on ${plcDT(r.po.at)} <button class="btn sm primary" data-ppo="${esc(r.id)}"${pb} style="margin-left:8px">📄 Priced PO</button><button class="btn sm" data-ppou="${esc(r.id)}"${pb} style="margin-left:6px">📄 Unpriced PO</button></p>` : w}`;
 }
 function plcReadPo(r){
   const g = k => plcVal(k);
@@ -2293,7 +2410,7 @@ function plcCalc(){
   plcRfqLive();
   // PO
   const pl = $('#plPoL');
-  if(pl){ const tmp = plcReadPo(plcClone(r)), c = plcPoCalc(tmp);
+  if(pl){ const tmp = plcReadPo(plcClone(plcPoView(r))), c = plcPoCalc(tmp);
     pl.querySelectorAll('tr[data-li]').forEach((tr, i) => { const l = tmp.po.lines[i], cell = tr.querySelector('[data-lamt]'); if(cell) cell.textContent = num(l.rate) > 0 ? num(l.qty * l.rate).toLocaleString('en-MY', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'; });
     $('#plSub').textContent = plcRM(c.sub); $('#plSstL').textContent = 'SST ' + c.sstP + '%'; $('#plSst').textContent = plcRM(c.sst); $('#plTot').textContent = plcRM(c.total);
     const h = $('#plPoHint'), a = c.award;
@@ -2324,13 +2441,13 @@ async function plcClick(e){
   if(d.pview){ if(PLC.sel === '__new' && plcDirty() && !confirm('Leave without saving?')) return;
     PLC.view = d.pview; PLC.sel = null; PLC.tab = null; PLC.draft = null; try{ localStorage.setItem('ttammhub_plc_view', d.pview); }catch(x){} renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(d.pf){ PLC.f.st = d.pf; renderPlc(); return; }
-  if(d.ppo){ e.stopPropagation(); plcPoShow(d.ppo, false); return; }
-  if(d.ppou){ e.stopPropagation(); plcPoShow(d.ppou, true); return; }
+  if(d.ppo){ e.stopPropagation(); plcPoShow(d.ppo, false, d.pbid); return; }
+  if(d.ppou){ e.stopPropagation(); plcPoShow(d.ppou, true, d.pbid); return; }
   if(d.ppsr){ plcPsrShow(); return; }
   if(d.psig){ const inp = document.querySelector('#plc input[data-psigf="' + d.psig + '"]'); if(inp) inp.click(); return; }
   if(d.psigx){ const [, kind] = d.psigx.split(':'); if(PLC.pend) delete PLC.pend[kind]; plcKeepTier(); renderPlc(); return; }
   if(d.psigu){ const r1 = plcCur(), id = (r1 && r1.id) || '__new', [tk, kind] = d.psigu.split(':'); if(!PLC.pend || PLC.pend.id !== id || PLC.pend.k !== tk) PLC.pend = {id, k: tk}; plcKeepTier(); plcSigClean(plcSigSaved(hubUser(), kind), kind).then(u => { PLC.pend[kind] = u; renderPlc(); }); return; }
-  if(d.popen){ PLC.sel = d.popen; PLC.tab = null; renderPlc(); $('#p-plc').scrollTop = 0; return; }
+  if(d.popen){ PLC.sel = d.popen; PLC.tab = null; PLC.poSel = null; renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(d.ptab !== undefined){ PLC.tab = +d.ptab; renderPlc(); return; }
   const r0 = plcCur();
   if(d.pdel !== undefined){ plcReadMrf(r0); r0.items.splice(+d.pdel, 1); if(!r0.items.length) r0.items.push({desc: '', qty: '', unit: 'lot', rem: ''}); renderPlc(); return; }
@@ -2338,6 +2455,10 @@ async function plcClick(e){
   if(d.bdel){ plcReadRfq(r0); const k = r0.rfq.bids.findIndex(x => x.id === d.bdel), x = r0.rfq.bids[k]; if(x && (clean(x.supplier) || Object.keys(x.lines || {}).length) && !confirm('Remove supplier #' + (k + 1) + (x.supplier ? ' (' + x.supplier + ')' : '') + ' from this TCBE?')) return;
     r0.rfq.bids = r0.rfq.bids.filter(x => x.id !== d.bdel); if(r0.rfq.award === d.bdel) r0.rfq.award = ''; r0.rfq.sel = Math.max(0, k - 1); renderPlc(); return; }
   if(d.bsel !== undefined){ plcReadRfq(r0); r0.rfq.sel = +d.bsel; renderPlc(); return; }
+  if(d.posel){ if($('#plPoL')){ const V = plcPoView(r0, true); if(!V.po.at) plcReadPo(V); } PLC.poSel = d.posel; const y = $('#p-plc').scrollTop; renderPlc(); $('#p-plc').scrollTop = y; return; }
+  if(d.pawlow){ plcReadRfq(r0); const m = plcLowMap(r0), idx = plcBuyIdx(r0); r0.rfq.split = true; r0.rfq.aw = Object.assign({}, plcAwMap(r0), m);
+    const y = $('#p-plc').scrollTop; renderPlc(); $('#p-plc').scrollTop = y; const miss = idx.filter(i => !m[i]).length;
+    toast('Lowest compliant price picked for ' + (idx.length - miss) + ' of ' + idx.length + ' items' + (miss ? ' — ' + miss + ' item' + (miss === 1 ? ' has' : 's have') + ' no compliant price; choose it yourself' : '') + '. Press Save TCBE to keep it.', 6000); return; }
   if(d.ptcbe){ plcTcbeShow(); return; }
   const a = d.pa; if(!a) return;
   if(a === 'back'){ if(PLC.sel === '__new' && plcDirty() && !confirm('Leave without saving?')) return; PLC.sel = null; PLC.tab = null; PLC.draft = null; renderPlc(); return; }
@@ -2388,9 +2509,9 @@ async function plcClick(e){
   }
   if(a === 'del'){
     const ref = plcRef(r0), po = r0.stage >= 6 && r0.status !== 'cancelled';
-    if(po){ const t = prompt(ref + ' already has an issued PO (' + r0.po.no + ').\nDeleting removes the package, its PSR, RFQ, LOA, PO and history.\n\nType ' + ref + ' to confirm:'); if(t === null) return; if(t.trim().toUpperCase() !== ref.toUpperCase()){ toast('Not deleted — the reference did not match.'); return; } }
+    if(po){ const t = prompt(ref + ' already has an issued PO (' + (plcPoNos(r0).join(', ') || r0.po.no) + ').\nDeleting removes the package, its PSR, RFQ, LOA, PO and history.\n\nType ' + ref + ' to confirm:'); if(t === null) return; if(t.trim().toUpperCase() !== ref.toUpperCase()){ toast('Not deleted — the reference did not match.'); return; } }
     else if(!confirm('Delete ' + ref + ' — ' + (r0.title || '') + '?\n\nThe package and its history are removed. You can bring it back with More ▾ → Restore last deleted (on this device).')) return;
-    if(await plcRemove([r0.id], ref + ' — Deleted: ' + (r0.title || '') + (po ? ' (PO ' + r0.po.no + ')' : ''))){ PLC.sel = null; PLC.tab = null; renderPlc(); toast('Deleted ' + ref + ' — More ▾ → Restore last deleted to undo.', 6000); }
+    if(await plcRemove([r0.id], ref + ' — Deleted: ' + (r0.title || '') + (po ? ' (PO ' + (plcPoNos(r0).join(', ') || r0.po.no) + ')' : ''))){ PLC.sel = null; PLC.tab = null; renderPlc(); toast('Deleted ' + ref + ' — More ▾ → Restore last deleted to undo.', 6000); }
     return;
   }
   if(a === 'cancel'){
@@ -2436,34 +2557,59 @@ async function plcClick(e){
       const {b: valid} = plcBids(r), aw = plcAward(r);
       if(!r.rfq.no){ toast('Enter the RFQ number.'); return; }
       if(!valid.length){ toast('Enter at least one supplier with prices.'); return; }
-      if(!aw || !aw.supplier || !(num(aw.amount) > 0)){ toast('Choose the supplier to award — the Award row under the comparison table.'); return; }
+      const SP = plcIsSplit(r), S = SP ? plcSplitBids(r) : [];
+      if(SP){ const un = plcBuyIdx(r).filter(i => !S.some(b => plcAwMap(r)[i] === b.id)); if(un.length){ toast(un.length + ' item' + (un.length === 1 ? ' is' : 's are') + ' not awarded yet — press ⚡ Pick lowest per item or choose a supplier for each item.', 6000); return; }
+        r.rfq.award = ''; const A = {}; plcBuyIdx(r).forEach(i => { A[i] = plcAwMap(r)[i]; }); r.rfq.aw = A; }
+      else if(!aw || !aw.supplier || !(num(aw.amount) > 0)){ toast('Choose the supplier to award — the Award row under the comparison table.'); return; }
       if(($('#plRec') || {dataset: {}}).dataset.need && !r.rfq.just.trim()){ toast('A justification is needed — see the warning under the table.', 6000); $('#plc [data-pv="just"]').focus(); return; }
-      r.rfq.by = hubUser() || ''; r.rfq.at = plcNow(); step(4);
-      await save(tag() + 'RFQ ' + r.rfq.no + ': ' + valid.length + ' quotations (TCBE) — recommended ' + aw.supplier + ' ' + plcRM(plcBidParts(r, aw).total) + ', sent for LOA'); return;
+      const by = plcVal('tBy'); if(!by){ toast('Enter the name of the person preparing the TCBE (TCBE sign-off section).'); return; }
+      r.rfq.sg = {prep: {by, pos: plcVal('tPos'), note: plcVal('tNote'), at: plcNow()}}; r.rfq.by = by; r.rfq.at = plcNow(); if(r.status === 'returned'){ r.status = 'open'; r.retNote = ''; }
+      plcTcbKeepSig(r, r0, 'prep');
+      await save(tag() + 'TCBE ' + r.rfq.no + ' prepared by ' + by + ': ' + valid.length + ' quotations — recommended ' + (SP ? 'split award to ' + S.length + ' suppliers (' + S.map(x => x.supplier).join(', ') + ') ' + plcRM(plcSplitTotal(r)) : aw.supplier + ' ' + plcRM(plcBidParts(r, aw).total)) + ', sent for check'); return;
     }
     await save(tag() + 'TCBE saved (' + plcBids(r).b.length + ' quotations)'); return;
+  }
+  if(a === 'tcbSign'){
+    const k = d.tier, t = PLC_TCB_SG.find(x => x[0] === k), by = plcVal('tBy'); if(!t) return; if(!by){ toast('Enter your name.'); return; }
+    r.rfq.sg = Object.assign({}, plcTcbSg(r)); r.rfq.sg[k] = {by, pos: plcVal('tPos'), note: plcVal('tNote'), at: plcNow()}; plcTcbKeepSig(r, r0, k);
+    if(k === 'apv') step(4);
+    await save(tag() + 'TCBE ' + (r.rfq.no || '') + ' — ' + t[1] + ' ' + by + (k === 'apv' ? ' — TCBE approved, sent for LOA' : '')); return;
+  }
+  if(a === 'tcbRet'){
+    const why = (prompt('Why is the TCBE being returned to Procurement?') || '').trim(); if(!why) return;
+    r.rfq.sg = {}; r.tsigs = {}; r.tstamps = {}; r.rfq.at = ''; r.status = 'returned'; r.retNote = 'TCBE returned: ' + why; r.stageAt = plcNow();
+    await save(tag() + 'TCBE returned to Procurement: ' + why); return;
   }
   if(a === 'loaOk' || a === 'loaNo'){
     const by = plcVal('loaBy'), note = plcVal('loaNote');
     if(a === 'loaNo'){ const why = note || (prompt('Reason for rejecting the recommendation?') || '').trim(); if(!why) return;
-      r.loa = {}; r.rfq.at = ''; r.stage = 3; r.status = 'returned'; r.retNote = 'LOA rejected' + (by ? ' by ' + by : '') + ': ' + why; r.stageAt = plcNow();
+      r.loa = {}; r.pos = {}; r.rfq.at = ''; r.rfq.sg = {}; r.tsigs = {}; r.tstamps = {}; r.stage = 3; r.status = 'returned'; r.retNote = 'LOA rejected' + (by ? ' by ' + by : '') + ': ' + why; r.stageAt = plcNow();
       await save(tag() + 'LOA rejected — back to RFQ: ' + why); return; }
     const no = plcVal('loaNo'); if(!no || !by){ toast('Enter the LOA number and who signed it.'); return; }
     r.loa = {no, by, title: plcVal('loaTitle'), note, at: plcNow()}; step(5);
     const aw = plcAward(r);
+    if(plcIsSplit(r)){ const S = plcSplitBids(r), others = PLC.recs.filter(x => x.id !== r.id); r.pos = {};
+      S.forEach(b => { r.pos[b.id] = {no: plcNext('po', others.concat([r]))}; }); PLC.poSel = S[0] ? S[0].id : null;
+      await save(tag() + 'LOA ' + no + ' signed by ' + by + ' — split award: ' + S.map(b => { const sv = plcSub(r, b); return b.supplier + ' ' + plcRM(plcBidParts(sv, sv._bid).total); }).join(', ')); return; }
     await save(tag() + 'LOA ' + no + ' signed by ' + by + ' — ' + (aw ? aw.supplier + ' ' + plcRM(aw.amount) : '')); return;
   }
   if(a === 'savePo' || a === 'poOk'){
-    plcReadPo(r);
+    const SP = plcIsSplit(r), V = SP ? plcPoView(r, true) : r, sid = V._subId || '';
+    if(SP && V.po.at){ toast('This PO is already issued.'); return; }
+    plcReadPo(V);
     if(a === 'poOk'){
-      if(!r.po.no || !r.po.date){ toast('Enter the PO number and date.'); return; }
-      const c = plcPoCalc(r); if(!(c.sub > 0)){ toast('The PO amount is 0 — check the award or the unit prices.'); return; }
-      const an = c.award ? plcBidParts(r, c.award).net : 0; if(c.priced && c.award && Math.abs(c.sub - an) > 0.009 && !confirm('The order lines add up to ' + plcRM(c.sub) + ', but the awarded quotation is ' + plcRM(an) + ' before SST. Issue the PO anyway?')) return;
-      r.po.by = hubUser() || ''; r.po.at = plcNow(); r.po.total = c.total; step(6);
-      const ok = await save(tag() + 'PO ' + r.po.no + ' issued to ' + (c.award ? c.award.supplier : '') + ' — ' + plcRM(c.total), (nx, recs) => { if(recs.some(x => x.id !== nx.id && x.stage >= 6 && x.po && x.po.no === nx.po.no)){ throw new Error('PO number ' + nx.po.no + ' is already used'); } });
-      if(ok) plcPoShow(r.id); return;
+      if(!V.po.no || !V.po.date){ toast('Enter the PO number and date.'); return; }
+      if(SP && plcSplitBids(r).some(b => b.id !== sid && ((r.pos || {})[b.id] || {}).no === V.po.no)){ toast('PO number ' + V.po.no + ' is already given to another supplier in this package.', 6000); return; }
+      const c = plcPoCalc(V); if(!(c.sub > 0)){ toast('The PO amount is 0 — check the award or the unit prices.'); return; }
+      const an = c.award ? plcBidParts(V, c.award).net : 0; if(c.priced && c.award && Math.abs(c.sub - an) > 0.009 && !confirm('The order lines add up to ' + plcRM(c.sub) + ', but the awarded quotation is ' + plcRM(an) + ' before SST. Issue the PO anyway?')) return;
+      V.po.by = hubUser() || ''; V.po.at = plcNow(); V.po.total = c.total;
+      const S = SP ? plcSplitBids(r) : [], left = S.filter(b => !((r.pos || {})[b.id] || {}).at).length;
+      if(!SP || !left) step(6);
+      const no = V.po.no, used = (nx, recs) => { const mine = plcPoNos(nx); if(recs.some(x => x.id !== nx.id && plcPoNos(x).some(n => mine.includes(n)))){ throw new Error('PO number ' + no + ' is already used'); } };
+      const ok = await save(tag() + 'PO ' + no + ' issued to ' + (c.award ? c.award.supplier : '') + ' — ' + plcRM(c.total) + (SP ? ' (split award, ' + (S.length - left) + '/' + S.length + ' POs issued)' : ''), used);
+      if(ok){ if(SP){ const nx = S.find(b => !((r.pos || {})[b.id] || {}).at); PLC.poSel = nx ? nx.id : sid; renderPlc(); } plcPoShow(r.id, false, sid); } return;
     }
-    await save(tag() + 'PO details saved'); return;
+    await save(tag() + 'PO details saved' + (SP ? ' — ' + (V._bid.supplier || '') : '')); return;
   }
 }
 
@@ -2480,22 +2626,27 @@ function plcPoHtml(r, unp){
       <div class="po-ti"><h1>PURCHASE ORDER</h1>${unp ? '<div class="po-unp">UNPRICED COPY</div>' : ''}<table><tr><th>PO No</th><td>${esc(r.po.no || '—')}</td></tr><tr><th>Date</th><td>${r.po.date ? fmtD(r.po.date) : '—'}</td></tr><tr><th>Quotation</th><td>${esc(a.ref || '—')}</td></tr></table></div></div>
     <div class="po-2"><div><h5>Supplier</h5><b>${esc(a.supplier || '—')}</b>${r.po.attn ? `<span>Attn: ${esc(r.po.attn)}</span>` : ''}</div>
       <div><h5>Deliver to</h5><span>${esc(r.po.to || r.site || '—')}</span><span>Delivery date: <b>${r.po.del ? fmtD(r.po.del) : '—'}</b></span></div>
-      <div><h5>References</h5><span>MRF: ${esc(r.mrfNo || '—')} · PSR: ${esc(r.psr.no || '—')}</span><span>RFQ: ${esc(r.rfq.no || '—')} · LOA: ${esc(r.loa.no || '—')}</span><span>Charge code: ${esc(r.charge || '—')}${r.wopNo ? ' · WOP ' + esc(r.wopNo) : ''}</span></div></div>
+      <div><h5>References</h5><span>MRF: ${esc(r.mrfNo || '—')} · PSR: ${esc(r.psr.no || '—')}</span><span>RFQ: ${esc(r.rfq.no || '—')} · LOA: ${esc(r.loa.no || '—')}</span><span>Charge code: ${esc(r.charge || '—')}${r.wopNo ? ' · WOP ' + esc(r.wopNo) : ''}</span>${r._subN > 1 ? `<span>Split award: PO ${r._subK} of ${r._subN}</span>` : ''}</div></div>
     ${unp ? `<table class="po-l"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th></tr></thead><tbody>${linesU}</tbody></table>` : `<table class="po-l"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th><th class="n">Unit price (RM)</th><th class="n">Amount (RM)</th></tr></thead><tbody>${lines}</tbody>
       <tfoot><tr><td colspan="5" class="n">Subtotal</td><td class="n">${m2(c.sub)}</td></tr><tr><td colspan="5" class="n">SST ${c.sstP}%</td><td class="n">${m2(c.sst)}</td></tr><tr class="tot"><td colspan="5" class="n">TOTAL (RM)</td><td class="n">${m2(c.total)}</td></tr></tfoot></table>`}
     <div class="po-tc"><b>Payment terms:</b> ${esc(r.po.terms || '—')}${r.po.note ? `<br><b>Notes:</b> ${esc(r.po.note)}` : ''}<br>${unp ? 'Unpriced copy for store / site receiving — prices are on the original PO. ' : ''}Please quote the PO number on all delivery orders and invoices. Goods are subject to inspection on receipt.</div>
     <div class="po-sigs">${sig('Prepared by', (r.psr.t.pe || {}).by, 'Project Engineer', (r.psr.t.pe || {}).at)}${sig('Verified by', (r.psr.t.pm || {}).by, 'Project Manager', (r.psr.t.pm || {}).at)}${sig('Approved by', r.loa.by, r.loa.title || C.approverTitle || '', r.loa.at)}${sig('Accepted by supplier', '', 'Name, signature & company stamp', '')}</div>
     <div class="po-f">${issued ? 'Issued ' + plcDT(r.po.at) + (r.po.by ? ' by ' + esc(r.po.by) : '') : 'Draft — not yet issued'} · ${esc(plcRef(r))}</div></div>`;
 }
-function plcPoShow(id, unp){
-  let r = PLC.recs.find(x => x.id === id); if(!r) return;
-  if(PLC.sel === id && $('#plPoL') && r.stage < 6) r = plcReadPo(plcClone(r));   // preview shows what is typed, not yet saved
+function plcPoShow(id, unp, bid){
+  const R0 = PLC.recs.find(x => x.id === id); if(!R0) return;
+  const SP = plcIsSplit(R0) && plcSplitBids(R0).length, S = SP ? plcSplitBids(R0) : [];
+  let cur = SP ? (S.find(b => b.id === bid) || plcPoBid(R0)) : null, r;
+  const pick = () => { r = SP ? plcSub(R0, cur) : R0;
+    if(PLC.sel === id && $('#plPoL') && r.stage < 6 && (!SP || (plcPoBid(R0) || {}).id === cur.id)) r = plcReadPo(plcClone(r)); };   // preview shows what is typed, not yet saved
+  pick();
   const d = $('#dlgPlc'); let U = !!unp;
   const draw = () => {
     $('#plDlgT').textContent = '📄 Purchase Order ' + (r.po.no || '') + (U ? ' — unpriced' : ' — priced') + (r.stage >= 6 ? '' : ' (preview)');
     $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap">${plcPoHtml(r, U)}</div>`;
-    $('#plDlgF').innerHTML = `<div class="pl-seg" role="group" aria-label="PO version"><button type="button" class="${U ? '' : 'on'}" id="plPoP">Priced PO</button><button type="button" class="${U ? 'on' : ''}" id="plPoU">Unpriced PO</button></div><span style="flex:1"></span>
+    $('#plDlgF').innerHTML = (SP ? `<select id="plPoSup" aria-label="Supplier PO" class="pl-posel">${S.map((b, k) => `<option value="${esc(b.id)}"${b.id === cur.id ? ' selected' : ''}>PO #${k + 1} — ${esc(b.supplier)}${((R0.pos || {})[b.id] || {}).at ? ' ✓' : ''}</option>`).join('')}</select>` : '') + `<div class="pl-seg" role="group" aria-label="PO version"><button type="button" class="${U ? '' : 'on'}" id="plPoP">Priced PO</button><button type="button" class="${U ? 'on' : ''}" id="plPoU">Unpriced PO</button></div><span style="flex:1"></span>
       <button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF — ${U ? 'unpriced' : 'priced'}</button>`;
+    if(SP) $('#plPoSup').onchange = e => { cur = S.find(b => b.id === e.target.value) || cur; pick(); draw(); requestAnimationFrame(plcFit); };
     $('#plPoP').onclick = () => { U = false; draw(); requestAnimationFrame(plcFit); }; $('#plPoU').onclick = () => { U = true; draw(); requestAnimationFrame(plcFit); };
     $('#plDlgX').onclick = () => d.close();
     $('#plDlgP').onclick = () => { d.close(); plcPrint(plcPoHtml(r, U)); };
@@ -2575,10 +2726,10 @@ function plcSettings(){
 async function plcExcel(){
   let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
   const R = PLC.recs; if(!R.length){ toast('Nothing to export yet.'); return; }
-  const pk = R.map(r => { const a = plcAward(r) || {}, c = plcPoCalc(r); return {'MRF no': r.mrfNo, 'Job package': r.title, 'Description': r.desc, 'WOP no': r.wopNo, 'Charge code': r.charge, 'Site': r.site, 'Requested by': r.reqBy, 'Request date': r.reqDate, 'Need by': r.needBy, 'Priority': r.priority,
+  const pk = R.map(r => { const a = plcAward(r) || {}, c = plcPoCalc(r), sp = plcIsSplit(r); return {'MRF no': r.mrfNo, 'Job package': r.title, 'Description': r.desc, 'WOP no': r.wopNo, 'Charge code': r.charge, 'Site': r.site, 'Requested by': r.reqBy, 'Request date': r.reqDate, 'Need by': r.needBy, 'Priority': r.priority,
     'Stage': plcState(r).t, 'Days at stage': plcClosed(r) ? '' : plcDays(r.stageAt || r.updatedAt), 'Store checked by': r.store.by || '', 'PSR no': r.psr.no || '', 'PSR PE': (r.psr.t.pe || {}).by || '', 'PSR CC': (r.psr.t.cc || {}).by || '', 'PSR PM': (r.psr.t.pm || {}).by || '',
-    'RFQ no': r.rfq.no || '', 'Quotations': plcBids(r).b.length, 'Awarded supplier': a.supplier || '', 'Quotation ref': a.ref || '', 'Award amount (RM)': a.amount ? num(a.amount) : '', 'Justification': r.rfq.just || '',
-    'LOA no': r.loa.no || '', 'LOA signed by': r.loa.by || '', 'PO no': r.stage >= 6 ? r.po.no : '', 'PO date': r.stage >= 6 ? r.po.date : '', 'PO net (RM)': r.stage >= 6 ? c.sub : '', 'PO total incl. SST (RM)': r.stage >= 6 ? c.total : '', 'Last updated': r.updatedAt ? plcDT(r.updatedAt) : '', 'Updated by': r.updatedBy || ''}; });
+    'RFQ no': r.rfq.no || '', 'Quotations': plcBids(r).b.length, 'Awarded supplier': sp ? plcSupTxt(r) : a.supplier || '', 'Split award': sp ? 'Yes' : '', 'Quotation ref': sp ? plcSplitBids(r).map(b => b.ref).filter(Boolean).join(', ') : a.ref || '', 'Award amount (RM)': sp ? plcSplitTotal(r) : a.amount ? num(a.amount) : '', 'Justification': r.rfq.just || '',
+    'LOA no': r.loa.no || '', 'LOA signed by': r.loa.by || '', 'PO no': plcPoNos(r).join(', '), 'PO date': sp ? plcSplitBids(r).map(b => ((r.pos || {})[b.id] || {}).at ? r.pos[b.id].date : '').filter(Boolean).join(', ') : r.stage >= 6 ? r.po.date : '', 'PO net (RM)': sp ? (plcPoIssued(r).length ? plcPoNet(r) : '') : r.stage >= 6 ? c.sub : '', 'PO total incl. SST (RM)': sp ? (plcPoIssued(r).length ? plcPoGross(r) : '') : r.stage >= 6 ? c.total : '', 'Last updated': r.updatedAt ? plcDT(r.updatedAt) : '', 'Updated by': r.updatedBy || ''}; });
   const it = []; R.forEach(r => r.items.forEach((x, i) => it.push({'MRF no': r.mrfNo, '#': i + 1, 'Description': x.desc, 'Qty requested': num(x.qty), 'Unit': x.unit, 'In store': num(x.stock), 'To purchase': plcNet(x), 'Remarks': x.rem, 'Store remark': x.srem || ''})));
   const bd = []; R.forEach(r => { const {ok} = plcBids(r), srt = ok.slice().sort((p, q) => num(p.amount) - num(q.amount)); r.rfq.bids.filter(b => b.supplier).forEach(b => bd.push({'MRF no': r.mrfNo, 'RFQ no': r.rfq.no, 'Supplier': b.supplier, 'Quotation ref': b.ref, 'Amount (RM)': num(b.amount), 'Delivery days': b.days, 'Payment terms': b.terms, 'Compliant': b.ok !== false ? 'Yes' : 'No', 'Rank': srt.indexOf(b) >= 0 ? 'L' + (srt.indexOf(b) + 1) : '', 'Awarded': r.rfq.award === b.id ? 'Yes' : '', 'Remarks': b.rem})); });
   const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(pk), 'Packages'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(it.length ? it : [{}]), 'Items'); X.utils.book_append_sheet(wb, X.utils.json_to_sheet(bd.length ? bd : [{}]), 'RFQ bids');
@@ -2988,6 +3139,19 @@ const PLC_CSS = `<style>
 #plc .tcb-cmp{min-width:640px}
 #plc .tcb-cmp td.tcb-lo{background:color-mix(in srgb,var(--ok) 22%,transparent)!important;font-weight:700}
 #plc .tcb-aw{display:inline-flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer}
+#plc .tcb-mode{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:0 0 10px}
+#plc .tcb-mode .pl-seg label{display:inline-flex;gap:6px;align-items:center;cursor:pointer;padding:6px 12px;font-size:12.5px;font-weight:600}
+#plc .tcb-mode .pl-seg label.on{background:var(--accent);color:#fff}
+#plc .tcb-mode .pl-seg input{position:absolute;opacity:0;pointer-events:none}
+#plc .tcb-ms{font-size:12.5px;color:var(--text-dim)}
+#plc .tcb-cmp .tcb-awi{display:flex;justify-content:flex-end;gap:4px;margin-top:3px;font-size:11.5px;color:var(--text-dim)}
+#plc .tcb-cmp .tcb-awi input{width:14px;height:14px}
+#plc .tcb-cmp td.tcb-awc{box-shadow:inset 0 0 0 2px var(--accent)}
+#plc .tcb-cmp td.tcb-awc .tcb-awi{color:var(--accent)}
+#plc .tcb-cmp tr.tot.aw td{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+#plc .tcb-cmp tr.tcb-noaw td:first-child{box-shadow:inset 3px 0 0 var(--bad,#c0392b)}
+#plc .po-tabs{margin-top:12px}
+.pl-posel{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);margin-right:8px;max-width:280px}
 /* printed TCBE */
 .tcb-doc{background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;font-size:7.4px;line-height:1.2;padding:10px;min-width:1080px;max-width:1300px;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.12)}
 .tcb-doc table{border-collapse:collapse;width:100%}
@@ -3013,6 +3177,7 @@ const PLC_CSS = `<style>
 .tcb-doc .tcb-t td.nq{color:#555;text-align:center}
 .tcb-doc .tcb-t td.lo{background:#92D050!important}
 .tcb-doc .tcb-t td.awh{background:#FFF2CC;font-weight:700}
+.tcb-doc .tcb-t td.awc{outline:2px solid #000;outline-offset:-2px;font-weight:700}
 .tcb-doc .tcb-low{display:grid;grid-template-columns:220px 1fr;gap:10px;margin-top:6px;align-items:start}
 .tcb-doc .tcb-leg div{padding:3px 5px;font-weight:700;margin-bottom:3px}
 .tcb-doc .tcb-leg .ta{background:#C6EFCE}.tcb-doc .tcb-leg .tn{background:#FF7B6B}
@@ -3039,13 +3204,22 @@ const PLC_CSS = `<style>
 #plc .pl-sigbox img{height:56px;max-width:180px;object-fit:contain;background:#fff;border:1px dashed var(--border);border-radius:6px;padding:2px}
 #plc .pl-sigbox .pl-sub{margin:0}
 #plc .pl-sigdone{display:inline-flex;gap:4px;background:#fff;border-radius:6px;margin-top:4px;padding:2px 4px}
-#plc .pl-sigdone img{height:44px;max-width:150px;object-fit:contain}
+#plc .pl-sigdone img{height:44px;max-width:150px;object-fit:contain;mix-blend-mode:multiply}
 .psr-doc .psg-s{position:relative}
 .psr-doc .psg-im{position:absolute;left:52px;top:-6px;right:4px;display:flex;align-items:center}
 .psr-doc .psg-im img{object-fit:contain;mix-blend-mode:multiply;flex:0 0 auto}
 .psr-doc .psg-im img.ps{height:60px;max-width:62%}
 .psr-doc .psg-im img.pc{height:66px;width:66px;opacity:.92;margin-left:-14px}
 .psr-doc .psg-im img.pc:first-child{margin-left:0}
+
+.tcb-doc .tcb-sig .tss{position:relative;height:40px}
+.tcb-doc .tcb-sig .tsim{position:absolute;left:40px;top:-2px;right:2px;display:flex;align-items:center}
+.tcb-doc .tcb-sig .tsim img{object-fit:contain;mix-blend-mode:multiply;flex:0 0 auto}
+.tcb-doc .tcb-sig .tsim img.ps{height:44px;max-width:62%}
+.tcb-doc .tcb-sig .tsim img.pc{height:48px;width:48px;margin-left:-10px;opacity:.92}
+.tcb-doc .tcb-sig .tsim img.pc:first-child{margin-left:0}
+.tcb-doc .tcb-sig .tsr{display:grid;grid-template-columns:40px 8px 1fr;padding:0 4px}
+.tcb-doc .tcb-sig .tsr b{font-weight:400;border-bottom:1px solid #aaa;min-height:9px}
 </style>`;
 
 /* ======================= MDDR Status (Master Deliverable Document Register) — Admin only for now ======================= */
