@@ -1493,6 +1493,13 @@ const plcBuyItems = r => r.items.filter(it => clean(it.desc) && plcNet(it) > 0);
 const plcSurItems = r => r.items.filter(it => clean(it.desc) && num(it.stock) > 0);
 const plcMrfDone = r => !!(r.store && r.store.mrf && r.store.mrf.at);
 const plcMrfPending = r => !!r.direct && r.status !== 'cancelled' && !!(r.store && r.store.at) && plcSurItems(r).length > 0 && !plcMrfDone(r);
+/* A PSR line that takes stock from the Surplus Ledger (Use in "Check Surplus Ledger") keeps the link in it.sp = [{sheet, desc, unit, q}].
+   Matco confirms the store check → the stock is RESERVED in the ledger for that PSR; PE raises the MRF → it is ISSUED (deducted).
+   Cancelled or returned before the MRF → released. Worked out from the PSR records every time, so it never goes out of step. */
+function plcSpState(r){ if(!r || !r.store || !r.store.at) return ''; if(plcMrfDone(r)) return 'issued'; if(r.status === 'cancelled' || r.status === 'returned' || r.stage < 1) return ''; return 'reserved'; }
+function plcSpUses(state){ const out = []; ((typeof PLC !== 'undefined' && PLC.recs) || []).forEach(r => { const s = plcSpState(r); if(!s || (state && s !== state)) return;
+  (r.items || []).forEach((it, i) => (Array.isArray(it.sp) ? it.sp : []).forEach(u => { if(num(u.q) > 0) out.push({r, it, i, state: s, sheet: u.sheet, desc: u.desc, unit: u.unit || '', q: num(u.q)}); })); }); return out; }
+const plcSpTxt = it => (Array.isArray(it.sp) ? it.sp : []).map(u => `♻ ${mtoQ(u.q)} ${u.unit || ''} from ledger · ${u.sheet}`).join('; ');
 function plcBids(r){
   const T = x => plcBidParts(r, x).total, b = (r.rfq.bids || []).filter(x => clean(x.supplier) && T(x) > 0), ok = b.filter(x => x.ok !== false);
   const low = ok.reduce((m, x) => !m || T(x) < T(m) ? x : m, null);
@@ -1948,7 +1955,7 @@ function plcS1(r, ed){
   return plcSH(1, 'Matco enters the surplus available for each item. Only the balance goes to the PSR review for purchase; PE then raises an MRF for the surplus items.') + `
   <div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th>Unit</th><th class="n">Surplus available</th><th class="n">To purchase</th><th>Remarks</th></tr></thead><tbody>
     ${r.items.map((it, i) => `<tr data-si="${i}"><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td>${esc(it.unit)}</td>
-      <td class="n">${ed ? `<input data-sk="${i}" type="number" min="0" step="any" class="n" value="${esc(it.stock || '')}" placeholder="0">` : esc(it.stock || '0')}</td><td class="n" data-net="${i}"><b>${plcNet(it)}</b></td><td class="pl-srem">${ed ? `<input data-skr="${i}" value="${esc(it.srem || '')}" placeholder="Storeman remark (optional)">` : esc(it.srem || '')}</td></tr>`).join('')}</tbody></table></div>
+      <td class="n">${ed ? `<input data-sk="${i}" type="number" min="0" step="any" class="n" value="${esc(it.stock || '')}" placeholder="0">` : esc(it.stock || '0')}</td><td class="n" data-net="${i}"><b>${plcNet(it)}</b></td><td class="pl-srem">${ed ? `<input data-skr="${i}" value="${esc(it.srem || '')}" placeholder="Remark — e.g. surplus from another project / contract">` : esc(it.srem || '')}${it.sp && it.sp.length ? `<span class="pl-sub" style="color:var(--accent)">${esc(plcSpTxt(it))}${plcSpState(r) === 'issued' ? ' · issued' : plcSpState(r) === 'reserved' ? ' · reserved' : ''}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
   <div class="pl-form">${plcF('sBy', 'Verified by (Matco)', r.store.by || (ed ? hubUser() : ''), ed, {req: 1})}${plcF('sNote', 'Matco remarks / instruction', r.store.note || '', ed, {wide: 1})}</div>
   ${ed ? `<div class="pl-btns"><button class="btn" data-pa="return">↩ Return to requester</button><button class="btn" data-pa="spOne">♻ Check Surplus Ledger</button><span class="sp"></span><span class="pl-hint" id="plSHint"></span><button class="btn primary" data-pa="storeOk" id="plSBtn">Confirm → PSR review + MRF</button></div>`
     : r.store.at ? `<p class="pl-done">✓ Checked by <b>${esc(r.store.by || '')}</b> on ${plcDT(r.store.at)}${r.status === 'fromStore' ? ' — every item comes from surplus, nothing to purchase.' : ''}${r.direct && plcSurItems(r).length ? ` · ${plcSurItems(r).length} surplus line(s) → ${plcMrfDone(r) ? 'MRF <b>' + esc(r.mrfNo || '') + '</b> raised' : '<button class="pl-lnk" data-ptab="6">MRF to be raised by PE →</button>'}` : ''}</p>` : w}`;
@@ -1962,11 +1969,11 @@ function plcSM(r, ed){
   const S = r.items.map((it, i) => ({it, i})).filter(x => clean(x.it.desc) && num(x.it.stock) > 0), M = r.store.mrf || {};
   if(!S.length) return sh + '<div class="note">No surplus found by Matco — no MRF needed. Everything goes through the PSR review.</div>';
   return sh + `<div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th class="n">From surplus</th><th>Unit</th><th class="n">Still to buy</th><th>Matco remark</th></tr></thead><tbody>
-    ${S.map(({it, i}) => `<tr><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td class="n"><b>${esc(Math.min(num(it.stock), num(it.qty)) || it.stock)}</b></td><td>${esc(it.unit)}</td><td class="n">${plcNet(it)}</td><td>${esc(it.srem || '')}</td></tr>`).join('')}</tbody></table></div>
+    ${S.map(({it, i}) => `<tr><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td class="n"><b>${esc(Math.min(num(it.stock), num(it.qty)) || it.stock)}</b></td><td>${esc(it.unit)}</td><td class="n">${plcNet(it)}</td><td>${esc(it.srem || '')}${it.sp && it.sp.length ? `<span class="pl-sub" style="color:var(--accent)">${esc(plcSpTxt(it))}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
   <div class="pl-form">${plcF('mrfNo', 'MRF no', r.mrfNo || '', ed, {ph: ed ? plcNext('mrf') + ' (auto if blank)' : ''})}${plcF('mBy', 'Raised by (PE)', M.by || (ed ? hubUser() : ''), ed, {req: 1})}
     ${plcF('mDate', 'MRF date', M.date || (ed ? todayISO() : ''), ed, {type: 'date'})}${plcF('mNote', 'Remarks', M.note || '', ed, {wide: 1})}</div>
   ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn primary" data-pa="smrfOk">Raise MRF for ${S.length} surplus line${S.length === 1 ? '' : 's'} →</button></div>`
-    : plcMrfDone(r) ? `<p class="pl-done">✓ MRF <b>${esc(r.mrfNo || '')}</b> raised by <b>${esc(M.by || '')}</b> on ${plcDT(M.at)} — surplus items to be issued from store.</p>` : `<div class="note">Waiting for PE to raise the MRF.</div>`}`;
+    : plcMrfDone(r) ? `<p class="pl-done">✓ MRF <b>${esc(r.mrfNo || '')}</b> raised by <b>${esc(M.by || '')}</b> on ${plcDT(M.at)} — surplus items to be issued from store${r.items.some(it => it.sp && it.sp.length) ? '; the linked ledger stock is now <b>issued</b> in the Surplus Ledger' : ''}.</p>` : `<div class="note">Waiting for PE to raise the MRF.${r.items.some(it => it.sp && it.sp.length) ? ' The linked ledger stock stays <b>reserved</b> for this PSR until then.' : ''}</div>`}`;
 }
 /* 3 — PSR 3-tier */
 /* 3 — PSR 3-tier, with the company PURCHASE/SERVICE REQUISITION form (fill in here, print A4 landscape) */
@@ -2605,11 +2612,14 @@ async function plcClick(e){
     r.status = 'cancelled'; r.retNote = why; await save(tag() + 'Cancelled: ' + why); return;
   }
   if(a === 'storeOk'){
-    $$('#plc [data-sk]').forEach(e2 => { r.items[+e2.dataset.sk].stock = clean(e2.value); });
+    $$('#plc [data-sk]').forEach(e2 => { const it = r.items[+e2.dataset.sk]; it.stock = clean(e2.value); const st = num(it.stock);
+      if(e2.dataset.spsheet) it.sp = [{sheet: e2.dataset.spsheet, desc: e2.dataset.spdesc, unit: e2.dataset.spunit || '', q: Math.min(st, num(e2.dataset.spq))}];
+      else if(Array.isArray(it.sp) && it.sp.length){ let rem = st; it.sp = it.sp.map(u => { const q = Math.min(num(u.q), rem); rem -= q; return Object.assign({}, u, {q}); }).filter(u => u.q > 0); }
+      if(!(st > 0) || (Array.isArray(it.sp) && !it.sp.length)) delete it.sp; });
     $$('#plc [data-skr]').forEach(e2 => { r.items[+e2.dataset.skr].srem = clean(e2.value); });
     const by = plcVal('sBy'); if(!by){ toast('Enter who verified the store stock.'); return; }
     r.store = {by, note: plcVal('sNote'), at: plcNow()};
-    const nS = r.direct ? plcSurItems(r).length : 0, mT = nS ? ' · ' + nS + ' surplus line(s) — PE to raise MRF' : '';
+    const nS = r.direct ? plcSurItems(r).length : 0, nL = r.items.filter(it => Array.isArray(it.sp) && it.sp.length).length, mT = (nS ? ' · ' + nS + ' surplus line(s) — PE to raise MRF' : '') + (nL ? ' · ' + nL + ' reserved in the Surplus Ledger' : '');
     if(!plcBuyItems(r).length){ r.status = 'fromStore'; r.stageAt = plcNow(); await save(tag() + 'Matco surplus check by ' + by + ': every item from surplus, nothing to purchase' + mT); return; }
     step(2); await save(tag() + 'Matco surplus check by ' + by + ' — ' + plcBuyItems(r).length + ' line(s) to purchase (PSR review)' + mT); return;
   }
@@ -2618,7 +2628,7 @@ async function plcClick(e){
     const by = plcVal('mBy'); if(!by){ toast('Enter the name of the PE raising the MRF.'); return; }
     const no = plcVal('mrfNo'); if(no) r.mrfNo = no;
     r.store = Object.assign({}, r.store, {mrf: {by, date: plcVal('mDate') || todayISO(), note: plcVal('mNote'), at: plcNow()}});
-    await save(tag() + 'MRF raised by ' + by + ' for ' + plcSurItems(r).length + ' surplus line(s)', (nx, recs) => { if(!nx.mrfNo || recs.some(x => x.id !== nx.id && x.mrfNo === nx.mrfNo)) nx.mrfNo = plcNext('mrf', recs); });
+    await save(tag() + 'MRF raised by ' + by + ' for ' + plcSurItems(r).length + ' surplus line(s)' + (r.items.some(it => it.sp && it.sp.length) ? ' — linked stock issued in the Surplus Ledger' : ''), (nx, recs) => { if(!nx.mrfNo || recs.some(x => x.id !== nx.id && x.mrfNo === nx.mrfNo)) nx.mrfNo = plcNext('mrf', recs); });
     PLC.tab = 6; renderPlc(); return;
   }
   const psrOk = need => { plcReadPsr(r); delete r.psr.noDraft;
@@ -2832,21 +2842,21 @@ async function plcSurplusShow(recs, inStore){
     lines.push({r, i, it, need, m: plcSurplusMatch(it.desc, S.rows)}); }));
   const hit = lines.filter(l => l.m.length), full = hit.filter(l => l.m[0].avail >= l.need - 1e-9);
   const cell = (l, c) => `<div class="pl-spm"><span class="${c.avail >= l.need - 1e-9 ? 'ok' : 'part'}">${c.avail >= l.need - 1e-9 ? '✓ enough' : 'partly'}</span> <b>${esc(c.sheet)}</b>: ${esc(c.desc)} — <b>${mtoQ(c.avail)} ${esc(c.unit || '')}</b> available${c.score < 0.75 ? ' <span class="faint">(check match)</span>' : ''}
-    ${inStore && PLC_ED() ? ` <button class="btn sm" data-spuse="${l.i}" data-spq="${Math.min(c.avail, num(l.it.qty))}" data-spfrom="${esc(c.sheet + ' — ' + c.desc)}">Use ${mtoQ(Math.min(c.avail, num(l.it.qty)))}</button>` : ''}</div>`;
+    ${inStore && PLC_ED() ? ` <button class="btn sm" data-spuse="${l.i}" data-spq="${Math.min(c.avail, num(l.it.qty))}" data-spfrom="${esc(c.sheet + ' — ' + c.desc)}" data-spsheet="${esc(c.sheet)}" data-spdesc="${esc(c.desc)}" data-spunit="${esc(c.unit || '')}">Use ${mtoQ(Math.min(c.avail, num(l.it.qty)))}</button>` : ''}</div>`;
   $('#plDlgB').innerHTML = PLC_CSS + `<div id="plc-sp"><p class="pl-spsum">${lines.length} item line${lines.length === 1 ? '' : 's'} checked · <b>${hit.length}</b> with matching surplus · <b>${full.length}</b> can be fully covered.
       Surplus = stock already <b>received</b>, minus what each package's own MTO uses, minus what the ledger has issued and what other items have reserved.</p>
     ${lines.length ? `<div class="pl-tw"><table class="pl-t"><thead><tr><th>Package</th><th>Item asked for</th><th class="n">Qty</th><th>Matching surplus stock</th></tr></thead><tbody>
       ${lines.sort((a, b) => b.m.length - a.m.length).map(l => `<tr><td class="mono" style="white-space:nowrap">${esc(plcRef(l.r))}</td><td>${esc(l.it.desc)}</td><td class="n">${mtoQ(l.need)} ${esc(l.it.unit || '')}</td>
         <td>${l.m.length ? l.m.map(c => cell(l, c)).join('') : '<span class="faint">No match — buy it</span>'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="note">No items to check.</div>'}
-    <p class="faint" style="font-size:12px;margin:10px 0 0">${inStore ? '<b>Use</b> puts the quantity in the <b>Surplus available</b> column and notes where it comes from. ' : ''}To record the actual transfer between packages, issue it from the Surplus box in Procurement — the ledger keeps the stock figures right.</p></div>`;
+    <p class="faint" style="font-size:12px;margin:10px 0 0">${inStore ? '<b>Use</b> puts the quantity in the <b>Surplus available</b> column and links the line to that ledger stock: Matco’s <b>Confirm</b> reserves it in the Surplus Ledger, and the MRF raised by PE issues it (deducted). Cancelling or returning the PSR before the MRF releases it. ' : ''}Surplus typed in by hand (e.g. from another project / contract) is not taken from the ledger — note where it comes from in Remarks.</p></div>`;
   $('#plDlgF').innerHTML = '<button class="btn" id="plDlgL">Open Surplus Ledger</button><button class="btn primary" id="plDlgX">Close</button>';
   $('#plDlgX').onclick = () => d.close();
   $('#plDlgL').onclick = () => { d.close(); PR_TAB = 'ledger'; go('proc'); };
   $('#plDlgB').querySelectorAll('[data-spuse]').forEach(b => b.onclick = () => {
     const inp = document.querySelector('#plc [data-sk="' + b.dataset.spuse + '"]'); if(!inp){ toast('Open the Store Verification step to use surplus.'); return; }
-    inp.value = +(+b.dataset.spq).toFixed(2); const n = document.querySelector('#plc [data-skr="' + b.dataset.spuse + '"]') || document.querySelector('#plc [data-pv="sNote"]');
-    if(n){ const t = 'Surplus: ' + inp.value + ' from ' + b.dataset.spfrom; n.value = n.value ? n.value + '; ' + t : t; }
-    plcCalc(); b.textContent = '✓ Used'; b.disabled = true; toast('Put in the Surplus available column — press Confirm to save the Matco check.', 5000);
+    inp.value = +(+b.dataset.spq).toFixed(2); Object.assign(inp.dataset, {spsheet: b.dataset.spsheet, spdesc: b.dataset.spdesc, spunit: b.dataset.spunit, spq: b.dataset.spq}); const n = document.querySelector('#plc [data-skr="' + b.dataset.spuse + '"]') || document.querySelector('#plc [data-pv="sNote"]');
+    if(n){ const t = 'Ledger surplus from ' + (b.dataset.spsheet || b.dataset.spfrom); n.value = n.value ? n.value + '; ' + t : t; }
+    plcCalc(); b.textContent = '✓ Used'; b.disabled = true; toast('Put in the Surplus available column — Confirm reserves it in the Surplus Ledger; the MRF issues it.', 6000);
   });
 }
 
@@ -5621,12 +5631,13 @@ function renderProcurement(){
       </tbody></table></div>${!list.length ? '<div class="note">Every received line has its DO, MRIR, MCI and received date. ✓</div>' : ''}<div class="more">${OPS ? 'Click an item to open it in Materials and fill in the missing fields.' : 'Click an item to open it in Materials (view only).'}</div></div>`;
   } else {
     if(!MTO_LOADED) mtoLoad();
-    const L = (MTO && MTO.issues) || [];
+    const L = ((MTO && MTO.issues) || []).concat(plcSpUses('issued').map(u => ({id: '', psr: true, at: u.r.store.mrf.at, fromSheet: u.sheet, fromDesc: u.desc, toSheet: plcRef(u.r) + (u.r.mrfNo ? ' · MRF ' + u.r.mrfNo : ''), toDesc: u.it.desc, qty: u.q, unit: u.unit, by: u.r.store.mrf.by, note: 'Issued through the MRF (Procurement Lifecycle)'})))
+      .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
     html += `<div class="head"><div><h2>Surplus Ledger</h2><p>Surplus stock issued from one package to another. Each issue reduces the leftover in the Surplus box (Procurement → Material Reconciliation) and counts as received for the package that got it, so the same stock is not offered twice. ${OPS ? 'Record an issue with the <b>Issue</b> button next to a match in the Surplus box.' : 'View only \u2014 Admin records the issues.'}</p></div>
       ${OPS ? `<div class="row-btns">${MTO && MTO_DIRTY ? '<button class="btn primary" id="ledSave">Save to Sheet</button>' : ''}<button class="btn" id="ledGo">Open Surplus box</button></div>` : ''}</div>${surplusToIssueHtml()}${surplusAvailHtml()}
       <div class="box"><div class="tw"><table class="grid"><thead><tr><th>Date</th><th>From</th><th>To</th><th title="Notification numbers that need this item (from the MTO of the receiving package)">NN</th><th class="n">Qty</th><th>By</th><th>Note</th>${OPS ? '<th></th>' : ''}</tr></thead><tbody>
       ${L.slice().reverse().map(i => `<tr><td style="white-space:nowrap">${esc(String(i.at || '').slice(0, 10))}</td><td style="min-width:200px"><b>${esc(i.fromSheet)}</b> · ${esc(i.fromDesc)}</td><td style="min-width:200px"><b>${esc(i.toSheet)}</b> · ${esc(i.toDesc)}</td><td style="white-space:nowrap;font-size:12.5px">${mtoNNhtml(mtoNN(i.toSheet, i.toDesc))}</td>
-        <td class="n" style="white-space:nowrap"><b>${mtoQ(i.qty)}</b> ${esc(i.unit || '')}</td><td>${esc(i.by || '')}</td><td>${esc(i.note || '')}</td>${OPS ? `<td><button class="btn sm" data-ledel="${esc(i.id)}" title="Remove this entry (e.g. recorded by mistake)">Remove</button></td>` : ''}</tr>`).join('')}
+        <td class="n" style="white-space:nowrap"><b>${mtoQ(i.qty)}</b> ${esc(i.unit || '')}</td><td>${esc(i.by || '')}</td><td>${esc(i.note || '')}</td>${OPS ? (i.psr ? '<td><span class="faint" style="font-size:11.5px" title="Change it in Procurement Lifecycle — cancel the PSR or redo the store check">via PSR</span></td>' : `<td><button class="btn sm" data-ledel="${esc(i.id)}" title="Remove this entry (e.g. recorded by mistake)">Remove</button></td>`) : ''}</tr>`).join('')}
       </tbody></table></div>${!L.length ? `<div class="note">${MTO ? 'No surplus issued yet.' : 'Import the survey MTO first (Procurement → Material Reconciliation) — the ledger is kept with it.'}</div>` : ''}</div>`;
   }
   el.innerHTML = html; prWire(el); surplusAvailWire(el);
@@ -5677,6 +5688,9 @@ function surplusAvailable(){
   const all = mtoAll(); if(!all) return null;
   const pool = mtoSurplusPool(all), needs = mtoSurplusNeeds(all, pool), left = new Map(pool.map(p => [p, p.avail])), res = new Map(pool.map(p => [p, []]));
   const remarkOnly = [], partial = [];
+  if(typeof PLC !== 'undefined' && !PLC.loaded && !PLC.busy && STAFF) plcLoad().then(() => { if(VIEW === 'proc') renderProcurement(); });
+  plcSpUses('reserved').forEach(u => { let rem = u.q; pool.filter(p => p.sheet === u.sheet && mtoNorm(p.it.desc) === mtoNorm(u.desc)).forEach(p => { if(rem <= 1e-9) return; const av = left.get(p) || 0, q = Math.min(av, rem); if(q <= 1e-9) return;
+    left.set(p, av - q); rem -= q; res.get(p).push({sheet: plcRef(u.r) + ' (PSR, reserved)', desc: u.it.desc, q, why: 'psr', nn: []}); }); });
   needs.forEach(n => { let rem = n.rem; const take = [];
     n.cands.forEach(c => { if(rem <= 1e-9) return; const av = left.get(c) || 0; if(av <= 1e-9) return; const q = Math.min(av, rem); take.push({c, q}); rem -= q; });
     const found = rem <= 1e-9;
@@ -5760,8 +5774,10 @@ function spWireColl(el){
 function surplusAvailWire(el){ spWireColl(el); const b = el.querySelector('#spAvOnly'); if(b) b.onclick = () => { SP_AV_ONLY = !SP_AV_ONLY; renderProcurement(); };
   const q = el.querySelector('#spQ'); if(q){ q.oninput = () => { SP_Q = q.value; spApplySearch(el); }; spApplySearch(el); } }
 /* ---- surplus ledger helpers (entries live in MTO.issues, saved with the MTO) ---- */
-function mtoIssued(sheet, desc, dir){ if(!MTO || !MTO.issues) return 0; const k = mtoNorm(desc);
-  return MTO.issues.filter(i => dir === 'from' ? i.fromSheet === sheet && mtoNorm(i.fromDesc) === k : i.toSheet === sheet && mtoNorm(i.toDesc) === k).reduce((a, i) => a + num(i.qty), 0); }
+function mtoIssued(sheet, desc, dir){ const k = mtoNorm(desc);
+  const P = dir === 'from' ? plcSpUses('issued').filter(u => u.sheet === sheet && mtoNorm(u.desc) === k).reduce((a, u) => a + u.q, 0) : 0;
+  if(!MTO || !MTO.issues) return P;
+  return P + MTO.issues.filter(i => dir === 'from' ? i.fromSheet === sheet && mtoNorm(i.fromDesc) === k : i.toSheet === sheet && mtoNorm(i.toDesc) === k).reduce((a, i) => a + num(i.qty), 0); }
 /* Notification numbers (NN) behind an MTO line: the MTO "per notification" columns of the line(s) that make up this need */
 function mtoNN(sheetName, desc){
   const sh = MTO && (MTO.sheets || []).find(x => x.name === sheetName); if(!sh || !desc) return [];
