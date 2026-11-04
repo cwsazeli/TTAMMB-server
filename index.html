@@ -847,7 +847,7 @@ body.ex-pres .ex-nav{display:flex;position:fixed;left:50%;bottom:20px;transform:
     <button class="nav" data-view="aif" style="--nav-c:var(--c-aif)"><span class="sw">🔍</span>Construction AIF Findings<span class="st" data-st="aif">…</span></button>
     <button class="nav" data-view="mat" style="--nav-c:var(--c-mat)"><span class="sw">📦</span>Materials Status<span class="st" data-st="mat">…</span></button>
     <button class="nav" data-view="mddr" style="--nav-c:#2aa5a0" title="Master Deliverable Document Register"><span class="sw">📑</span>MDDR Status</button>
-    <button class="nav staff-only" data-view="plc" style="--nav-c:#E07B39" title="One record per job package: MRF → store check → PSR 3-tier → RFQ 3-bid matrix → management LOA → official PO"><span class="sw">✓</span>Procurement Lifecycle</button>
+    <button class="nav staff-only" data-view="plc" style="--nav-c:#E07B39" title="One record per job package: PSR → Matco surplus check → PSR review (balance to buy) + MRF for surplus items → RFQ 3-bid matrix → management LOA → official PO"><span class="sw">✓</span>Procurement Lifecycle</button>
     <button class="nav ops-only" data-view="est" style="--nav-c:#19C985" title="Work Order Proposal estimator — Schedules 1–9 rates and live costing (Admin only)"><span class="sw">🧮</span>WOP Estimator</button>
     <div class="sec">Admin</div>
     <button class="nav" data-view="activity"><span class="glyph">≡</span>Activity log</button>
@@ -1451,7 +1451,7 @@ const PLC_KEY = 'ttammhub_plc';
 const PLC_FIELDS = ['id','mrfNo','title','desc','wopNo','site','charge','reqBy','reqDate','needBy','priority','stage','status','stageAt','retNote','items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos','psigs','pstamps','createdAt','createdBy','updatedAt','updatedBy'];
 const PLC_JSON = ['items','store','psr','rfq','loa','po','log','cfg','sigs','stamps','tsigs','tstamps','pos','psigs','pstamps'];
 const PLC_STEPS = [
-  {t: 'MRF Submission', s: 'Site / Workshop'},
+  {t: 'PSR Submission', s: 'PE'},
   {t: 'Store Verification', s: 'Stock check'},
   {t: 'PSR Review', s: 'PE → OTL → PM → Director'},
   {t: 'RFQ 3-Bid Matrix', s: 'Vendors evaluated'},
@@ -1488,6 +1488,10 @@ const plcDays = s => { const d = new Date(s); return isNaN(d) ? null : Math.max(
 const plcClosed = r => r.status === 'cancelled' || r.status === 'fromStore' || r.stage >= 6;
 const plcNet = it => Math.max(0, num(it.qty) - num(it.stock));
 const plcBuyItems = r => r.items.filter(it => clean(it.desc) && plcNet(it) > 0);
+/* New flow: PSR first → Matco checks surplus → PSR review buys only the balance, and PE raises an MRF for the surplus lines (kept in r.store.mrf, number in r.mrfNo) */
+const plcSurItems = r => r.items.filter(it => clean(it.desc) && num(it.stock) > 0);
+const plcMrfDone = r => !!(r.store && r.store.mrf && r.store.mrf.at);
+const plcMrfPending = r => !!r.direct && r.status !== 'cancelled' && !!(r.store && r.store.at) && plcSurItems(r).length > 0 && !plcMrfDone(r);
 function plcBids(r){
   const T = x => plcBidParts(r, x).total, b = (r.rfq.bids || []).filter(x => clean(x.supplier) && T(x) > 0), ok = b.filter(x => x.ok !== false);
   const low = ok.reduce((m, x) => !m || T(x) < T(m) ? x : m, null);
@@ -1543,7 +1547,7 @@ const plcValue = r => plcIsSplit(r) ? (r.stage >= 6 ? plcPoNet(r) : plcSplitTota
 function plcTierNext(r){ for(const [k] of PLC_TIERS){ if(!(r.psr.t[k] && r.psr.t[k].at)) return k; } return ''; }
 function plcState(r){
   if(r.status === 'cancelled') return {k: 'x', t: 'Cancelled'};
-  if(r.status === 'fromStore') return {k: 'ok', t: 'Issued from store'};
+  if(r.status === 'fromStore') return plcMrfPending(r) ? {k: 'warn', t: 'All from surplus — awaiting MRF (PE)'} : {k: 'ok', t: 'Issued from store'};
   if(r.stage >= 6) return {k: 'ok', t: plcIsSplit(r) ? plcSplitBids(r).length + ' POs issued (split)' : 'PO issued'};
   if(r.stage === 5 && plcIsSplit(r) && r.status !== 'returned' && r.status !== 'draft'){ const n = plcSplitBids(r).length; return {k: 'info', t: 'Awaiting PO — ' + plcPoIssued(r).length + '/' + n + ' issued'}; }
   if(r.status === 'draft') return {k: 'draft', t: r.direct ? 'Draft PSR' : 'Draft MRF'};
@@ -1555,8 +1559,9 @@ function plcState(r){
 }
 const plcPill = r => { const s = plcState(r); return `<span class="pl-pill ${s.k}">${esc(s.t)}</span>`; };
 function plcStepSub(r, i){
-  if(i === 0) return r.reqBy || (r.direct ? 'Direct PSR' : 'Site / Workshop');
-  if(i === 1) return r.store.at ? (r.store.by ? 'By ' + r.store.by : 'Checked') : 'Stock check';
+  if(i === 0) return r.reqBy || (r.direct ? 'PE' : 'Site / Workshop');
+  if(i === 1) return r.store.at ? (r.store.by ? 'Matco · ' + r.store.by : 'Checked') : 'Matco · surplus check';
+  if(i === 6) return !r.direct ? 'Not used' : plcMrfDone(r) ? (r.mrfNo || 'Raised') + ' · ' + (r.store.mrf.by || '') : r.store.at ? (plcSurItems(r).length ? plcSurItems(r).length + ' surplus line(s) · PE' : 'No surplus') : 'Surplus items · PE';
   if(i === 2) return PLC_TIERS.map(([k, l]) => l + (r.psr.t[k] && r.psr.t[k].at ? ' ✓' : '')).join(' → ');
   if(i === 3){ const n = plcBids(r).b.length, g = plcTcbSg(r), d = PLC_TCB_SG.filter(t => g[t[0]] && g[t[0]].at).length; return (n ? n + ' vendor' + (n === 1 ? '' : 's') : 'Vendors evaluated') + (d ? ' · signed ' + d + '/6' : ''); }
   if(i === 4) return r.loa.at ? 'Signed — ' + (r.loa.by || '') : r.stage === 4 ? 'Enroute sign-off' : 'Sign-off';
@@ -1630,6 +1635,7 @@ function plcNeed(a, r, d){
   if(a === 'savePsr' || a === 'submitPsr') return ['PE'];
   if(a === 'return') return r.stage === 1 ? ['MATCO'] : r.stage === 2 ? ['PE', 'OTL', 'PM', 'PD', 'MD'] : r.stage === 3 ? ['PROC'] : r.stage === 4 ? ['PD', 'MD'] : r.stage === 5 ? ['PROC'] : PLC_ANY;
   if(a === 'storeOk') return ['MATCO'];
+  if(a === 'smrfOk') return ['PE'];
   if(a === 'tierOk') return {pe: ['PE'], cc: ['OTL'], pm: ['PM'], dir: ['PD', 'MD']}[d.tier] || ['ADMIN'];
   if(a === 'saveRfq' || a === 'rfqOk') return ['PROC'];
   if(a === 'tcbSign') return [(PLC_TCB_SG.find(t => t[0] === d.tier) || [])[3] || 'ADMIN'];
@@ -1718,8 +1724,8 @@ function plcMatch(r, st){
 /* Tabs — same pattern as the other modules (header block + tab bar). Each tab is one part of the lifecycle. */
 const PLC_VIEWS = [
   {k: 'dash', ic: '📊', t: 'Dashboard & Status'},
-  {k: 'mrf', ic: '📝', t: 'Material Requisitions (MRF)', note: 'Every requisition raised, at any stage. Use the filter to narrow down.'},
-  {k: 'psr', ic: '🏬', t: 'Store & PSR 3-Tier', note: 'PSRs raised directly (draft / returned), and packages waiting for the store counter-check or the final PSR review by PE → OTL → PM → Director.', m: r => !plcClosed(r) && (r.stage === 1 || r.stage === 2 || (r.direct && r.stage === 0))},
+  {k: 'mrf', ic: '📝', t: 'All Requisitions', note: 'Every requisition raised, at any stage. Use the filter to narrow down.'},
+  {k: 'psr', ic: '🏬', t: 'Store & PSR 3-Tier', note: 'PSRs in draft / returned, packages waiting for the Matco surplus check, the PSR review by PE → OTL → PM → Director, or an MRF for the surplus items.', m: r => (!plcClosed(r) && (r.stage === 1 || r.stage === 2 || (r.direct && r.stage === 0))) || plcMrfPending(r)},
   {k: 'rfq', ic: '⚖️', t: 'RFQ 3-Supplier Sourcing', note: 'PSR approved — collect at least three quotations and recommend a supplier.', m: r => !plcClosed(r) && r.stage === 3},
   {k: 'loa', ic: '✍️', t: 'Management LOA', note: 'Recommended supplier and amount waiting for management sign-off.', m: r => !plcClosed(r) && r.stage === 4},
   {k: 'po', ic: '📄', t: 'Purchase Order (Official)', note: 'LOA signed — PO to be issued, and every PO already issued.', m: r => r.status !== 'cancelled' && r.stage >= 5}
@@ -1735,11 +1741,11 @@ function plcTabCount(k){
 /* Two entry routes side by side: MRF → Store counter-check → final PSR, or a PSR raised directly; both go on to RFQ → LOA → PO */
 function plcFlow(cls, nodes, seg){
   const P = (d, on) => `<path d="${d}"${on ? ' class="on"' : ''}/>`;
-  const segs = [['M50 19H100', seg.m], ['M50 119H100V19', seg.p], ['M100 19H150', seg.j], ['M150 19H250', seg.b], ['M250 19H350', seg.c], ['M350 19H450', seg.d], ['M450 19H550', seg.e]];
+  const segs = [['M50 19H150', seg.j], ['M150 19H250', seg.b], ['M200 19V119H250', seg.m], ['M250 119H300V19', seg.p], ['M250 19H350', seg.c], ['M350 19H450', seg.d], ['M450 19H550', seg.e]];
   const paths = segs.filter(x => !x[1]).map(x => P(x[0], false)).join('') + segs.filter(x => x[1]).map(x => P(x[0], true)).join('');
   return `<div class="${cls} pl-flowg"><svg class="pl-fsvg" viewBox="0 0 600 200" preserveAspectRatio="none" aria-hidden="true">${paths}</svg>
     ${nodes.map(n => n.h.replace('<button ', `<button style="grid-column:${n.c};grid-row:${n.r}" `)).join('')}
-    <div class="pl-fnote">Raise an MRF or a PSR — both go through the store counter-check, then the final PSR review.</div></div>`;
+    <div class="pl-fnote">PSR first → Matco checks the surplus → only the balance is bought (PSR review) · PE raises an MRF for the surplus items.</div></div>`;
 }
 const plcFlowPos = [[1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1]];
 /* Running number box (same idea as the WOP running number): latest, next, how many in the series, numbers skipped, other series */
@@ -1789,12 +1795,12 @@ function plcHead(){
     Any step can be returned to the requester with a reason. <b>Passwords:</b> MRF — any role · store check — Matco · PSR: Requested — PE · Reviewed — OTL · Verified — PM · Approved — PD or OD/MD · TCBE: fill in &amp; Prepared — Procurement · Check — CC · Review — PE · Verified — PM · Appraised — PD · Approved — OD/MD · LOA — PD or OD/MD · PO — Procurement, PD or OD/MD · cancel, delete and settings — Admin. The Admin password works for every step. Each change is written to the Activity log with your name and role.</div>` : ''}
   <div class="tabs">${tabs}</div>`;
 }
-const plcRef = r => r.mrfNo || r.psr.no || (r.direct ? 'PSR' : 'MRF');
+const plcRef = r => r.direct ? (r.psr.no || r.mrfNo || 'PSR') : (r.mrfNo || r.psr.no || 'MRF');
 const PLC_COLS = '<tr><th>Job package / material description</th><th>Ref (MRF / PSR)</th><th>Charge code / site</th><th>Stage</th><th>Supplier</th><th>Need by</th><th class="n">Value</th><th></th></tr>';
 function plcRow(r){
   const td = todayISO(), a = plcAward(r), d = plcDays(r.stageAt || r.updatedAt), lateR = !plcClosed(r) && r.needBy && r.needBy < td, po = r.stage >= 6 && r.status !== 'cancelled';
   return `<tr data-popen="${esc(r.id)}"><td class="pl-pk"><b>${esc(r.title || '(untitled)')}</b>${r.priority && r.priority !== 'Normal' ? ` <span class="pl-pri ${r.priority === 'Critical' ? 'c' : ''}">${esc(r.priority)}</span>` : ''}<span>${esc((r.desc || r.items.map(i => i.desc).filter(Boolean).join(', ')).slice(0, 140))}</span></td>
-    <td class="mono">${esc(r.mrfNo || r.psr.no || '—')}${r.direct ? '<span class="pl-sub">Direct PSR</span>' : ''}${r.wopNo ? `<span class="pl-sub">WOP ${esc(r.wopNo)}</span>` : ''}${plcPoNos(r).length ? `<span class="pl-sub mono">PO ${esc(plcPoNos(r).join(', '))}</span>` : ''}</td>
+    <td class="mono">${esc((r.direct ? r.psr.no || r.mrfNo : r.mrfNo || r.psr.no) || '—')}${r.direct && r.mrfNo && r.psr.no ? `<span class="pl-sub">MRF ${esc(r.mrfNo)} (surplus)</span>` : ''}${plcMrfPending(r) ? '<span class="pl-sub">MRF to raise (surplus)</span>' : ''}${r.wopNo ? `<span class="pl-sub">WOP ${esc(r.wopNo)}</span>` : ''}${plcPoNos(r).length ? `<span class="pl-sub mono">PO ${esc(plcPoNos(r).join(', '))}</span>` : ''}</td>
     <td>${r.charge || r.site ? `<span class="pl-cc">${esc([r.charge, r.site].filter(Boolean).join(' · '))}</span>` : '<span class="faint">—</span>'}</td>
     <td>${plcPill(r)}${!plcClosed(r) && d !== null ? `<span class="pl-sub">${d} day${d === 1 ? '' : 's'} at this step</span>` : ''}</td>
     <td>${plcIsSplit(r) && plcSplitBids(r).length ? esc(plcSupTxt(r)) + `<span class="pl-sub">split award · ${plcSplitBids(r).length} suppliers</span>` : a ? esc(a.supplier) + (a.ref ? `<span class="pl-sub mono">${esc(a.ref)}</span>` : '') : '<span class="faint">—</span>'}</td>
@@ -1806,7 +1812,7 @@ const plcSort = (a, b) => (plcClosed(a) - plcClosed(b)) || (({Critical: 0, Urgen
 const plcQ = r => { const q = PLC.f.q.trim().toLowerCase(); return !q || [r.mrfNo, r.title, r.desc, r.wopNo, r.site, r.charge, r.reqBy, r.psr.no, r.rfq.no, r.po.no, plcPoNos(r).join(' '), plcSupTxt(r), r.items.map(i => i.desc).join(' ')].join(' ').toLowerCase().includes(q); };
 function plcTable(list, empty){
   return list.length ? `<div class="pl-tw"><table class="pl-t"><thead>${PLC_COLS}</thead><tbody>${list.map(plcRow).join('')}</tbody></table></div>`
-    : `<div class="note empty-st"><span class="es-i">🧾</span><b>${empty}</b>${!PLC.recs.length ? (PLC_ED() ? (PLC.view === 'mrf' ? 'Press <b>＋ Raise New MRF</b> to start the first job package.' : 'Go to the <b>Material Requisitions (MRF)</b> tab and press <b>＋ Raise New MRF</b>.') : 'Packages appear here once an MRF is raised.') : ''}</div>`;
+    : `<div class="note empty-st"><span class="es-i">🧾</span><b>${empty}</b>${!PLC.recs.length ? (PLC_ED() ? (PLC.view === 'mrf' || PLC.view === 'psr' ? 'Press <b>＋ Raise New PSR</b> to start the first job package.' : 'Go to the <b>All Requisitions</b> tab and press <b>＋ Raise New PSR</b>.') : 'Packages appear here once a PSR is raised.') : ''}</div>`;
 }
 function renderPlc(){
   const el = $('#plc'); if(!el) return;
@@ -1828,13 +1834,15 @@ function renderPlc(){
     const kpi = (ic, cls, l, v, s, go) => `<button class="pl-kpi" data-pview="${go}"><span class="pl-ki ${cls}">${ic}</span><span><span class="l">${l}</span><span class="v">${v}</span><span class="s">${s}</span></span></button>`;
     const n0 = (dir) => act.filter(r => r.stage === 0 && !!r.direct === dir), sub0 = l => { const d = l.filter(r => r.status === 'draft').length, x = l.length - d; return l.length ? d + ' draft · ' + x + ' returned' : ''; };
     const nd = (n, view, t, sm, c, rw) => ({h: `<button class="pl-pstep${n ? ' has' : ''}" data-pview="${view}"><span class="c">${n}</span><b>${t}</b><small>${sm}</small></button>`, c, r: rw});
-    const pipe = plcFlow('pl-pipe', [nd(n0(false).length, 'mrf', 'MRF Submission', sub0(n0(false)) || 'Site / Workshop', 1, 1), nd(n0(true).length, 'psr', 'PSR Submission', sub0(n0(true)) || 'Direct PSR', 1, 2)]
-      .concat(PLC_STEPS.slice(1).map((s, k) => nd(at(k + 1), goV(k + 1), s.t, k + 1 === 2 ? 'Final PSR · PE → OTL → PM → DIR' : s.s, k + 2, 1))), {});
+    const mrfP = R.filter(plcMrfPending), all0 = act.filter(r => r.stage === 0);
+    const pipe = plcFlow('pl-pipe', [nd(all0.length, 'psr', 'PSR Submission', sub0(all0) || 'PE', 1, 1)]
+      .concat(PLC_STEPS.slice(1).map((s, k) => nd(at(k + 1), goV(k + 1), s.t, k + 1 === 1 ? 'Matco · surplus check' : k + 1 === 2 ? 'Balance · PE → OTL → PM → DIR' : s.s, k + 2, 1)))
+      .concat([nd(mrfP.length, 'psr', 'MRF Submission', mrfP.length ? 'surplus items · PE to raise' : 'Surplus items · PE', 3, 2)]), {});
     const pr = act.filter(plcQ).sort(plcSort);
     body = `${pipe}
     <div class="pl-kpis">
-      ${kpi('▤', 'b', 'Active requisitions', act.length + ' MRF' + (act.length === 1 ? '' : 's'), nDraft + nRet ? nDraft + ' draft · ' + nRet + ' returned' : 'in progress', 'mrf')}
-      ${kpi('⧗', 'y', 'Pending verification', at(1) + at(2) + ' package' + (at(1) + at(2) === 1 ? '' : 's'), at(1) + ' store check · ' + at(2) + ' PSR review', 'psr')}
+      ${kpi('▤', 'b', 'Active requisitions', act.length + ' PSR' + (act.length === 1 ? '' : 's'), nDraft + nRet ? nDraft + ' draft · ' + nRet + ' returned' : 'in progress', 'mrf')}
+      ${kpi('⧗', 'y', 'Pending verification', at(1) + at(2) + mrfP.length + ' package' + (at(1) + at(2) + mrfP.length === 1 ? '' : 's'), at(1) + ' surplus check · ' + at(2) + ' PSR review · ' + mrfP.length + ' MRF to raise', 'psr')}
       ${kpi('✍', 'o', 'Awaiting LOA', at(4) + ' package' + (at(4) === 1 ? '' : 's'), loaV ? plcRM(loaV) + ' to sign' : 'nothing to sign', 'loa')}
       ${kpi('RM', 'g', 'PO commitment (net)', plcRM(commit), done.length + ' PO' + (done.length === 1 ? '' : 's') + ' issued', 'po')}
       ${kpi('!', 'r', 'Past need-by date', late.length + ' package' + (late.length === 1 ? '' : 's'), 'still open', 'mrf')}
@@ -1842,7 +1850,7 @@ function renderPlc(){
     <div class="box pl-box"><div class="pl-bh"><h3>☰ Priority work packages in progress</h3>${search}</div>${plcTable(pr, R.length ? 'Nothing in progress' : 'No requisitions yet')}</div>`;
   } else if(V.k === 'mrf'){
     const cnt = k => R.filter(r => plcMatch(r, k)).length, list = R.filter(r => plcMatch(r, PLC.f.st) && plcQ(r)).sort(plcSort);
-    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p></div><div class="pl-bhr">${search}${PLC_ED() ? '<button class="btn" data-pa="newPsr">＋ Raise New PSR</button><button class="btn primary" data-pa="new">＋ Raise New MRF</button>' : ''}</div></div>
+    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p></div><div class="pl-bhr">${search}${PLC_ED() ? '<button class="btn primary" data-pa="newPsr">＋ Raise New PSR</button>' : ''}</div></div>
       <div class="chips pl-chips">${PLC_FILTERS.map(([k, l]) => `<button class="chip${PLC.f.st === k ? ' on' : ''}" data-pf="${k}" aria-pressed="${PLC.f.st === k}">${l} <b>${cnt(k)}</b></button>`).join('')}</div>
       ${plcTable(list, R.length ? 'Nothing matches this filter' : 'No requisitions yet')}</div>`;
   } else {
@@ -1857,7 +1865,7 @@ function renderPlc(){
 }
 function plcCopy(){
   const R = PLC.recs, act = R.filter(r => !plcClosed(r)), at = i => act.filter(r => r.stage === i).length, done = R.filter(r => r.stage >= 6 && r.status !== 'cancelled');
-  const t = ['Procurement Lifecycle — ' + todayISO(), 'Active MRFs: ' + act.length, 'Store check: ' + at(1) + ' · PSR review: ' + at(2), 'RFQ: ' + at(3), 'Awaiting LOA: ' + at(4), 'PO to issue: ' + at(5),
+  const t = ['Procurement Lifecycle — ' + todayISO(), 'Active requisitions: ' + act.length, 'Surplus check: ' + at(1) + ' · PSR review: ' + at(2) + ' · MRF to raise: ' + R.filter(plcMrfPending).length, 'RFQ: ' + at(3), 'Awaiting LOA: ' + at(4), 'PO to issue: ' + at(5),
     'POs issued: ' + done.length + ' — ' + plcRM(done.reduce((s, r) => s + plcPoNet(r), 0)) + ' (net)'].join('\n');
   (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Summary copied ✓')).catch(() => prompt('Copy the summary:', t));
 }
@@ -1880,12 +1888,14 @@ function plcDetail(el){
   const node = (i, t, na, c, rw) => { const dn = !na && (r.stage > i || (r.status === 'fromStore' && i <= 1)), now = !na && r.stage === i && !plcClosed(r);
     return {h: `<button class="pl-step${na ? ' na' : ''}${dn ? ' done' : ''}${now ? ' now' : ''}${now && r.status === 'returned' ? ' ret' : ''}${tab === i && !na ? ' sel' : ''}" data-ptab="${i}"><span class="c">${na ? '–' : dn ? '✓' : i + 1}</span><b>${t}</b><small>${na ? 'Not used' : esc(plcStepSub(r, i))}</small></button>`, c, r: rw}; };
   const fs = r.status === 'fromStore', go1 = r.stage >= 1 && r.status !== 'cancelled' || r.stage >= 1;
-  const steps = plcFlow('pl-steps', [node(0, 'MRF Submission', !!r.direct, 1, 1), node(0, 'PSR Submission', !r.direct, 1, 2)].concat(PLC_STEPS.slice(1).map((s, k) => node(k + 1, s.t, false, k + 2, 1))),
-    {m: !r.direct && r.stage >= 1, p: !!r.direct && r.stage >= 1, j: r.stage >= 1, b: r.stage >= 2 && !fs, c: r.stage >= 3, d: r.stage >= 4, e: r.stage >= 5});
-  const body = [plcS0, plcS1, plcS2, plcS3, plcS4, plcS5][tab](r, plcCanEdit(r, tab));
+  const mN = (() => { const na = !r.direct, dn = plcMrfDone(r), now = plcMrfPending(r);
+    return {h: `<button class="pl-step${na ? ' na' : ''}${dn ? ' done' : ''}${now ? ' now' : ''}${tab === 6 && !na ? ' sel' : ''}" data-ptab="6"><span class="c">${na ? '–' : dn ? '✓' : 'M'}</span><b>MRF Submission</b><small>${esc(plcStepSub(r, 6))}</small></button>`, c: 3, r: 2}; })();
+  const steps = plcFlow('pl-steps', [node(0, r.direct ? 'PSR Submission' : 'MRF Submission', false, 1, 1)].concat(PLC_STEPS.slice(1).map((s, k) => node(k + 1, s.t, false, k + 2, 1))).concat([mN]),
+    {j: r.stage >= 1, b: r.stage >= 2 && !fs, m: !!r.direct && !!r.store.at && plcSurItems(r).length > 0, p: plcMrfDone(r), c: r.stage >= 3, d: r.stage >= 4, e: r.stage >= 5});
+  const body = (tab === 6 ? plcSM : [plcS0, plcS1, plcS2, plcS3, plcS4, plcS5][tab])(r, tab === 6 ? PLC_ED() && plcMrfPending(r) : plcCanEdit(r, tab));
   const a = plcAward(r), wopList = (DATA.wop && DATA.wop.records || []).filter(w => w.wopNo).slice(0, 800);
   el.innerHTML = PLC_CSS + plcHead() + `<div class="pl-dh"><button class="btn sm" data-pa="back">← Back to list</button>
-    <div class="pl-dt"><span class="mono">${esc(r.mrfNo || r.psr.no || (r.direct ? 'New PSR' : 'New MRF'))}</span><h2>${esc(r.title || (r.direct ? 'New purchase / service requisition' : 'New material requisition'))}</h2></div>${r.id ? plcPill(r) : ''}
+    <div class="pl-dt"><span class="mono">${esc((r.direct ? r.psr.no || r.mrfNo : r.mrfNo || r.psr.no) || (r.direct ? 'New PSR' : 'New MRF'))}</span><h2>${esc(r.title || (r.direct ? 'New purchase / service requisition' : 'New material requisition'))}</h2></div>${r.id ? plcPill(r) : ''}
     <div class="pl-acts">${r.stage >= 5 && r.status !== 'cancelled' ? `<button class="btn sm" data-ppo="${esc(r.id)}">📄 ${r.stage >= 6 ? 'PO document' : 'Preview PO'}</button>` : ''}${OPS && r.id && !plcClosed(r) ? '<button class="btn sm danger" data-pa="cancel">Cancel ' + (r.direct ? 'PSR' : 'MRF') + '</button>' : ''}${OPS && r.id ? '<button class="btn sm danger" data-pa="del" title="Delete this package and its history">🗑 Delete</button>' : ''}</div></div>
   ${r.status === 'returned' && r.retNote ? `<div class="note warn pl-ret">↩ <b>Returned:</b> ${esc(r.retNote)}</div>` : ''}
   ${r.status === 'cancelled' && r.retNote ? `<div class="note warn pl-ret">✕ <b>Cancelled:</b> ${esc(r.retNote)}</div>` : ''}
@@ -1894,7 +1904,7 @@ function plcDetail(el){
     <aside class="pl-side"><div class="box pl-card"><h4>Summary</h4><dl class="pl-dl">
       <dt>Charge code</dt><dd>${esc(r.charge || '—')}</dd><dt>Site</dt><dd>${esc(r.site || '—')}</dd><dt>WOP</dt><dd>${esc(r.wopNo || '—')}</dd>
       <dt>Requested by</dt><dd>${esc(r.reqBy || '—')}${r.reqDate ? ' · ' + fmtD(r.reqDate) : ''}</dd><dt>Need by</dt><dd>${r.needBy ? fmtD(r.needBy) : '—'}</dd>
-      <dt>PSR</dt><dd class="mono">${esc(r.psr.no || '—')}</dd><dt>RFQ</dt><dd class="mono">${esc(r.rfq.no || '—')}</dd><dt>Supplier</dt><dd>${plcIsSplit(r) ? esc(plcSupTxt(r) || '—') + (plcSplitBids(r).length ? ' <span class="faint">(split)</span>' : '') : a ? esc(a.supplier) : '—'}</dd>
+      <dt>PSR</dt><dd class="mono">${esc(r.psr.no || '—')}</dd>${r.direct ? `<dt>MRF (surplus)</dt><dd class="mono">${esc(r.mrfNo || (plcMrfPending(r) ? 'to raise' : '—'))}</dd>` : ''}<dt>RFQ</dt><dd class="mono">${esc(r.rfq.no || '—')}</dd><dt>Supplier</dt><dd>${plcIsSplit(r) ? esc(plcSupTxt(r) || '—') + (plcSplitBids(r).length ? ' <span class="faint">(split)</span>' : '') : a ? esc(a.supplier) : '—'}</dd>
       <dt>LOA</dt><dd class="mono">${esc(r.loa.no || '—')}</dd><dt>PO</dt><dd class="mono">${esc(plcPoNos(r).join(', ') || '—')}</dd><dt>Value</dt><dd><b>${plcValue(r) ? plcRM(plcValue(r)) : '—'}</b></dd></dl></div>
       <div class="box pl-card"><h4>History</h4>${r.log.length ? `<ol class="pl-log">${r.log.slice().reverse().map(l => `<li><span>${esc(plcDT(l.at))} · ${esc(l.by || '')}</span>${esc(l.t)}</li>`).join('')}</ol>` : '<p class="faint" style="margin:0;font-size:12.5px">Not saved yet.</p>'}</div></aside></div>
   <datalist id="plWops">${wopList.map(w => `<option value="${esc(w.wopNo)}">${esc(clean(w.wopTitle || '').slice(0, 80))}</option>`).join('')}</datalist>`;
@@ -1906,7 +1916,7 @@ const plcF = (k, l, v, ed, x) => `<label class="pl-fl${x && x.wide ? ' w' : ''}"
   : x && x.opts ? `<select data-pv="${k}"${plcRO(ed)}>${x.opts.map(o => `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`
   : `<input data-pv="${k}" type="${x && x.type || 'text'}" value="${esc(v)}"${x && x.list ? ` list="${x.list}"` : ''}${x && x.ph ? ` placeholder="${esc(x.ph)}"` : ''}${plcRO(ed)}>`}</label>`;
 const plcSH = (i, sub) => `<div class="pl-sh"><h3>${i + 1}. ${PLC_STEPS[i].t}</h3><p>${sub}</p></div>`;
-const plcWait = (r, i) => r.status === 'cancelled' ? '<div class="note">This MRF was cancelled.</div>' : r.status === 'fromStore' && i > 1 ? '<div class="note">Not needed — everything was issued from store.</div>' : r.stage < i ? `<div class="note">Waiting for step ${r.stage + 1} (${PLC_STEPS[r.stage].t}) to be completed first.</div>` : '';
+const plcWait = (r, i) => r.status === 'cancelled' ? '<div class="note">This MRF was cancelled.</div>' : r.status === 'fromStore' && i > 1 ? '<div class="note">Not needed — every item comes from surplus (see MRF Submission).</div>' : r.stage < i ? `<div class="note">Waiting for step ${r.stage + 1} (${PLC_STEPS[r.stage].t}) to be completed first.</div>` : '';
 const plcVal = k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); return e ? (e.type === 'checkbox' ? e.checked : clean(e.value)) : ''; };
 
 /* 1 — MRF */
@@ -1933,14 +1943,29 @@ function plcReadMrf(r){
 }
 /* 2 — Store */
 function plcS1(r, ed){
-  const w = plcWait(r, 1); if(w && r.stage < 1) return plcSH(1, 'The store checks what is already in stock.') + w;
-  return plcSH(1, 'The store enters what is already in stock. Only the balance goes forward to purchase.') + `
-  <div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th>Unit</th><th class="n">In store</th><th class="n">To purchase</th><th>Remarks</th></tr></thead><tbody>
+  const w = plcWait(r, 1); if(w && r.stage < 1) return plcSH(1, 'Matco checks which items are available from surplus.') + w;
+  return plcSH(1, 'Matco enters the surplus available for each item. Only the balance goes to the PSR review for purchase; PE then raises an MRF for the surplus items.') + `
+  <div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th>Unit</th><th class="n">Surplus available</th><th class="n">To purchase</th><th>Remarks</th></tr></thead><tbody>
     ${r.items.map((it, i) => `<tr data-si="${i}"><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td>${esc(it.unit)}</td>
       <td class="n">${ed ? `<input data-sk="${i}" type="number" min="0" step="any" class="n" value="${esc(it.stock || '')}" placeholder="0">` : esc(it.stock || '0')}</td><td class="n" data-net="${i}"><b>${plcNet(it)}</b></td><td class="pl-srem">${ed ? `<input data-skr="${i}" value="${esc(it.srem || '')}" placeholder="Storeman remark (optional)">` : esc(it.srem || '')}</td></tr>`).join('')}</tbody></table></div>
-  <div class="pl-form">${plcF('sBy', 'Verified by (store)', r.store.by || (ed ? hubUser() : ''), ed, {req: 1})}${plcF('sNote', 'Store remarks', r.store.note || '', ed, {wide: 1})}</div>
-  ${ed ? `<div class="pl-btns"><button class="btn" data-pa="return">↩ Return to requester</button><button class="btn" data-pa="spOne">♻ Check Surplus Ledger</button><span class="sp"></span><span class="pl-hint" id="plSHint"></span><button class="btn primary" data-pa="storeOk" id="plSBtn">Confirm → PSR</button></div>`
-    : r.store.at ? `<p class="pl-done">✓ Checked by <b>${esc(r.store.by || '')}</b> on ${plcDT(r.store.at)}${r.status === 'fromStore' ? ' — everything issued from store, MRF closed.' : ''}</p>` : w}`;
+  <div class="pl-form">${plcF('sBy', 'Verified by (Matco)', r.store.by || (ed ? hubUser() : ''), ed, {req: 1})}${plcF('sNote', 'Matco remarks / instruction', r.store.note || '', ed, {wide: 1})}</div>
+  ${ed ? `<div class="pl-btns"><button class="btn" data-pa="return">↩ Return to requester</button><button class="btn" data-pa="spOne">♻ Check Surplus Ledger</button><span class="sp"></span><span class="pl-hint" id="plSHint"></span><button class="btn primary" data-pa="storeOk" id="plSBtn">Confirm → PSR review + MRF</button></div>`
+    : r.store.at ? `<p class="pl-done">✓ Checked by <b>${esc(r.store.by || '')}</b> on ${plcDT(r.store.at)}${r.status === 'fromStore' ? ' — every item comes from surplus, nothing to purchase.' : ''}${r.direct && plcSurItems(r).length ? ` · ${plcSurItems(r).length} surplus line(s) → ${plcMrfDone(r) ? 'MRF <b>' + esc(r.mrfNo || '') + '</b> raised' : '<button class="pl-lnk" data-ptab="6">MRF to be raised by PE →</button>'}` : ''}</p>` : w}`;
+}
+/* M — MRF for the surplus items, raised by PE after the Matco check (runs beside the PSR review) */
+function plcSM(r, ed){
+  const sh = `<div class="pl-sh"><h3>MRF Submission — surplus items</h3><p>After Matco confirms the surplus, PE raises an MRF so these items are issued from store instead of bought. The rest of the PSR continues to the PSR review.</p></div>`;
+  if(!r.direct) return sh + '<div class="note">This package started with an MRF under the old flow — see step 1.</div>';
+  if(r.status === 'cancelled' && !plcMrfDone(r)) return sh + '<div class="note">This PSR was cancelled.</div>';
+  if(!r.store.at) return sh + '<div class="note">Waiting for the Matco surplus check (step 2) first.</div>';
+  const S = r.items.map((it, i) => ({it, i})).filter(x => clean(x.it.desc) && num(x.it.stock) > 0), M = r.store.mrf || {};
+  if(!S.length) return sh + '<div class="note">No surplus found by Matco — no MRF needed. Everything goes through the PSR review.</div>';
+  return sh + `<div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th class="n">From surplus</th><th>Unit</th><th class="n">Still to buy</th><th>Matco remark</th></tr></thead><tbody>
+    ${S.map(({it, i}) => `<tr><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td class="n"><b>${esc(Math.min(num(it.stock), num(it.qty)) || it.stock)}</b></td><td>${esc(it.unit)}</td><td class="n">${plcNet(it)}</td><td>${esc(it.srem || '')}</td></tr>`).join('')}</tbody></table></div>
+  <div class="pl-form">${plcF('mrfNo', 'MRF no', r.mrfNo || '', ed, {ph: ed ? plcNext('mrf') + ' (auto if blank)' : ''})}${plcF('mBy', 'Raised by (PE)', M.by || (ed ? hubUser() : ''), ed, {req: 1})}
+    ${plcF('mDate', 'MRF date', M.date || (ed ? todayISO() : ''), ed, {type: 'date'})}${plcF('mNote', 'Remarks', M.note || '', ed, {wide: 1})}</div>
+  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn primary" data-pa="smrfOk">Raise MRF for ${S.length} surplus line${S.length === 1 ? '' : 's'} →</button></div>`
+    : plcMrfDone(r) ? `<p class="pl-done">✓ MRF <b>${esc(r.mrfNo || '')}</b> raised by <b>${esc(M.by || '')}</b> on ${plcDT(M.at)} — surplus items to be issued from store.</p>` : `<div class="note">Waiting for PE to raise the MRF.</div>`}`;
 }
 /* 3 — PSR 3-tier */
 /* 3 — PSR 3-tier, with the company PURCHASE/SERVICE REQUISITION form (fill in here, print A4 landscape) */
@@ -2583,8 +2608,17 @@ async function plcClick(e){
     $$('#plc [data-skr]').forEach(e2 => { r.items[+e2.dataset.skr].srem = clean(e2.value); });
     const by = plcVal('sBy'); if(!by){ toast('Enter who verified the store stock.'); return; }
     r.store = {by, note: plcVal('sNote'), at: plcNow()};
-    if(!plcBuyItems(r).length){ r.status = 'fromStore'; r.stageAt = plcNow(); await save(tag() + 'Store check: all items available — issued from store, MRF closed'); return; }
-    step(2); await save(tag() + 'Store check done by ' + by + ' — ' + plcBuyItems(r).length + ' line(s) to purchase'); return;
+    const nS = r.direct ? plcSurItems(r).length : 0, mT = nS ? ' · ' + nS + ' surplus line(s) — PE to raise MRF' : '';
+    if(!plcBuyItems(r).length){ r.status = 'fromStore'; r.stageAt = plcNow(); await save(tag() + 'Matco surplus check by ' + by + ': every item from surplus, nothing to purchase' + mT); return; }
+    step(2); await save(tag() + 'Matco surplus check by ' + by + ' — ' + plcBuyItems(r).length + ' line(s) to purchase (PSR review)' + mT); return;
+  }
+  if(a === 'smrfOk'){
+    if(!plcMrfPending(r0)){ toast('No MRF to raise for this package.'); return; }
+    const by = plcVal('mBy'); if(!by){ toast('Enter the name of the PE raising the MRF.'); return; }
+    const no = plcVal('mrfNo'); if(no) r.mrfNo = no;
+    r.store = Object.assign({}, r.store, {mrf: {by, date: plcVal('mDate') || todayISO(), note: plcVal('mNote'), at: plcNow()}});
+    await save(tag() + 'MRF raised by ' + by + ' for ' + plcSurItems(r).length + ' surplus line(s)', (nx, recs) => { if(!nx.mrfNo || recs.some(x => x.id !== nx.id && x.mrfNo === nx.mrfNo)) nx.mrfNo = plcNext('mrf', recs); });
+    PLC.tab = 6; renderPlc(); return;
   }
   const psrOk = need => { plcReadPsr(r); delete r.psr.noDraft;
     if(r.direct){ r.items = r.items.filter(it => it.desc || it.qty); if(!r.title){ toast('Enter the Project Title or the Purpose and Justification.'); return false; }
@@ -3210,7 +3244,8 @@ const PLC_CSS = `<style>
 #plc .pl-fsvg{position:absolute;top:18px;left:10px;width:calc(100% - 20px);height:200px;overflow:visible;pointer-events:none}
 #plc .pl-fsvg path{fill:none;stroke:var(--border);stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 #plc .pl-fsvg path.on{stroke:var(--ok)}
-#plc .pl-fnote{grid-column:3/7;grid-row:2;align-self:center;font-size:11.5px;color:var(--text-faint);line-height:1.45;padding:0 8px;text-align:center}
+#plc .pl-lnk{background:none;border:0;padding:0;font:inherit;color:var(--accent);text-decoration:underline;cursor:pointer}
+#plc .pl-fnote{grid-column:4/7;grid-row:2;align-self:center;font-size:11.5px;color:var(--text-faint);line-height:1.45;padding:0 8px;text-align:center}
 #plc .pl-step.na .c{border-style:dashed;background:var(--panel);color:var(--text-faint)}
 #plc .pl-step.na b{color:var(--text-faint)}
 @media (max-width:760px){
