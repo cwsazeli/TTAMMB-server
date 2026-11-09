@@ -1937,7 +1937,7 @@ function plcPsrParse(src){
     f[l.k] = cand.filter(i => Math.abs(i.ry - y0) < 2).sort((a, b) => a.x - b.x).map(i => i.s.replace(/^:\s*/, '')).join(' ').trim(); });
   f.cat = cats.filter(c => top.some(r => Math.abs(r.y - c.y) <= 4 && r.it.some(i => i.x > c.x + c.w - 2 && TICK.test(i.s)))).map(c => c.c);
   /* items */
-  const items = [], heads = [];
+  const items = [], heads = [], notes = [];
   if(hdr >= 0){
     const H = rows[hdr], hx = re => { const i = H.it.find(i => re.test(i.s)); return i ? i.x : null; };
     const xNo = hx(/^NO\.?$/i), xDesc = hx(/DESCRIPTION/i), xQty = hx(/^QTY|QUANTITY/i), xUom = hx(/^UOM|^UNIT/i), xDur = hx(/^DURATION/i), xRem = hx(/^REMARK/i);
@@ -1946,7 +1946,7 @@ function plcPsrParse(src){
     const end = rows.findIndex((r, k) => k > hdr && r.it.some(i => /^REQUESTED BY|^TYPE\s*:|^PREPARED BY/i.test(i.s))), body = rows.slice(hdr + 1, end > 0 ? end : rows.length).filter(r => r !== prs);
     const lines = body.map(r => { const o = {y: r.y, desc: [], qty: '', uom: '', type: '', dur: [], rem: []}; let num = null;
       r.it.forEach(i => { const cx = i.x + (tol > 5 ? i.w / 2 : 0);
-        if(xNo != null && /^\d{1,3}$/.test(i.s) && Math.abs(i.x - xNo) <= tol && (xDesc == null || i.x < xDesc - 2)) { num = i.s; return; }
+        if(xNo != null && /^(\d{1,3}|[A-Z]|\d{1,3}\.\d{1,2})\.?$/.test(i.s) && Math.abs(i.x - xNo) <= tol && (xDesc == null || i.x < xDesc - 2)) { num = i.s.replace(/\.$/, ''); return; }   // 1, 2 … or A, B … or 1.1
         if(TICK.test(i.s) && Object.keys(tx).length){ const t = Object.keys(tx).sort((a, b) => Math.abs(tx[a] - i.x) - Math.abs(tx[b] - i.x))[0]; if(Math.abs(tx[t] - i.x) <= tol + 6){ o.type = t; return; } }
         if(xQty != null && /^[\d.,]+$/.test(i.s) && Math.abs(cx - xQty) <= tol + 10){ o.qty = i.s.replace(/,/g, ''); return; }
         if(xUom != null && !o.uom && /^[A-Za-z.\/]{1,8}$/.test(i.s) && Math.abs(cx - xUom) <= tol + 10){ o.uom = i.s; return; }
@@ -1957,12 +1957,17 @@ function plcPsrParse(src){
     /* the description is often printed a few points above or below its number (tall cells): join them; a short capital line on its own is a group heading */
     const numd = lines.filter(o => o.num), txt = lines.filter(o => !o.num && !o.qty && o.desc.length);
     txt.forEach(t => { const n = numd.filter(o => !o.desc.length && Math.abs(o.y - t.y) <= Math.max(near - 3, 4)).sort((a, b) => Math.abs(a.y - t.y) - Math.abs(b.y - t.y))[0]; if(n){ n.desc = t.desc.slice(); t.used = true; } });
-    let head = '';
+    let head = '', prev = null, tail = [];
     lines.forEach(o => {
-      if(o.num){ items.push({num: o.num, desc: o.desc.join(' '), qty: o.qty, unit: o.uom, type: o.type, dur: o.dur.join(' '), rem: o.rem.join(' '), head, y: o.y}); return; }
-      if(o.used) return; const last = items[items.length - 1];
-      if(last && o.y - last.y > 0 && o.y - last.y <= near + 1 && !o.qty){ last.desc = (last.desc + ' ' + o.desc.join(' ')).trim(); return; }   // second line of the description
-      if(o.desc.length && !o.qty){ head = o.desc.join(' '); heads.push(head); } });
+      const item = o.num || o.qty || o.type || o.uom;   // a numbered line, or a line with its own qty / UOM / type tick (sub-lines of services PSRs have no number)
+      if(item){ const it = {num: o.num || '', desc: o.desc.join(' '), qty: o.qty, unit: o.uom, type: o.type, dur: o.dur.join(' '), rem: o.rem.join(' '), head, y: o.y};
+        if(!it.desc && !it.qty && !it.type){ prev = null; return; } items.push(it); prev = it; tail = []; return; }
+      if(o.used) return; const last = items[items.length - 1], txt = o.desc.join(' ').trim(); if(!txt){ prev = null; return; }
+      /* the description goes on in the next row: close below it, or the very next row starting in lower case / after a comma */
+      if(last && prev === last && o.y - last.y > 0 && (o.y - last.y <= near + 1 || /^[a-z(]/.test(txt) || /[,&\-\/]$/.test(last.desc))){ last.desc = (last.desc + ' ' + txt).trim(); last.y = o.y; if(o.rem.length) last.rem = (last.rem + ' ' + o.rem.join(' ')).trim(); return; }
+      head = txt; heads.push(head); tail.push(txt); prev = null; });
+    /* text after the last line (e.g. "Required Date : …") is a note of the whole PSR, not a group heading */
+    if(tail.length && items.length){ notes.push(...tail); tail.forEach(t => heads.splice(heads.lastIndexOf(t), 1)); }
   }
   /* sign-off: requested / reviewed / verified / approved (Name · Position · Date) */
   const sig = {}, sr = rows.findIndex(r => r.it.some(i => /^REQUESTED BY/i.test(i.s)));
@@ -1970,7 +1975,7 @@ function plcPsrParse(src){
     rows.slice(sr + 1, sr + 8).forEach(r => { const lab = r.it.find(i => /^(NAME|POSITION|DATE)$/i.test(up(i.s))); if(!lab) return;
       cols.forEach((c, n) => { const nx = cols[n + 1] ? cols[n + 1].x : 1e9; const v = r.it.filter(i => i.x > c.x - 2 && i.x < nx - 2 && !/^(NAME|POSITION|DATE)$/i.test(up(i.s)) && i.s !== ':').map(i => i.s).join(' ').trim();
         (sig[c.k] = sig[c.k] || {})[up(lab.s).toLowerCase()] = v; }); }); }
-  return {f, items, heads, sig};
+  return {f, items, heads, sig, notes};
 }
 function plcPsrCatIdx(head){ const u = String(head || '').toUpperCase(); return /PIPE/.test(u) && !/SUPPORT/.test(u) ? 0 : /FITTING/.test(u) ? 1 : /FLANGE/.test(u) ? 2 : /VALVE/.test(u) ? 3 : /GASKET/.test(u) ? 4 : /BOLT|NUT/.test(u) ? 5 : /STRUCT/.test(u) ? 6 : null; }
 async function plcImportFile(file){
@@ -1985,8 +1990,11 @@ async function plcImportFile(file){
   if(F.projCode && !form.projCode) notes.push('Project code “' + F.projCode + '”');
   const ap = P.sig.approved; if(ap && (ap.name || ap.position)) form.appr = {name: ap.name || '', pos: ap.position || '', date: plcPsrDate(ap.date)};
   if(F.psrNo) r.psr.noDraft = F.psrNo;
-  r.items = P.items.map(i => { const it = {desc: clean(i.desc), qty: i.qty, unit: (i.unit || 'EA').toUpperCase(), type: i.type || 'P', dur: i.dur || '', rem: i.rem || ''}; const c = plcPsrCatIdx(i.head); if(c !== null) it.cat = c; return it; });
+  const tk = P.items.map(i => i.type).filter(Boolean), cats = P.f.cat || [], defT = tk.length ? tk.sort((a, b) => tk.filter(x => x === b).length - tk.filter(x => x === a).length)[0] : cats.length === 1 && cats[0] === 'Service' ? 'S' : 'P';   // a line without a tick: the type of most lines (or S on a services PSR)
+  r.items = P.items.map(i => { const c0 = plcPsrCatIdx(i.head), hd = c0 === null && i.head ? clean(i.head).replace(/\s*:$/, '') : '';
+    const it = {desc: clean(i.desc), qty: i.qty, unit: (i.unit || (i.qty ? 'EA' : '')).toUpperCase(), type: i.type || defT, dur: i.dur || '', rem: [hd, i.rem].filter(Boolean).join(' · ')}; const c = c0; if(c !== null) it.cat = c; return it; });
   if(!r.items.length) r.items = [{desc: '', qty: '', unit: 'EA', type: 'P', dur: '', rem: ''}];
+  if((P.notes || []).length) form.purpose = [form.purpose].concat(P.notes.map(clean)).filter(Boolean).join(' · ');   // e.g. "Required Date : 10/11/2026 - 12/11/26" under the lines
   r.title = form.purpose || form.projTitle; r.desc = form.projTitle && form.purpose ? form.projTitle : ''; r.charge = form.projCode; r.site = form.delivery; r.needBy = form.expDate; r.reqBy = form.pic;
   r.psr.src = {file: file.name, at: new Date().toISOString(), by: hubUser()};
   PLC.draft = r; PLC.sel = '__new'; PLC.tab = 0; renderPlc(); const p = $('#p-plc'); if(p) p.scrollTop = 0;
