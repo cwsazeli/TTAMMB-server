@@ -2893,7 +2893,7 @@ function plcPsrHtml(r){
 }
 /* A4 landscape forms always print on ONE page: measure the form at the printable width and shrink it just enough to fit */
 /* PO longer than one page: the lines continue on page 2, 3 … (same header on every page, "Page k of n");
-   only the last page has the totals, the terms and the sign-off. Done on the laid-out page, so it follows the real row heights. */
+   every page is filled with lines to the bottom; only the last page has the totals, the terms and the sign-off. Done on the laid-out page, so it follows the real row heights. */
 function plcPoPages(doc, H){
   const tb = doc.querySelector('.zt tbody'); if(!tb) return [doc];
   const fr0 = tb.querySelector('tr.fill'), fd = fr0 && fr0.firstElementChild; if(fd) fd.style.height = '0px';
@@ -2909,9 +2909,8 @@ function plcPoPages(doc, H){
     if(p.offsetHeight > H && nRows(p) > 1){ tr.remove(); p = mk(); P.push(p); bodyOf(p).insertBefore(tr, fillOf(p)); }
   }
   p.classList.remove('zcont');                       // the last page carries the totals and the sign-off
-  if(p.offsetHeight > H && nRows(p) > 1){            // they do not fit under its lines: the last line(s) move to one more page
+  if(p.offsetHeight > H){                            // they do not fit under its lines: this page stays full of lines to the bottom, the totals and sign-off go on one more page
     p.classList.add('zcont'); const q = mk(); q.classList.remove('zcont'); P.push(q);
-    const its = [...bodyOf(p).children].filter(x => x !== fillOf(p)); bodyOf(q).insertBefore(its[its.length - 1], bodyOf(q).firstElementChild);   // at least one line goes with the totals
   }
   setPg(P); P.forEach(x => plcPoPad(x, H));
   return P;
@@ -2938,8 +2937,8 @@ function plcFit(){
   d.classList.add('pv');
   let box = wrap.querySelector('.pv-box'); if(!box){ box = document.createElement('div'); box.className = 'pv-box'; doc.parentNode.insertBefore(box, doc); box.appendChild(doc);
     box.title = 'Click to zoom in / out'; box.onclick = () => { PLC.pvFull = !PLC.pvFull; plcFit(); }; }
-  const W = doc.classList.contains('tcb-doc') ? 1300 : doc.classList.contains('zpo') ? 794 : doc.classList.contains('po-doc') ? 820 : 1120;      // the page's own width (A4 landscape forms / A4 portrait PO)
-  const HP = Math.round(W * 1050 / 725);   // one PO page (A4 portrait) at the preview width
+  const W = doc.classList.contains('tcb-doc') ? 1300 : doc.classList.contains('zpo') ? 805 : doc.classList.contains('po-doc') ? 820 : 1120;      // the page's own width (A4 landscape forms / A4 portrait PO)
+  const HP = 1050 + 60;   // one PO page: the printable A4 height (as printed) plus the page padding, so the preview breaks the pages where the print does
   if(doc.classList.contains('zpo')){ let pg = doc.closest('.zpos'); if(!pg){ pg = document.createElement('div'); pg.className = 'zpos'; doc.parentNode.insertBefore(pg, doc); pg.appendChild(doc); doc.style.width = W + 'px'; plcPoPages(doc, HP); } doc = pg; }
   doc.style.transform = ''; doc.style.width = W + 'px'; const H = doc.offsetHeight, nP = doc.classList.contains('zpos') ? doc.children.length : 1;   // every PO page the same A4 height, so all show at the same scale
   const cs = getComputedStyle(wrap), aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), ah = db.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 4;
@@ -3819,11 +3818,12 @@ const PLC_CSS = `<style>
 .zpos{display:flex;flex-direction:column;gap:18px}
 .zpo .zt td,.zpo .zsup,.zpo table.zk2+table.zk2 td,.zpo .zt2 td,.zpo .znote,.psr-doc .psr-t td,.psr-doc .psr-hd td,.tcb-doc .tcb-t td{text-transform:uppercase}
 .zpo .zsup .zk{text-transform:none}
+.zpo .zt td,#printArea .zpo .zt td{padding:3px 5px!important}.zpo .zsig{margin-top:14px!important}.zpo .zf{margin-top:10px!important}.zpo .zti{margin-bottom:12px!important}.zpo .zk2{margin-top:6px!important}.zpo .zim{height:50px!important}.zpo .zsi img.ps{height:48px!important}.zpo .zsi img.pc{height:52px!important;width:52px!important}.zpo .zinfo .zk{margin-bottom:12px!important}   /* a little tighter, so a PO of ~15 lines still fits one page with its totals and sign-off */
 #plc :is([data-pk="desc"],[data-pk="rem"],[data-pk="unit"],[data-pk="dur"],[data-ik="desc"],[data-ik="unit"],[data-ik="rem"],[data-lk="desc"],[data-lk="unit"],[data-lk="dur"],[data-pv="pf_projTitle"],[data-pv="pf_purpose"],[data-pv="pf_delivery"],[data-pv="pf_pic"],[data-pv="title"],[data-pv="poAddr"],[data-pv="poAttn"],[data-pv="poValid"],[data-pv="poTo"],[data-pv="poTerms"],[data-pv="poNote"]){text-transform:uppercase}
 #plc :is([data-pk],[data-ik],[data-lk],[data-pv])::placeholder{text-transform:none}
 .zpo.zcont .zft,.zpo.zcont .znote,.zpo.zcont .zsig{display:none!important}
 .zpo.zcont .zf::before{content:'Continued on the next page  ·  ';color:#000;font-weight:700}
-.zpo{position:relative;background:#fff;color:#000;font-family:Calibri,Carlito,Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;padding:30px 40px;width:794px;max-width:100%;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.12);box-sizing:border-box}
+.zpo{position:relative;background:#fff;color:#000;font-family:Calibri,Carlito,Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;padding:30px 40px;width:805px;max-width:100%;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.12);box-sizing:border-box}
 .zpo .zwm{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);font-size:110px;font-weight:800;color:rgba(179,38,30,.08);pointer-events:none;letter-spacing:.1em}
 .zpo .zh{display:grid;grid-template-columns:160px 1fr 170px;align-items:center;gap:8px}
 .zpo .zlg{height:58px;width:auto}
