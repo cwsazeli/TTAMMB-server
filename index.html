@@ -2877,11 +2877,37 @@ function plcPsrHtml(r){
     <div class="psr-f"><span><b>Type :</b>&nbsp;&nbsp; <b>P</b> :PURCHASE &nbsp;&nbsp;&nbsp; <b>R</b> :RENTAL &nbsp;&nbsp;&nbsp; <b>S</b> :SERVICES</span><b>NOTE : IF RENTAL OR SERVICE, PLEASE INDICATE IN DAYS / WEEKS / MONTH</b></div></div>`;
 }
 /* A4 landscape forms always print on ONE page: measure the form at the printable width and shrink it just enough to fit */
+/* PO longer than one page: the lines continue on page 2, 3 … (same header on every page, "Page k of n");
+   only the last page has the totals, the terms and the sign-off. Done on the laid-out page, so it follows the real row heights. */
+function plcPoPages(doc, H){
+  const tb = doc.querySelector('.zt tbody'); if(!tb) return [doc];
+  const fr0 = tb.querySelector('tr.fill'), fd = fr0 && fr0.firstElementChild; if(fd) fd.style.height = '0px';
+  const setPg = P => P.forEach((p, i) => { const s = p.querySelector('.zpg'); if(s) s.textContent = (i + 1) + ' of ' + P.length; });
+  if(doc.offsetHeight <= H){ setPg([doc]); plcPoPad(doc, H); return [doc]; }
+  const rows = [...tb.children].filter(tr => tr !== fr0); rows.forEach(tr => tr.remove());
+  const tpl = doc.cloneNode(true), par = doc.parentNode, nx = doc.nextSibling; doc.remove();
+  const mk = (before) => { const p = tpl.cloneNode(true); p.classList.add('zcont'); par.insertBefore(p, before || nx); return p; };
+  const P = []; let p = mk(); P.push(p);
+  const bodyOf = x => x.querySelector('.zt tbody'), fillOf = x => bodyOf(x).querySelector('tr.fill'), nRows = x => bodyOf(x).children.length - 1;
+  for(const tr of rows){
+    bodyOf(p).insertBefore(tr, fillOf(p));
+    if(p.offsetHeight > H && nRows(p) > 1){ tr.remove(); p = mk(); P.push(p); bodyOf(p).insertBefore(tr, fillOf(p)); }
+  }
+  p.classList.remove('zcont');                       // the last page carries the totals and the sign-off
+  if(p.offsetHeight > H && nRows(p) > 1){            // they do not fit under its lines: the last line(s) move to one more page
+    p.classList.add('zcont'); const q = mk(); q.classList.remove('zcont'); P.push(q);
+    const its = [...bodyOf(p).children].filter(x => x !== fillOf(p)); bodyOf(q).insertBefore(its[its.length - 1], bodyOf(q).firstElementChild);   // at least one line goes with the totals
+  }
+  setPg(P); P.forEach(x => plcPoPad(x, H));
+  return P;
+}
+function plcPoPad(doc, H){ const f = doc.querySelector('tr.fill > td'); if(!f) return; const cur = parseFloat(f.style.height) || 0, h = doc.offsetHeight; f.style.height = Math.max(0, Math.floor(cur + H - h)) + 'px'; }   // PO filler row: page exactly H tall when the lines leave room
 function plcPrintFit(){
   const doc = document.querySelector('#printArea .tcb-doc, #printArea .psr-doc, #printArea .zpo'); if(!doc) return;
   const Z = doc.classList.contains('zpo'), pw = Z ? 725 : doc.classList.contains('tcb-doc') ? 1085 : 1070, ph = Z ? 1050 : doc.classList.contains('tcb-doc') ? 748 : 735;   // printable area of A4 landscape (px at 96 dpi), page margins taken off
   const m = document.createElement('div'); m.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + pw + 'px;visibility:hidden;background:#fff';
   const c = doc.cloneNode(true); c.style.cssText = 'width:' + pw + 'px;min-width:0;max-width:none;padding:0;box-shadow:none;margin:0'; m.appendChild(c); document.body.appendChild(m);
+  if(Z){ const P = plcPoPages(c, ph - 4); P.forEach((p, i) => { p.style.breakAfter = i < P.length - 1 ? 'page' : 'auto'; p.style.pageBreakAfter = i < P.length - 1 ? 'always' : 'auto'; }); doc.replaceWith(...P); m.remove(); return; }   // one A4 page each
   const h = c.offsetHeight; m.remove();
   doc.style.zoom = h > ph ? (ph / h).toFixed(3) : '';
 }
@@ -2893,16 +2919,18 @@ function plcPrint(html){
 }
 /* fit the printed page inside the preview window (click the page to switch between "whole page" and 100 %) */
 function plcFit(){
-  const d = $('#dlgPlc'), db = $('#plDlgB'), wrap = db && db.querySelector('.po-wrap'), doc = wrap && wrap.querySelector('.psr-doc,.tcb-doc,.po-doc,.zpo'); if(!doc) return;
+  const d = $('#dlgPlc'), db = $('#plDlgB'), wrap = db && db.querySelector('.po-wrap'); let doc = wrap && wrap.querySelector('.psr-doc,.tcb-doc,.po-doc,.zpo'); if(!doc) return;
   d.classList.add('pv');
   let box = wrap.querySelector('.pv-box'); if(!box){ box = document.createElement('div'); box.className = 'pv-box'; doc.parentNode.insertBefore(box, doc); box.appendChild(doc);
     box.title = 'Click to zoom in / out'; box.onclick = () => { PLC.pvFull = !PLC.pvFull; plcFit(); }; }
   const W = doc.classList.contains('tcb-doc') ? 1300 : doc.classList.contains('zpo') ? 794 : doc.classList.contains('po-doc') ? 820 : 1120;      // the page's own width (A4 landscape forms / A4 portrait PO)
-  doc.style.transform = ''; doc.style.width = W + 'px'; const H = doc.offsetHeight;
+  const HP = Math.round(W * 1050 / 725);   // one PO page (A4 portrait) at the preview width
+  if(doc.classList.contains('zpo')){ let pg = doc.closest('.zpos'); if(!pg){ pg = document.createElement('div'); pg.className = 'zpos'; doc.parentNode.insertBefore(pg, doc); pg.appendChild(doc); doc.style.width = W + 'px'; plcPoPages(doc, HP); } doc = pg; }
+  doc.style.transform = ''; doc.style.width = W + 'px'; const H = doc.offsetHeight, nP = doc.classList.contains('zpos') ? doc.children.length : 1;   // every PO page the same A4 height, so all show at the same scale
   const cs = getComputedStyle(wrap), aw = wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight), ah = db.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 4;
-  const sc = PLC.pvFull ? 1 : Math.min(1, aw / W, ah / H);
+  const sc = PLC.pvFull ? 1 : Math.min(1, aw / W, ah / (nP > 1 ? HP : H));
   doc.style.width = W + 'px'; doc.style.transform = 'scale(' + sc + ')'; doc.style.transformOrigin = 'top left';
-  box.style.width = Math.floor(W * sc) + 'px'; box.style.height = Math.floor(H * sc) + 'px'; box.classList.toggle('full', !!PLC.pvFull); wrap.classList.toggle('pv-scroll', !!PLC.pvFull);
+  box.style.width = Math.floor(W * sc) + 'px'; box.style.height = Math.floor(H * sc) + 'px'; box.classList.toggle('full', !!PLC.pvFull); wrap.classList.toggle('pv-scroll', !!PLC.pvFull || nP > 1);
 }
 if(!window.__plcFitR){ window.__plcFitR = true; window.addEventListener('resize', () => { const d = $('#dlgPlc'); if(d && d.open && d.classList.contains('pv')) plcFit(); }); }
 async function plcPsrShow(){
@@ -3470,7 +3498,7 @@ function plcPoHtml(r, unp){
     <div class="zh">${logo ? `<img class="zlg" src="${logo}" alt="">` : '<span></span>'}<div class="zco"><b>${esc(C.company || D.company)}</b><small>(${esc(C.reg || D.reg)})</small><span>${esc(C.addr || D.addr).replace(/,\s*(\d{5})/, ',<br>$1')}</span><span>${esc(C.phone || D.phone)}</span><span>Email : ${esc(C.email || D.email)}</span></div><img class="zct" src="${PLC_CERT}" alt=""></div>
     <div class="zti">PURCHASE ORDER${unp ? '<span class="zun">UNPRICED COPY</span>' : ''}</div>
     <div class="zinfo"><div class="zsup"><div class="zk">Company's Name:</div><b>${esc(String(a.supplier || '').toUpperCase())}</b><div class="zad">${addr}</div></div>
-      <table class="zkv">${kv('PO NO.', `<b>${esc(P.no || '')}</b>`)}${kv('Your Ref', esc(P.ref || a.ref || ''))}${kv('Date', dt(P.date))}${kv('Contact Person', esc(P.contact || ''))}${kv('Page', pages > 1 ? '1 of ' + pages : '1 of 1')}${r._subN > 1 ? kv('Split award', 'PO ' + r._subK + ' of ' + r._subN) : ''}</table></div>
+      <table class="zkv">${kv('PO NO.', `<b>${esc(P.no || '')}</b>`)}${kv('Your Ref', esc(P.ref || a.ref || ''))}${kv('Date', dt(P.date))}${kv('Contact Person', esc(P.contact || ''))}${kv('Page', '<span class="zpg">1 of 1</span>')}${r._subN > 1 ? kv('Split award', 'PO ' + r._subK + ' of ' + r._subN) : ''}</table></div>
     <table class="zkv zk2">${kv('Tel / Fax', esc(P.tel || ''))}${kv('Handphone No.', esc(P.hp || ''))}${kv('Email', esc(P.email || ''))}${kv('Attn To.', esc(P.attn || ''))}</table>
     <table class="zkv zk2">${kv('Project Title', esc(f.projTitle || r.title || ''))}</table>
     <table class="zkv zk2">${kv('Charge Code', esc(f.projCode || r.charge || ''))}</table>
@@ -3773,6 +3801,9 @@ const PLC_CSS = `<style>
 #dlgPlc.pv .po-wrap{height:100%;overflow:hidden;display:flex;justify-content:center;align-items:flex-start;padding:10px;box-sizing:border-box}
 #dlgPlc.pv .po-wrap.pv-scroll{overflow:auto;display:block}
 /* company PO (A4 portrait) */
+.zpos{display:flex;flex-direction:column;gap:18px}
+.zpo.zcont .zft,.zpo.zcont .znote,.zpo.zcont .zsig{display:none!important}
+.zpo.zcont .zf::before{content:'Continued on the next page  ·  ';color:#000;font-weight:700}
 .zpo{position:relative;background:#fff;color:#000;font-family:Calibri,Carlito,Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;padding:30px 40px;width:794px;max-width:100%;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.12);box-sizing:border-box}
 .zpo .zwm{position:absolute;top:42%;left:50%;transform:translate(-50%,-50%) rotate(-24deg);font-size:110px;font-weight:800;color:rgba(179,38,30,.08);pointer-events:none;letter-spacing:.1em}
 .zpo .zh{display:grid;grid-template-columns:160px 1fr 170px;align-items:center;gap:8px}
