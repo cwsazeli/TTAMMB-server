@@ -2658,31 +2658,33 @@ function hubModSet(k, moreFn){
     const p = PING, ver = p && !p.error ? (p.version === HUB_EXPECT ? `<span class="ms-ok">✓ up to date (${esc(p.version)})</span>` : `<span class="ms-warn">⚠ out of date (${esc(p.version || 'old')} → ${esc(HUB_EXPECT)})</span>`) : p && p.error ? `<span class="ms-bad">✗ cannot reach it — ${esc(p.error)}</span>` : '<span class="ms-dim">not checked yet</span>';
     const meta = msMeta(k);
     d.innerHTML = `<style>
-      #dlgModSet .ms-sec{border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin:0 0 12px;background:var(--panel2,transparent)}
-      #dlgModSet .ms-sec h4{margin:0 0 10px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)}
-      #dlgModSet .ms-row{display:grid;grid-template-columns:140px minmax(0,1fr);gap:10px;padding:5px 0;font-size:13.5px;border-bottom:1px dashed var(--border)}
-      #dlgModSet .ms-row:last-of-type{border-bottom:0}#dlgModSet .ms-row>span:first-child{color:var(--text-dim)}#dlgModSet .ms-row b{overflow-wrap:anywhere}
-      #dlgModSet .ms-btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+      #dlgModSet{width:min(660px,94vw)}
+      #dlgModSet .db{padding-top:12px;padding-bottom:4px}
+      #dlgModSet .ms-sec{border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:0 0 8px;background:var(--panel2,transparent)}
+      #dlgModSet .ms-sec h4{margin:0 0 6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim)}
+      #dlgModSet .ms-row{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;padding:3px 0;font-size:13px;line-height:1.4;border-bottom:1px dashed var(--border)}
+      #dlgModSet .ms-row:last-of-type{border-bottom:0}#dlgModSet .ms-row>span:first-child{color:var(--text-dim)}#dlgModSet .ms-row b{overflow-wrap:anywhere;font-weight:600}
+      #dlgModSet .ms-btns{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:8px}
+      #dlgModSet .ms-btns .btn,#dlgModSet .ms-one .btn{height:32px;min-height:0;padding:0 8px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;justify-content:center;width:100%;margin:0}
       #dlgModSet .ms-ok{color:var(--ok)}#dlgModSet .ms-warn{color:var(--warn)}#dlgModSet .ms-bad{color:var(--bad)}#dlgModSet .ms-dim{color:var(--text-dim)}
-      #dlgModSet input{width:100%;box-sizing:border-box;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:9px 12px;color:var(--text);font:inherit;font-size:13.5px}
-      #dlgModSet .ms-note{font-size:12.5px;color:var(--text-dim);margin:6px 0 0}
-      #dlgModSet .ms-more{display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-      @media (max-width:640px){#dlgModSet .ms-row{grid-template-columns:1fr;gap:2px}}</style>
+      #dlgModSet input{width:100%;box-sizing:border-box;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px 10px;height:32px;color:var(--text);font:inherit;font-size:13px}
+      #dlgModSet .ms-one{display:grid;grid-template-columns:minmax(0,1fr) calc((100% - 18px) / 4);gap:10px;align-items:center;font-size:13px}
+      #dlgModSet .ms-one small{display:block;color:var(--text-dim);font-size:12px;line-height:1.35}
+      #dlgModSet .df{padding-top:10px;padding-bottom:12px}#dlgModSet .df .btn{width:var(--ms-bw,143px);height:32px;min-height:0;padding:0 8px;font-size:12.5px;justify-content:center}
+      @media (max-width:640px){#dlgModSet .ms-btns{grid-template-columns:repeat(2,minmax(0,1fr))}#dlgModSet .ms-one{grid-template-columns:minmax(0,1fr) var(--ms-bw,120px)}}</style>
       <div class="dh"><h3>⚙ Settings — ${esc(I.l)}</h3></div>
       <div class="db">
         <div class="ms-sec"><h4>☁ Google Sheets — shared by all modules</h4>
-          <div class="ms-row"><span>Connection</span><b>${url ? '<span class="ms-ok">● Connected</span> — every laptop and phone sees the same data' : '<span class="ms-warn">⌂ This device only</span> — set the Google Sheets link to share the data'}</b></div>
-          <div class="ms-row"><span>Sheet tab(s)</span><b>${esc(I.tabs)}</b></div>
+          <div class="ms-row"><span>Connection</span><b>${url ? '<span class="ms-ok">● Connected</span> · same data on every laptop and phone' : '<span class="ms-warn">⌂ This device only</span> · set the Google Sheets link to share'}</b></div>
+          <div class="ms-row"><span>Sheet tab</span><b>${esc(I.tabs)}</b></div>
           <div class="ms-row"><span>Code.gs</span><b>${busy ? '<span class="ms-dim">checking…</span>' : ver}</b></div>
           ${meta ? `<div class="ms-row"><span>This module</span><b style="font-weight:500">${esc(meta)}</b></div>` : ''}
-          <div class="ms-btns"><button class="btn" id="msReload">🔄 Reload data from the Sheet</button><button class="btn" id="msTest"${url ? '' : ' disabled'}>🔌 Test connection</button><button class="btn" id="msSheets">🔗 Google Sheets link</button><button class="btn" id="msAdmin">🔐 Passwords, backups &amp; e-mail</button></div>
-          <p class="ms-note">The link and the passwords are the same for every module, so they are changed in one place (Google Sheets link / Health &amp; backups).</p></div>
+          <div class="ms-btns"><button class="btn" id="msReload" title="Read this module again from the Google Sheet">🔄 Reload data</button><button class="btn" id="msTest"${url ? '' : ' disabled'} title="Check the link and the Code.gs version">🔌 Test connection</button><button class="btn" id="msSheets" title="The Google Sheets link — same for every module">🔗 Sheets link</button><button class="btn" id="msAdmin" title="Passwords, backups and the weekly e-mail (Health &amp; backups)">🔐 Passwords</button></div></div>
         <div class="ms-sec"><h4>👤 You</h4>
-          <input id="msUser" value="${esc(hubUser())}" placeholder="Your name" maxlength="60">
-          <p class="ms-note">Shown as “by …” on every change you save, in every module.</p></div>
+          <div class="ms-one" style="grid-template-columns:1fr"><input id="msUser" value="${esc(hubUser())}" placeholder="Your name — shown as “by …” on your changes" maxlength="60" title="Shown as “by …” on every change you save, in every module"></div></div>
         <div class="ms-sec"><h4>⚙ This module</h4>
-          ${I.more && moreFn ? `<div class="ms-more"><div><b>${esc(I.more[0])}</b><p class="ms-note" style="margin-top:2px">${esc(I.more[1])}</p></div><button class="btn" id="msMore">Open…</button></div>`
-            : `<p class="ms-note" style="margin:0">Nothing else to set — ${esc(I.l)} follows the shared settings above.</p>`}</div>
+          ${I.more && moreFn ? `<div class="ms-one"><div><b>${esc(I.more[0])}</b><small>${esc(I.more[1])}</small></div><button class="btn" id="msMore">Open…</button></div>`
+            : `<div class="ms-one"><small style="font-size:12.5px">Nothing else to set — follows the shared settings above.</small><span></span></div>`}</div>
       </div>
       <div class="df"><button class="btn" id="msClose">Close</button><button class="btn primary" id="msSave">Save</button></div>`;
     const q = s => d.querySelector(s);
@@ -2699,6 +2701,7 @@ function hubModSet(k, moreFn){
     const mb = q('#msMore'); if(mb) mb.onclick = () => { d.close(); moreFn(); };
   };
   draw(false); if(!d.open) d.showModal();
+  try{ const b0 = d.querySelector('.ms-btns .btn'); if(b0) d.style.setProperty('--ms-bw', b0.getBoundingClientRect().width + 'px'); }catch(e){}   // Close / Save as wide as the buttons above
   if(url && !PING){ draw(true); refreshPing().then(() => { if(d.open) draw(false); }); }
 }
 window.__HUB.modSettings = (k, moreFn) => hubModSet(k, moreFn);
