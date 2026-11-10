@@ -2366,6 +2366,158 @@ function linkChecks(add){
 }
 function linkOpen(o){ const [k, id] = o || []; if(k === 'plc') hubOpenPlc(id); else if(k === 'est') hubOpenStudio(id); else if(k === 'mat') openRecord('mat', id); else if(k === 'wop') openW360(id); }
 
+/* ---------- Sign several POs at once: tick the POs (any package, any supplier of a split award) waiting at the same sign-off step,
+   enter the name / sign / cop once, one role password, one save. ---------- */
+function plcPoAll(recs){
+  const out = [];
+  (recs || PLC.recs).forEach(r => {
+    if(r.status === 'cancelled' || r.stage !== 5) return;
+    const one = (V, sid) => { const po = V.po || {}; if(po.at) return; const nx = plcPoNext(po), c = plcPoCalc(V), a = c.award;
+      out.push({key: r.id + '|' + (sid || ''), id: r.id, sid: sid || '', ref: plcRef(r), title: (r.psr && r.psr.form && r.psr.form.projTitle) || r.title || '', sup: a ? a.supplier : (V._bid || {}).supplier || '', no: po.no || '', date: po.date || '', total: c.total, sub: c.sub, tier: nx, ret: po.ret || ''}); };
+    if(plcIsSplit(r)) plcSplitBids(r).forEach(b => one(plcSub(r, b), b.id)); else one(r, '');
+  });
+  return out;
+}
+/* why a PO cannot be prepared from the list (Procurement must open it first) */
+function plcPoBulkBad(x, all){
+  if(x.tier !== 'prep') return '';
+  if(!(x.sub > 0)) return 'amount is 0 — open the PO and check the unit prices';
+  if(x.no && all.some(y => y.key !== x.key && y.no === x.no)) return 'PO number ' + x.no + ' is used twice';
+  if(x.no && PLC.recs.some(r => r.id !== x.id && plcPoNos(r).includes(x.no))) return 'PO number ' + x.no + ' is already used';
+  return '';
+}
+const PLC_PB = {tier: '', sel: {}, s: '', c: ''}, PLC_PBV = {prep: 'Prepare', rev: 'Review', app: 'Approve'};
+async function plcPoBulk(only){
+  let d = document.getElementById('dlgPoBulk');
+  if(!d){ d = document.createElement('dialog'); d.id = 'dlgPoBulk'; d.style.cssText = 'width:min(1040px,96vw);max-width:none;padding:0';
+    d.innerHTML = `<style>#dlgPoBulk .pb-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}#dlgPoBulk .pb-tabs .chip b{margin-left:4px}
+      #dlgPoBulk .pb-tw{max-height:42vh;overflow:auto;border:1px solid var(--border);border-radius:10px}#dlgPoBulk table{width:100%;border-collapse:collapse;font-size:13px}
+      #dlgPoBulk th{position:sticky;top:0;background:var(--panel2);text-align:left;font-size:11.5px;color:var(--text-dim);padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+      #dlgPoBulk td{padding:8px 10px;border-bottom:1px solid var(--border-soft,var(--border));vertical-align:top}#dlgPoBulk td.n,#dlgPoBulk th.n{text-align:right;white-space:nowrap}
+      #dlgPoBulk tr.off td{opacity:.55}#dlgPoBulk td small{display:block;color:var(--text-faint,var(--text-dim));font-size:11.5px}#dlgPoBulk td .bad{color:var(--bad)}
+      #dlgPoBulk input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);cursor:pointer}
+      #dlgPoBulk .pb-f{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0 10px}#dlgPoBulk .pb-f input{width:100%;box-sizing:border-box;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:9px 12px;color:var(--text);font:inherit;font-size:13.5px;outline:none}#dlgPoBulk .pb-f input:focus{border-color:var(--accent)}
+      #dlgPoBulk .pb-tabs .chip.on{background:var(--accent)!important;color:var(--accent-ink,#fff)!important;border-color:var(--accent)!important}#dlgPoBulk .pb-tabs .chip:disabled{opacity:.45;cursor:default}
+      #dlgPoBulk .pb-sig{display:flex;gap:10px;flex-wrap:wrap;align-items:center}#dlgPoBulk .pb-sig img{height:46px;max-width:150px;object-fit:contain;background:#fff;border:1px solid var(--border);border-radius:6px;padding:2px}
+      #dlgPoBulk .pb-slot{display:flex;gap:6px;align-items:center}#dlgPoBulk .pb-sum{margin-right:auto;font-size:13px;color:var(--text-dim)}
+      @media (max-width:700px){#dlgPoBulk .pb-f{grid-template-columns:1fr}}</style>
+      <div class="dh"><h3>✍ Sign several POs</h3><p style="margin:4px 0 0;font-size:12.5px;color:var(--text-dim)">Tick the POs to sign at the same step — one name, one sign / cop and one role password for all of them.</p></div>
+      <div class="db"><div class="pb-tabs" id="pbTabs"></div><div class="pb-tw" id="pbList"></div>
+        <div class="pb-f"><input id="pbBy" placeholder="Name"><input id="pbPos" placeholder="Position"><input id="pbNote" placeholder="Remarks (optional)"></div>
+        <div class="pb-sig" id="pbSig"></div><input type="file" accept="image/*" id="pbFile" hidden></div>
+      <div class="df"><span class="pb-sum" id="pbSum"></span><button class="btn" id="pbX">Cancel</button><button class="btn primary" id="pbOk">Sign</button></div>`;
+    document.body.appendChild(d); }
+  const L = () => plcPoAll(), T = PLC_PO_SG;
+  let all = L(); if(only) all = all.filter(x => x.id === only);
+  const cnt = k => all.filter(x => x.tier === k).length;
+  if(!all.length){ toast('No PO is waiting for a signature.'); return; }
+  if(!cnt(PLC_PB.tier)) PLC_PB.tier = (T.find(t => cnt(t[0])) || T[0])[0];
+  PLC_PB.sel = {}; all.forEach(x => { if(x.tier === PLC_PB.tier && !plcPoBulkBad(x, all)) PLC_PB.sel[x.key] = true; });
+  PLC_PB.s = PLC_PB.c = '';
+  const q = s => d.querySelector(s), tierT = () => T.find(t => t[0] === PLC_PB.tier);
+  const draw = () => {
+    const t = tierT(), rows = all.filter(x => x.tier === PLC_PB.tier);
+    q('#pbTabs').innerHTML = T.map(([k, l, p, role]) => `<button class="chip${k === PLC_PB.tier ? ' on' : ''}" data-pbt="${k}"${cnt(k) ? '' : ' disabled'}>${l} · ${role === 'MD' ? 'OD/MD' : role === 'PROC' ? 'Procurement' : role}<b>${cnt(k)}</b></button>`).join('');
+    const okRows = rows.filter(x => !plcPoBulkBad(x, all)), allOn = okRows.length && okRows.every(x => PLC_PB.sel[x.key]);
+    q('#pbList').innerHTML = `<table><thead><tr><th><input type="checkbox" id="pbAll"${allOn ? ' checked' : ''} title="Tick all"></th><th>PO no</th><th>Package</th><th>Supplier</th><th class="n">Total (RM)</th><th>Status</th></tr></thead><tbody>${rows.map(x => { const bad = plcPoBulkBad(x, all), g = '';
+      return `<tr class="${bad ? 'off' : ''}"><td><input type="checkbox" data-pbk="${esc(x.key)}"${PLC_PB.sel[x.key] && !bad ? ' checked' : ''}${bad ? ' disabled' : ''}></td><td><b>${esc(x.no || (x.tier === 'prep' ? '(new no.)' : '—'))}</b>${x.date ? `<small>${esc(fmtD(String(x.date).slice(0, 10)))}</small>` : ''}</td>
+        <td>${esc(x.ref)}<small>${esc(x.title)}</small></td><td>${esc(x.sup)}</td><td class="n">${plcRM(x.total).replace('RM ', '')}</td>
+        <td>${bad ? `<span class="bad">⚠ ${esc(bad)}</span>` : x.tier === 'prep' ? (x.ret ? '<span class="bad">↩ Returned: ' + esc(x.ret) + '</span>' : 'To prepare') : 'Waiting for ' + esc({rev: 'Review', app: 'Approval'}[t[0]] || '')}</td></tr>`; }).join('')}</tbody></table>`;
+    const n = rows.filter(x => PLC_PB.sel[x.key] && !plcPoBulkBad(x, all)), tot = n.reduce((s, x) => s + num(x.total), 0);
+    q('#pbSum').innerHTML = `<b>${n.length}</b> PO${n.length === 1 ? '' : 's'} ticked · <b>${plcRM(tot)}</b>`;
+    q('#pbOk').textContent = '✍ ' + PLC_PBV[t[0]] + (t[0] === 'app' ? ' & issue' : '') + ' — ' + n.length + ' PO' + (n.length === 1 ? '' : 's');
+    q('#pbOk').disabled = !n.length;
+    if(!q('#pbPos').dataset.touched) q('#pbPos').value = t[2];
+    const nm = q('#pbBy').value || hubUser();
+    const slot = (kind, lbl, ic) => { const v = PLC_PB[kind]; return `<span class="pb-slot">${v ? `<img src="${v}" alt="${lbl}"><button type="button" class="btn sm" data-pbx="${kind}" title="Remove">✕</button>`
+      : `<button type="button" class="btn sm" data-pbu="${kind}">${ic} Upload ${lbl}</button>${plcSigSaved(nm, kind) ? `<button type="button" class="btn sm" data-pbs="${kind}">Use my saved ${lbl}</button>` : ''}`}</span>`; };
+    q('#pbSig').innerHTML = slot('s', 'sign', '🖊') + slot('c', 'cop', '🔵');
+  };
+  q('#pbBy').value = plcNm(hubUser()); q('#pbNote').value = ''; delete q('#pbPos').dataset.touched;
+  q('#pbPos').oninput = () => { q('#pbPos').dataset.touched = '1'; };
+  q('#pbBy').onchange = draw;
+  let fileKind = 's';
+  q('#pbFile').onchange = e => { const f = e.target.files && e.target.files[0]; if(!f) return; plcSigMake(f, fileKind).then(u => { PLC_PB[fileKind] = u; try{ const nm = q('#pbBy').value || hubUser(); if(nm) localStorage.setItem(plcSigKey(nm, fileKind), u); }catch(x){} draw(); }); e.target.value = ''; };
+  d.onclick = e => {
+    const b = e.target.closest('button,input[type=checkbox]'); if(!b) return; const ds = b.dataset;
+    if(ds.pbt){ PLC_PB.tier = ds.pbt; PLC_PB.sel = {}; all.forEach(x => { if(x.tier === ds.pbt && !plcPoBulkBad(x, all)) PLC_PB.sel[x.key] = true; }); delete q('#pbPos').dataset.touched; draw(); return; }
+    if(b.id === 'pbAll'){ all.filter(x => x.tier === PLC_PB.tier && !plcPoBulkBad(x, all)).forEach(x => { PLC_PB.sel[x.key] = b.checked; }); draw(); return; }
+    if(ds.pbk){ PLC_PB.sel[ds.pbk] = b.checked; draw(); return; }
+    if(ds.pbu){ fileKind = ds.pbu; q('#pbFile').click(); return; }
+    if(ds.pbx){ PLC_PB[ds.pbx] = ''; draw(); return; }
+    if(ds.pbs){ const k = ds.pbs; plcSigClean(plcSigSaved(q('#pbBy').value || hubUser(), k), k).then(u => { PLC_PB[k] = u; draw(); }); return; }
+  };
+  q('#pbX').onclick = () => d.close();
+  q('#pbOk').onclick = async () => {
+    const t = tierT(), by = clean(q('#pbBy').value), pos = clean(q('#pbPos').value), note = clean(q('#pbNote').value);
+    const pick = all.filter(x => x.tier === t[0] && PLC_PB.sel[x.key] && !plcPoBulkBad(x, all));
+    if(!pick.length) return; if(!by){ toast('Enter your name.'); q('#pbBy').focus(); return; }
+    q('#pbOk').disabled = true;
+    try{ const ok = await plcPoBulkSign(pick, t, {by, pos, note, s: PLC_PB.s, c: PLC_PB.c}); if(ok){ d.close(); renderPlc(); } }
+    finally{ q('#pbOk').disabled = false; }
+  };
+  draw(); if(!d.open) d.showModal();
+}
+/* apply one sign-off step to several POs and save them together (one password, one write) */
+async function plcPoBulkSign(pick, t, S){
+  const [k, lbl] = t, lines = pick.map(x => (x.no || 'new PO') + ' · ' + x.ref + ' · ' + x.sup + ' · ' + plcRM(x.total));
+  const A = await plcAuth([t[3]], [lbl + ' — ' + pick.length + ' PO(s):'].concat(lines));
+  if(!A) return false;
+  PLC._auth = A;
+  const url = hubUrl(); let recs = PLC.recs.slice(), cfg = PLC.cfg;
+  if(url){
+    try{ const j = await gsCall(url, 'wop', {action: 'list', module: 'plc', pw: A.pw});
+      if(j && Array.isArray(j.records) && !j.restricted){ const all = j.records.map(plcParse), c = all.find(r => r.id === '__cfg');
+        if(c && c.cfg && typeof c.cfg === 'object') cfg = Object.assign({}, PLC_CFG0, c.cfg); recs = all.filter(r => r.id && r.id !== '__cfg' && r.id !== '__meta'); } }
+    catch(e){ toast('⚠ Not saved — could not reach the Google Sheet: ' + e.message, 9000); return false; }
+  }
+  const now = plcNow(), done = [], skip = [], byRec = {}, notify = [];
+  pick.forEach(x => { (byRec[x.id] = byRec[x.id] || []).push(x); });
+  for(const id of Object.keys(byRec)){
+    const cur = recs.find(r => r.id === id); if(!cur){ byRec[id].forEach(x => skip.push(x.ref + ' (deleted)')); continue; }
+    const r = plcClone(cur), w0 = cur.wait && typeof cur.wait === 'object' ? cur.wait : null, logs = [];
+    r.psigs = Object.assign({}, r.psigs); r.pstamps = Object.assign({}, r.pstamps);
+    for(const x of byRec[id]){
+      const V = x.sid ? (() => { const b = (r.rfq.bids || []).find(y => y.id === x.sid); return b ? plcSub(r, b, true) : null; })() : r;
+      if(!V || !V.po || V.po.at || plcPoNext(V.po) !== k){ skip.push((x.no || x.ref) + ' (changed meanwhile)'); continue; }
+      if(k === 'prep'){
+        if(!V.po.no) V.po.no = plcNext('po', recs.map(y => y.id === r.id ? r : y));
+        if(PLC.recs.concat(recs).some(y => y.id !== r.id && plcPoNos(y).includes(V.po.no))){ skip.push(V.po.no + ' (number already used)'); continue; }
+        if(!V.po.date) V.po.date = todayISO();
+        if(!(plcPoCalc(V).sub > 0)){ skip.push((V.po.no || x.ref) + ' (amount 0)'); continue; }
+        V.po.sg = {}; V.po.ret = '';
+      }
+      V.po.sg = Object.assign({}, plcPoSg(V.po)); const sg = {by: S.by, pos: S.pos, note: S.note, at: now};
+      if(S.s){ const iid = plcImgId(S.s); r.psigs[iid] = S.s; sg.s = iid; } if(S.c){ const iid = plcImgId(S.c); r.pstamps[iid] = S.c; sg.c = iid; }
+      V.po.sg[k] = sg;
+      if(x.sid) r.pos[x.sid] = V.po;
+      let line = 'PO ' + V.po.no + ' (' + x.sup + ') — ' + lbl + ' ' + S.by + ' (signed with ' + (pick.length - 1) + ' other PO' + (pick.length === 2 ? '' : 's') + ')';
+      if(k === 'app'){ const c = plcPoCalc(V); V.po.by = (V.po.sg.prep || {}).by || S.by; V.po.at = now; V.po.total = c.total; if(x.sid) r.pos[x.sid] = V.po;
+        line = 'PO ' + V.po.no + ' approved by ' + S.by + ' and issued to ' + x.sup + ' — ' + plcRM(c.total); }
+      logs.push(line); done.push(V.po.no + ' · ' + x.sup);
+    }
+    if(!logs.length) continue;
+    if(plcIsSplit(r) ? plcSplitBids(r).every(b => ((r.pos || {})[b.id] || {}).at) : r.po.at){ r.stage = 6; r.status = 'open'; r.stageAt = now; r.retNote = ''; }
+    plcPoGc(r);
+    r.updatedAt = now; r.updatedBy = A.name; r.log = (r.log || []).concat(logs.map(t2 => ({at: now, by: A.name, t: t2}))).slice(-80);
+    const w = plcWho(r), same = w0 && w0.key === w.key;
+    r.wait = w.roles.length ? {roles: w.roles, what: w.what, key: w.key, ms: same && w0.ms ? w0.ms : Date.now(), ref: plcRef(r), title: (r.psr && r.psr.form && r.psr.form.projTitle) || r.title || ''} : '';
+    if(w.roles.length && !same) notify.push({r, w});
+    const i = recs.findIndex(y => y.id === r.id); recs[i] = r;
+  }
+  if(!done.length){ toast('⚠ Nothing signed: ' + skip.join(', '), 9000); return false; }
+  const msg = PLC_PBV[k] + (k === 'app' ? ' & issue' : '') + ' — signed by ' + S.by + ' — ' + done.length + ' PO(s): ' + done.join(', ');
+  if(url){
+    try{ await gsCall(url, 'wop', null, {action: 'replaceAll', module: 'plc', fields: PLC_FIELDS, records: [{id: '__cfg', cfg}].concat(recs).map(plcSer), pw: A.pw, zbUser: A.name, zbChanges: done.map(x => lbl + ' ' + S.by + ' — PO ' + x), zbChangeCount: done.length}); }
+    catch(e){ toast('⚠ Not saved: ' + e.message, 9000); return false; }
+  }
+  recs.forEach(r => { r._base = String(r.updatedAt || ''); });
+  PLC.recs = recs; PLC.cfg = cfg; PLC.pend = null; plcCache();
+  if(url) notify.forEach(N => plcNotify(N.r, N.w, A));
+  toast('✓ ' + msg + (skip.length ? ' · not signed: ' + skip.join(', ') : ''), skip.length ? 12000 : 7000);
+  return true;
+}
+
 function renderPlc(){
   const el = $('#plc'); if(!el) return;
   if(!viewAllowed('plc')){ el.innerHTML = ''; return; }
@@ -2409,7 +2561,7 @@ function renderPlc(){
     const list = R.filter(r => V.m(r) && plcQ(r)).sort(V.k === 'po' ? (a, b) => (a.stage >= 6) - (b.stage >= 6) || String(b.po.date || '').localeCompare(String(a.po.date || '')) : plcSort);
     const sum = V.k === 'po' ? (() => { const iss = list.filter(r => r.stage >= 6), net = iss.reduce((s, r) => s + plcPoNet(r), 0); return `<p class="pl-bn">${list.length - iss.length} to issue · ${iss.length} issued · <b>${plcRM(net)}</b> committed (net)</p>`; })()
       : V.k === 'loa' ? `<p class="pl-bn">${list.length} package${list.length === 1 ? '' : 's'} · <b>${plcRM(list.reduce((s, r) => s + plcValue(r), 0))}</b> to sign</p>` : '';
-    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p>${sum}</div><div class="pl-bhr">${search}${V.k === 'psr' ? '<button class="btn" data-pa="spAll" title="Check the items of these packages against the stock left in the Surplus Ledger">♻ Check Surplus Ledger</button>' : ''}${PLC_ED() && V.k === 'psr' ? '<button class="btn primary" data-pa="newPsr">＋ Raise New PSR</button>' : ''}</div></div>
+    body = `<div class="box pl-box"><div class="pl-bh"><div><h3>${V.ic} ${esc(V.t)}</h3><p class="pl-bn">${esc(V.note)}</p>${sum}</div><div class="pl-bhr">${search}${V.k === 'psr' ? '<button class="btn" data-pa="spAll" title="Check the items of these packages against the stock left in the Surplus Ledger">♻ Check Surplus Ledger</button>' : ''}${PLC_ED() && V.k === 'psr' ? '<button class="btn primary" data-pa="newPsr">＋ Raise New PSR</button>' : ''}${PLC_ED() && V.k === 'po' && plcPoAll().length ? `<button class="btn primary" data-pa="poBulk" title="Tick several POs waiting at the same sign-off step and sign them together">✍ Sign several POs (${plcPoAll().length})</button>` : ''}</div></div>
       ${plcTable(list, PLC.f.q ? 'Nothing matches the search' : 'Nothing waiting here')}</div>`;
   }
   const runK = {mrf: ['mrf'], psr: ['psr'], rfq: ['rfq'], loa: ['loa'], po: ['po']}[V.k];
@@ -2990,7 +3142,8 @@ function plcPoGc(r){
 }
 function plcPoTiers(V, edS, edF){
   const g = plcPoSg(V.po), nx = plcPoNext(V.po), issued = !!V.po.at;
-  return `<h4 class="pl-h4">PO sign-off${V._subN > 1 ? ' — PO #' + V._subK + ' ' + esc(V._bid.supplier) : ''}</h4><div class="pl-tiers">${PLC_PO_SG.map(([k, lbl, pos, role]) => { const t = g[k] || {}, isNow = k === 'prep' ? edF : edS && !issued && k === nx && plcPoLocked(V.po), kk = plcPoSigKey(V, k), im = plcPoImg(V, t);
+  const nB = PLC_ED() ? plcPoAll().length : 0;
+  return `<h4 class="pl-h4" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">PO sign-off${V._subN > 1 ? ' — PO #' + V._subK + ' ' + esc(V._bid.supplier) : ''}${nB > 1 ? `<button class="btn sm" data-pa="poBulk" style="margin-left:auto;text-transform:none;letter-spacing:0" title="Tick several POs waiting at the same step and sign them together">✍ Sign several POs (${nB})</button>` : ''}</h4><div class="pl-tiers">${PLC_PO_SG.map(([k, lbl, pos, role]) => { const t = g[k] || {}, isNow = k === 'prep' ? edF : edS && !issued && k === nx && plcPoLocked(V.po), kk = plcPoSigKey(V, k), im = plcPoImg(V, t);
     return `<div class="pl-tier${t.at ? ' ok' : isNow ? ' now' : ''}"><span class="pl-tb" style="font-size:${role.length > 2 ? 10.5 : 13}px">${role === 'MD' ? 'OD/MD' : role}</span><div class="pl-tt"><b>${lbl}</b>
       ${t.at ? `<p>✓ <b>${esc(t.by)}</b>${t.pos ? ' · ' + esc(t.pos) : ''} · ${plcDT(t.at)}${t.note ? '<br><i>' + esc(t.note) + '</i>' : ''}</p>${im.s || im.c ? `<span class="pl-sigdone">${im.s ? `<img src="${im.s}" alt="signature" data-kind="s">` : ''}${im.c ? `<img src="${im.c}" alt="cop" data-kind="c">` : ''}</span>` : ''}`
         : isNow ? `<div class="pl-tin pl-tin3"><input data-pv="tBy" placeholder="Name" value="${esc(plcNm(hubUser()))}"><input data-pv="tPos" placeholder="Position" value="${esc(pos)}"><input data-pv="tNote" placeholder="Remarks (optional)"></div>${plcSigBox(V, kk)}`
@@ -3117,6 +3270,7 @@ async function plcClick(e){
     if(t.trim().toUpperCase() !== 'DELETE'){ toast('Not deleted — type DELETE to confirm.'); return; }
     if(await plcRemove(PLC.recs.map(r => r.id), 'Procurement Pipeline — deleted all ' + PLC.recs.length + ' packages')){ PLC.sel = null; renderPlc(); toast('All packages deleted — More ▾ → Restore last deleted to undo.', 6000); }
     return; }
+  if(a === 'poBulk'){ if(PLC_ED()) plcPoBulk(); return; }
   if(a === 'help'){ PLC.help = !PLC.help; renderPlc(); return; }
   if(a === 'copy'){ plcCopy(); return; }
   if(a === 'xlsx'){ plcExcel(); return; }
