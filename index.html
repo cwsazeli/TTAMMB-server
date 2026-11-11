@@ -4170,9 +4170,10 @@ function copImportDlg(){
 /* ---------- Sign in with the company e-mail (one-time code). The session stands in for the passwords: each person signs
    and saves under their own name, with the roles the Admin gave their e-mail in Code.gs (LOGIN_USERS). ---------- */
 var ZID_KEY = 'ttammhub_ses';
-function zidGet(){ try{ const z = JSON.parse(localStorage.getItem(ZID_KEY) || 'null'); if(z && z.token && z.exp > Date.now()) return z; if(z) localStorage.removeItem(ZID_KEY); }catch(e){} return null; }
+/* (the key is written out here, not taken from ZID_KEY: these run while the page is still starting, before that line has run) */
+function zidGet(){ try{ const z = JSON.parse(localStorage.getItem('ttammhub_ses') || 'null'); if(z && z.token && z.exp > Date.now()) return z; if(z) localStorage.removeItem('ttammhub_ses'); }catch(e){} return null; }
 function zidTok(){ const z = zidGet(); return z ? z.token : ''; }
-function zidSet(z){ try{ z ? localStorage.setItem(ZID_KEY, JSON.stringify(z)) : localStorage.removeItem(ZID_KEY); }catch(e){} try{ refreshUserBtn(); refreshLock(); }catch(e){} }
+function zidSet(z){ try{ z ? localStorage.setItem('ttammhub_ses', JSON.stringify(z)) : localStorage.removeItem('ttammhub_ses'); }catch(e){} try{ refreshUserBtn(); refreshLock(); }catch(e){} }
 var ZID_ROLE = {ADMIN: 'Admin', STAFF: 'Management (view)', PE: 'Project Engineer', OTL: 'Operation Team Leader', CC: 'Cost Control', PROC: 'Procurement', MATCO: 'Matco', PM: 'Project Manager', PD: 'Project Director', MD: 'OD / MD'};
 var zidRoles = z => (z.roles || []).map(r => ZID_ROLE[r] || r).join(', ');
 function zidRoleFor(roles){ const z = zidGet(); if(!z) return ''; const R = z.roles || []; if(R.includes('ADMIN')) return roles.includes('ADMIN') ? 'ADMIN' : roles[0]; return roles.find(r => R.includes(r)) || ''; }
