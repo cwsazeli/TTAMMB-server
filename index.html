@@ -1448,7 +1448,7 @@ const MGMT_VIEWS = ['proc', 'weekly', 'plc', 'cop', 'mywork', 'supp', 'grn'];   
 const LEVEL_NAME = {client: 'PCSB view', staff: 'Management/Operation', ops: 'Admin'};
 function viewAllowed(v){ if(LEVEL === 'client' && v === 'trends') return false; return LEVEL === 'ops' || (!OPS_VIEWS.includes(v) && (LEVEL === 'staff' || !MGMT_VIEWS.includes(v))); }
 let PREVIEW = '', PREV_LEVEL = 'ops';       // '' | 'client' | 'staff' — Admin / Management can look at the app as PCSB (and Admin as Management/Operation) sees it
-function viewKey(){ if(PREVIEW === 'client') return ''; try{ return localStorage.getItem(SK_KEY) || zidTok(); }catch(e){ return ''; } }
+function viewKey(){ if(PREVIEW === 'client') return ''; try{ return zidTok() || localStorage.getItem(SK_KEY) || ''; }catch(e){ return ''; } }
 function setViewKey(k){ try{ k ? localStorage.setItem(SK_KEY, k) : localStorage.removeItem(SK_KEY); }catch(e){} }
 function setLevel(lv){ const was = LEVEL; LEVEL = lv || 'client'; if(LEVEL !== was){ clearTimeout(setLevel._t); setLevel._t = setTimeout(reloadModules, 0); }   /* a module that started under the old level would keep the old buttons (e.g. Import for PCSB) */
   STAFF = LEVEL !== 'client'; OPS = LEVEL === 'ops'; if(OPS && STAFF_NEEDED && viewKey()) setPw(viewKey()); applyLevel(); }
