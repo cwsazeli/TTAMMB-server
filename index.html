@@ -2030,7 +2030,7 @@ async function plcLoad(){
   if(PLC.busy) return; PLC.busy = true; PLC.err = '';
   try{
     const url = hubUrl(); let recs = null;
-    if(url){ try{ const j = await gsCall(url, 'wop', {action: 'list', module: 'plc', pw: getPw() || ''}); if(j && Array.isArray(j.records)) recs = j.records; }catch(e){ PLC.err = e.message; } }
+    if(url){ try{ const j = await gsCall(url, 'wop', {action: 'list', module: 'plc', pw: getPw() || ''}); if(j && j.restricted) PLC.err = 'the Sheet did not send the procurement records to this device — it does not recognise your sign-in. Sign in with your company e-mail (👤 at the top) or the Admin password, then reload'; else if(j && Array.isArray(j.records)) recs = j.records; }catch(e){ PLC.err = e.message; } }
     if(!recs){ try{ const raw = localStorage.getItem(PLC_KEY); if(raw) recs = JSON.parse(raw); }catch(e){} }
     plcSetAll(recs || []);
   }finally{ PLC.busy = false; PLC.loaded = true; }
@@ -3122,7 +3122,7 @@ async function copLoad(force){
   if(COP.busy || (COP.loaded && !force)) return; COP.busy = true; COP.err = '';
   try{
     const url = hubUrl(); let rows = null;
-    if(url){ try{ const j = await gsCall(url, 'wop', {action: 'list', module: 'cop', pw: getPw() || ''}); if(j && Array.isArray(j.records)) rows = j.records; }catch(e){ COP.err = e.message; } }
+    if(url){ try{ const j = await gsCall(url, 'wop', {action: 'list', module: 'cop', pw: getPw() || ''}); if(j && j.restricted) COP.err = 'the Sheet did not send these records to this device — sign in with your company e-mail (👤 at the top)'; else if(j && Array.isArray(j.records)) rows = j.records; }catch(e){ COP.err = e.message; } }
     if(!rows){ try{ rows = JSON.parse(localStorage.getItem(COP_LS) || '[]'); }catch(e){ rows = []; } }
     COP.recs = rows.filter(r => r && r.id).map(copParse); COP.loaded = true; if(url && !COP.err) copCache();
   } finally { COP.busy = false; }
@@ -3643,7 +3643,7 @@ async function scmLoad(S, force){
   if(S.busy || (S.loaded && !force)) return; S.busy = true; S.err = '';
   try{
     const url = hubUrl(); let rows = null;
-    if(url){ try{ const j = await gsCall(url, 'wop', {action: 'list', module: S.mod, pw: getPw() || ''}); if(j && Array.isArray(j.records)) rows = j.records; }catch(e){ S.err = e.message; } }
+    if(url){ try{ const j = await gsCall(url, 'wop', {action: 'list', module: S.mod, pw: getPw() || ''}); if(j && j.restricted) S.err = 'the Sheet did not send these records to this device — sign in with your company e-mail (👤 at the top)'; else if(j && Array.isArray(j.records)) rows = j.records; }catch(e){ S.err = e.message; } }
     if(!rows){ try{ rows = JSON.parse(localStorage.getItem(S.LS) || '[]'); }catch(e){ rows = []; } }
     S.recs = rows.filter(r => r && r.id).map(scmParse); S.loaded = true;
     if(url && !S.err){ try{ localStorage.setItem(S.LS, JSON.stringify(S.recs.map(scmSer))); }catch(e){} }
@@ -3702,7 +3702,8 @@ function scmSuppOf(name){ const k = scmSupKey(name); return SUPP.recs.find(o => 
 
 /* ---------- page head (same layout as every module) ---------- */
 function scmHead(o){   // a tab of Procurement: the same heading as the other Procurement tabs
-  return `<div class="head"><div><h2>${o.title}</h2><p>${o.sub} <span class="faint">${o.pw}.</span></p></div>
+  const er = o.S && o.S.err ? `<div class="note warn" style="margin-bottom:12px">⚠ Could not read the Google Sheet (${esc(o.S.err)}). Showing the copy saved on this device.</div>` : '';
+  return er + `<div class="head"><div><h2>${o.title}</h2><p>${o.sub} <span class="faint">${o.pw}.</span></p></div>
     <div class="row-btns" style="margin:0">${o.primary || ''}<button class="btn" data-sa="xlsx">📊 Excel</button><button class="btn" data-sa="reload">↻ Refresh</button><button class="btn" data-sa="help">❓ Help</button></div></div>`;
 }
 const scmChip = (t, c) => `<span class="sc-st ${c}">${esc(t)}</span>`;
@@ -3715,7 +3716,7 @@ function renderSupp(){
   const el = $('#supp'); if(!el) return;
   if(!SUPP.loaded || (typeof PLC !== 'undefined' && !PLC.loaded)){ el.innerHTML = scmCss('supp') + '<div class="sc-note">Loading…</div>'; Promise.all([scmLoad(SUPP), scmNeedPlc()]).then(renderSupp); return; }
   const S = scmSuppliers(), {L} = scmQuotes();
-  const head = scmHead({title: 'Suppliers', sub: 'Every quotation from the Procurement Pipeline, per supplier and per item, with the supplier details kept in one place.',
+  const head = scmHead({S: SUPP, title: 'Suppliers', sub: 'Every quotation from the Procurement Pipeline, per supplier and per item, with the supplier details kept in one place.',
     primary: scmCanSupp() ? '<button class="btn primary" data-sa="new">＋ New supplier</button>' : '', tab: 'WOP_supp', pw: 'saving needs the Procurement or Admin password',
     meta: `<span>🏢 Suppliers <b>${S.length}</b></span><span>🧾 Quotations <b>${S.reduce((t, s) => t + s.quotes, 0)}</b></span>${scmLastUpd(SUPP)}`});
   if(SUPP.sel){ const s = SUPP.sel === '__new' ? {key: '', name: '', rec: SUPP.draft, bids: [], quotes: 0, wins: 0, val: 0} : S.find(x => x.key === SUPP.sel);
@@ -3858,7 +3859,7 @@ function renderGrn(){
   const el = $('#grn'); if(!el) return;
   if(!GRN.loaded || (typeof PLC !== 'undefined' && !PLC.loaded)){ el.innerHTML = scmCss('grn') + '<div class="sc-note">Loading…</div>'; Promise.all([scmLoad(GRN), scmNeedPlc()]).then(renderGrn); return; }
   const P = grnPOs(), nG = GRN.recs.reduce((t, o) => t + (o.grns || []).length, 0);
-  const head = scmHead({title: 'Receiving (GRN) & 3-way match',  sub: 'Every PO issued in the Procurement Pipeline → goods received (GRN) → supplier invoice, matched before payment.', tab: 'WOP_grn',
+  const head = scmHead({S: GRN, title: 'Receiving (GRN) & 3-way match',  sub: 'Every PO issued in the Procurement Pipeline → goods received (GRN) → supplier invoice, matched before payment.', tab: 'WOP_grn',
     pw: 'GRN needs the Matco password, invoices the Procurement or Cost Control password', 
     meta: `<span>🧾 POs <b>${P.length}</b></span><span>📦 GRN <b>${nG}</b></span>${scmLastUpd(GRN)}`});
   if(GRN.sel){ const p = P.find(x => x.key === GRN.sel); if(p){ el.innerHTML = scmCss('grn') + head + grnDetail(p); scmWire(el, 'grn'); return; } GRN.sel = null; }
@@ -4177,7 +4178,7 @@ var zidRoles = z => (z.roles || []).map(r => ZID_ROLE[r] || r).join(', ');
 function zidRoleFor(roles){ const z = zidGet(); if(!z) return ''; const R = z.roles || []; if(R.includes('ADMIN')) return roles.includes('ADMIN') ? 'ADMIN' : roles[0]; return roles.find(r => R.includes(r)) || ''; }
 var ZID_CSS = `#dlgZid{width:min(440px,94vw)}#dlgZid .zid-who{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin:0 0 12px;background:var(--panel2,var(--panel))}
 #dlgZid .zid-who b{display:block}#dlgZid .zid-who small{color:var(--text-dim)}#dlgZid .zid-or{display:flex;align-items:center;gap:10px;color:var(--text-dim);font-size:12px;margin:14px 0 10px}#dlgZid .zid-or:before,#dlgZid .zid-or:after{content:"";flex:1;border-top:1px solid var(--border)}
-#dlgZid .zid-code{font:600 22px/1 var(--code,monospace);letter-spacing:6px;text-align:center}#dlgZid .zid-n{font-size:12.5px;color:var(--text-dim);margin:6px 0 0}`;
+#dlgZid .zid-code{font:600 22px/1 var(--code,monospace);letter-spacing:6px;text-align:center}#dlgZid .zid-t{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--text-dim);margin-top:6px}#dlgZid .zid-t .linkish{background:none;border:0;padding:0;color:var(--accent);cursor:pointer;font:inherit}#dlgZid .zid-t .linkish:disabled{color:var(--text-dim);cursor:default}#dlgZid .zid-t b{color:var(--text)}#dlgZid .zid-n{font-size:12.5px;color:var(--text-dim);margin:6px 0 0}`;
 function zidDialog(opts){
   opts = opts || {}; let done = null; const P = new Promise(r => { done = r; });
   let d = document.getElementById('dlgZid');
@@ -4194,39 +4195,63 @@ function zidDialog(opts){
   } else {
     d.innerHTML = `<div class="dh"><h3>👤 Sign in with your company e-mail</h3><p style="margin:4px 0 0;font-size:12.5px;color:var(--text-dim)">A 6-digit code is sent to your e-mail (Outlook). Your name and roles then go with everything you sign or save.</p></div>
       <div class="db"><div class="field"><label for="zidEm">Company e-mail</label><input id="zidEm" type="email" autocomplete="email" placeholder="name@znesb.com.my" value="${esc((() => { try{ return localStorage.getItem('ttammhub_lastemail') || ''; }catch(e){ return ''; } })())}"></div>
-        <div class="field" id="zidCodeF" style="display:none"><label for="zidCode">Code from the e-mail</label><input id="zidCode" class="zid-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••"></div>
+        <div class="field" id="zidCodeF" style="display:none"><label for="zidCode">Code from the e-mail</label><input id="zidCode" class="zid-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••">
+          <div class="zid-t"><span id="zidTime"></span><button class="linkish" id="zidNew" type="button">Send a new code</button></div></div>
         <div class="status-line" id="zidMsg" style="display:none"></div>
         <div class="zid-or">or, without signing in</div>${opts.pw ? `<div class="row-btns" style="margin:0 0 10px"><button class="btn sm" id="zidPw">🔑 Admin password (owner only, emergency)</button></div>` : ''}
         <div class="field"><label for="zidName">Just set my name on this device</label><div style="display:flex;gap:8px"><input id="zidName" type="text" maxlength="60" value="${esc(hubUser())}" style="flex:1"><button class="btn" id="zidNameOk">Save name</button></div></div></div>
       <div class="df"><button class="btn" id="zidX">Cancel</button><button class="btn primary" id="zidGo">Send code</button></div>`;
-    const em = d.querySelector('#zidEm'), cf = d.querySelector('#zidCodeF'), cd = d.querySelector('#zidCode'), go = d.querySelector('#zidGo'), msg = d.querySelector('#zidMsg');
+    const em = d.querySelector('#zidEm'), cf = d.querySelector('#zidCodeF'), cd = d.querySelector('#zidCode'), go = d.querySelector('#zidGo'), msg = d.querySelector('#zidMsg'), tm = d.querySelector('#zidTime'), nb = d.querySelector('#zidNew');
     const say = (t, cls) => { msg.textContent = t; msg.className = 'status-line' + (cls ? ' ' + cls : ''); msg.style.display = t ? 'block' : 'none'; };
-    let sent = false;
+    /* the code asked last time on this device: while it is valid the box to type it shows straight away */
+    const RQ = 'ttammhub_otpreq', rq = () => { try{ return JSON.parse(localStorage.getItem(RQ) || 'null'); }catch(e){ return null; } }, rqSet = v => { try{ v ? localStorage.setItem(RQ, JSON.stringify(v)) : localStorage.removeItem(RQ); }catch(e){} };
+    const mine = () => { const r = rq(), e = em.value.trim().toLowerCase(); return r && r.email === e ? r : null; };
+    const hm = t => { const x = new Date(t); return String(x.getHours()).padStart(2, '0') + ':' + String(x.getMinutes()).padStart(2, '0'); };
+    let expiredShown = false;
+    const refresh = () => {
+      const r = mine(), now = Date.now(), left = r ? r.at + 600000 - now : 0;
+      if(r && left > 0){
+        cf.style.display = ''; go.textContent = 'Sign in';
+        const m = Math.floor(left / 60000), sec = Math.floor(left / 1000) % 60, wait = Math.ceil((r.at + 60000 - now) / 1000);
+        tm.innerHTML = 'Code sent at <b>' + hm(r.at) + '</b> — valid for <b>' + m + ':' + String(sec).padStart(2, '0') + '</b> more';
+        nb.disabled = wait > 0; nb.textContent = wait > 0 ? 'Send a new code in ' + wait + ' s' : 'Send a new code';
+        if(expiredShown){ expiredShown = false; say(''); }
+      } else {
+        cf.style.display = 'none'; go.textContent = 'Send code';
+        if(r && !expiredShown){ expiredShown = true; say('⌛ The code sent at ' + hm(r.at) + ' has expired (10 minutes) — press Send code for a new one.', 'warn'); }
+      }
+    };
+    const tick = setInterval(() => { if(!d.open){ clearInterval(tick); return; } refresh(); }, 1000);
     d.querySelector('#zidX').onclick = close;
     if(opts.pw) d.querySelector('#zidPw').onclick = () => { const f = done; done = null; close(); Promise.resolve(opts.pw()).then(v => f && f(!!v)); };
     d.querySelector('#zidNameOk').onclick = () => { const n = d.querySelector('#zidName').value; setHubUser(n); toast(n.trim() ? 'Name saved: ' + n.trim() : 'Name cleared'); close(); };
     const send = async () => {
       const e = em.value.trim().toLowerCase(); if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)){ say('Enter your company e-mail.', 'bad'); em.focus(); return; }
       if(!url){ say('Connect the shared Google Sheet first (☁ Google Sheets).', 'bad'); return; }
-      go.disabled = true; say('Sending the code…');
+      go.disabled = nb.disabled = true; say('Sending the code…');
       try{ await gsCall(url, 'hub', null, {action: 'otpSend', email: e}); try{ localStorage.setItem('ttammhub_lastemail', e); }catch(x){}
-        sent = true; cf.style.display = ''; go.textContent = 'Sign in'; say('Code sent to ' + e + ' — it is valid for 10 minutes. Check Junk / Spam if it is not in the inbox.', 'ok'); cd.focus(); }
-      catch(x){ say(/Unknown action/i.test(x.message) ? 'The Code.gs in the Google Sheet is older than this page — deploy the new Code.gs first.' : x.message, 'bad'); }
-      finally{ go.disabled = false; }
+        rqSet({email: e, at: Date.now()}); expiredShown = false; refresh(); cd.value = ''; say('Code sent to ' + e + '. Check Junk / Spam if it is not in the inbox.', 'ok'); cd.focus(); }
+      catch(x){
+        if(/less than a minute/i.test(x.message)){ if(!mine()) rqSet({email: e, at: Date.now() - 30000}); expiredShown = false; refresh(); say('A code was already sent to ' + e + ' — type it below.', 'ok'); cd.focus(); }
+        else say(/Unknown action/i.test(x.message) ? 'The Code.gs in the Google Sheet is older than this page — deploy the new Code.gs first.' : x.message, 'bad'); }
+      finally{ go.disabled = false; refresh(); }
     };
     const verify = async () => {
       const c = cd.value.replace(/\D/g, ''); if(c.length !== 6){ say('Enter the 6 digits from the e-mail.', 'bad'); cd.focus(); return; }
       go.disabled = true; say('Checking…');
       try{ const j = await gsCall(url, 'hub', null, {action: 'otpVerify', email: em.value.trim().toLowerCase(), code: c});
-        zidSet({token: j.token, email: j.email, name: j.name, roles: j.roles || [], exp: j.exp}); const f0 = done; done = null; close(); done = f0;
+        rqSet(null); zidSet({token: j.token, email: j.email, name: j.name, roles: j.roles || [], exp: j.exp}); const f0 = done; done = null; close(); done = f0;
         toast('✓ Signed in as ' + j.name + ' (' + (zidRoles(zidGet()) || 'no role') + ')', 6000); try{ await ensureView(); reloadModules(); }catch(e){} if(done){ done(true); done = null; } }
-      catch(x){ say(x.message, 'bad'); }
+      catch(x){ if(/expired|Send code again/i.test(x.message)){ const r = mine(); if(r){ rqSet({email: r.email, at: Date.now() - 700000}); } expiredShown = false; refresh(); if(!/expired/i.test(x.message)) say(x.message, 'bad'); } else say(x.message, 'bad'); }
       finally{ go.disabled = false; }
     };
-    go.onclick = () => sent && cf.style.display !== 'none' && cd.value ? verify() : send();
-    em.onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); send(); } };
+    go.onclick = () => cf.style.display !== 'none' ? verify() : send();
+    nb.onclick = () => send();
+    em.oninput = () => { expiredShown = false; say(''); refresh(); };
+    em.onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); cf.style.display !== 'none' ? cd.focus() : send(); } };
     cd.onkeydown = e => { if(e.key === 'Enter'){ e.preventDefault(); verify(); } };
     cd.oninput = () => { if(cd.value.replace(/\D/g, '').length === 6) verify(); };
+    refresh(); if(cf.style.display !== 'none') setTimeout(() => cd.focus(), 50);
   }
   if(!d.open) d.showModal();
   return P;
