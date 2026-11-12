@@ -6558,7 +6558,7 @@ function mdParse(X, wb, fileName){
   const col = re => hd.findIndex(c => re.test(mdN(c)));
   const cDoc = 2, cDesc = col(/description\s*of\s*doc/), cPsp = col(/^psp\s*no/), cJst = col(/^status$/), cSub = col(/^submission date/), cTgt = col(/^target submission/),
         cRev = col(/^latest revision/), cRem = col(/^remark/), cPic = hd.findIndex(c => mdN(c) === 'pic');
-  const blocks = []; hd.forEach((c, i) => { if(best.isTo(c) && best.isFrom(hd[i + 2] || '')){ const m = /\(\s*Rev\s*\.?\s*([0-9A-Za-z]+)\s*\)/i.exec(lab[i] || '') || /\bRev\b\s*\.?\s*([0-9A-Za-z]+)/i.exec(lab[i] || ''); blocks.push({c: i, rev: m ? 'REV.' + m[1].toUpperCase() : ''}); } });
+  const blocks = []; hd.forEach((c, i) => { if(best.isTo(c) && best.isFrom(hd[i + 2] || '')){ const m = /Rev\s*\.?\s*([0-9A-Za-z]+)/i.exec(lab[i] || ''); blocks.push({c: i, rev: m ? 'REV.' + m[1].toUpperCase() : ''}); } });
   const r0 = (X.utils.decode_range(wb.Sheets[best.name]['!ref'] || 'A1').s.r) || 0, struck = mdStrikeRows(wb, best.name);
   const recs = []; let parent = '', cur = '', ord = 0;
   for(let r = h + 2; r < rows.length; r++){
@@ -6580,16 +6580,15 @@ function mdReply(d){ const sub = mdBlocks(d).filter(b => b[1]); for(let i = sub.
 const mdMon = s => { const x = /^(\d{4})-(\d{2})/.exec(mdS(s)); return x ? MD_MON[+x[2] - 1] + '-' + x[1] : ''; };
 function mdState(d){
   if(d._s) return d._s;
-  if(d.flag === 'CANCEL') return d._s = {k: 'X', col: 'X', txt: d.flag === 'CANCEL' ? 'Cancelled' : 'KIV'};
+  if(d.flag) return d._s = {k: 'X', col: 'X', txt: d.flag === 'CANCEL' ? 'Cancelled' : 'KIV'};
   const bl = mdBlocks(d), sub = bl.filter(b => b[1]);      // [rev, zneDate, zneTrn, pcsbDate, pcsbTrn, status]
   let s;
   if(bl.some(b => /APPROVED/i.test(b[5]))) s = {k: 'AP', col: 'AP', txt: 'Approved'};
   else if(!sub.length){ s = /^submitted$/i.test(d.jst) ? {k: 'P', rev: d.rev || 'REV.A'} : {k: 'S', code: 0, col: 'S:REV.A', txt: 'Not yet submitted'}; }
   else { const b = sub[sub.length - 1], st = b[5].toUpperCase().replace(/\s+/g, ' ');
-    if(st || b[4]){ const m = /CODE\s*([123])/.exec(st); s = m ? {k: 'S', code: +m[1], col: 'S:CODE ' + m[1], txt: 'Code ' + m[1] + ' — ZNE to resubmit'} : {k: 'O', col: 'O', txt: 'PCSB replied: ' + (b[5] || 'see register')}; }
-    else s = {k: 'P', rev: (/^REV\.[0-9A-Z]{1,3}$/.test(b[0]) ? b[0] : '') || d.rev || 'REV.A'}; }
+    if(b[3] || st){ const m = /CODE\s*([123])/.exec(st); s = m ? {k: 'S', code: +m[1], col: 'S:CODE ' + m[1], txt: 'Code ' + m[1] + ' — ZNE to resubmit'} : {k: 'O', col: 'O', txt: 'PCSB replied: ' + (b[5] || 'see register')}; }
+    else s = {k: 'P', rev: d.rev || b[0] || 'REV.A'}; }
   if(s.k === 'P'){ s.col = 'P:' + s.rev; s.txt = 'Pending PCSB review (' + s.rev + ')'; }
-  if(d.flag === 'KIV') s.txt = 'KIV · ' + s.txt;
   return d._s = s;
 }
 const MD_REV_ORDER = ['REV.A', 'REV.B', 'REV.C', 'REV.D', 'REV.0'];
@@ -6635,14 +6634,14 @@ async function mdClear(){
 }
 function mdCopy(){
   const R = MDDR.recs, S = k => R.filter(d => mdState(d).k === k).length, nX = S('X'), act = R.length - nX;
-  const t = ['MDDR Tracker — ' + R.length + ' documents (' + act + ' active' + (nX ? ', ' + nX + ' cancelled' : '') + ')', 'Pending ZNE: ' + S('S'), 'Pending PCSB review: ' + S('P'), 'Approved: ' + S('AP')];
+  const t = ['MDDR Tracker — ' + R.length + ' documents (' + act + ' active' + (nX ? ', ' + nX + ' cancel / KIV' : '') + ')', 'Pending ZNE: ' + S('S'), 'Pending PCSB review: ' + S('P'), 'Approved: ' + S('AP')];
   (navigator.clipboard ? navigator.clipboard.writeText(t.join('\n')) : Promise.reject()).then(() => toast('Summary copied ✓'), () => toast('Could not copy — select the text manually.', 5000));
 }
 async function mdExport(){
   let X; try{ X = await getXLSX(); }catch(e){ toast(e.message, 7000); return; }
   const R = MDDR.recs, revs = mdRevCols(), discs = []; R.forEach(d => { if(!discs.includes(d.disc)) discs.push(d.disc); });
   const cols = ['S:REV.A', 'S:CODE 1', 'S:CODE 2', 'S:CODE 3'].concat(revs.map(r => 'P:' + r), ['AP', 'X']);
-  const head = ['DISCIPLINE', 'TOTAL PROCEDURE', 'Pending ZNE · REV.A', 'Pending ZNE · CODE 1', 'Pending ZNE · CODE 2', 'Pending ZNE · CODE 3'].concat(revs.map(r => 'Pending PCSB · ' + r), ['APPROVED', 'CANCELLED']);
+  const head = ['DISCIPLINE', 'TOTAL PROCEDURE', 'Pending ZNE · REV.A', 'Pending ZNE · CODE 1', 'Pending ZNE · CODE 2', 'Pending ZNE · CODE 3'].concat(revs.map(r => 'Pending PCSB · ' + r), ['APPROVED', 'CANCEL / KIV']);
   const row = (name, L) => [name, L.length].concat(cols.map(c => L.filter(d => mdState(d).col === c).length));
   const w1 = X.utils.aoa_to_sheet([head].concat(discs.map(n => row(n, R.filter(d => d.disc === n))), [row('Total', R)]));
   const w2 = X.utils.aoa_to_sheet([['#', 'Discipline', 'Document No.', 'Description', 'PIC', 'PSP No.', 'Latest rev.', 'Submitted', 'PCSB reply', 'PCSB reply code', 'Where it stands', 'Remark']].concat(R.map(d => [d.no, d.disc, d.docNo, d.desc, d.pic, d.psp, d.rev, mdF(d.subDate), mdF(mdReply(d).date), mdReply(d).st, mdState(d).txt, d.remark])));
@@ -6796,7 +6795,7 @@ function mdHead(R){
     <div class="tb-meta">${R.length ? `<span>📦 Records <b>${R.length}</b></span>` : ''}${r0.importedAt ? `<span>🕐 Updated <b>${esc(dt(r0.importedAt))}</b></span><span>📥 Last import <b>${esc(r0.fileName || '')}</b>${r0.importedBy ? ' · by <b>' + esc(r0.importedBy) + '</b>' : ''}</span>` : '<span>No import yet</span>'}</div></div>
     <div class="md-help" id="mdSetBox" style="display:none"><b>MDDR settings</b><br>Storage: <b>${url ? 'Google Sheets (tab WOP_mddr)' : 'this device only'}</b> · Documents: <b>${R.length}</b>${r0.fileName ? ' · Last file: <b>' + esc(r0.fileName) + '</b>' : ''}<br>The Google Sheets link and passwords are shared by all modules — change them in <button class="linkish" id="mdSetGo">Health &amp; backups</button>.</div>
     <div class="md-help" id="mdHelpBox" style="display:none"><b>How each document is placed</b> (read from the revision blocks of the register):<br>
-      <b>Approved</b> — a review status says APPROVED. · <b>Cancelled</b> — struck through in Excel, or “Cancel” in PIC / Remark, or set with the <b>Mark</b> dropdown (a <b>KIV</b> document stays in its normal column, tagged KIV). · <b>Pending submission from ZNE</b> — not yet submitted (REV.A), or PCSB replied with Code 1 / 2 / 3 and ZNE has not resubmitted. · <b>Pending reviewed by PCSB</b> — ZNE submitted and PCSB has not replied yet, shown by revision.<br>
+      <b>Approved</b> — a review status says APPROVED. · <b>Cancel / KIV</b> — struck through in Excel, or “KIV / Cancel” in PIC / Remark, or set with the <b>Mark</b> dropdown. · <b>Pending submission from ZNE</b> — not yet submitted (REV.A), or PCSB replied with Code 1 / 2 / 3 and ZNE has not resubmitted. · <b>Pending reviewed by PCSB</b> — ZNE submitted and PCSB has not replied yet, shown by revision.<br>
       ${OPS ? 'Importing again replaces the register and keeps your Cancel / KIV marks. ' : ''}Dates are shown as DD-Mon-YYYY.</div>`;
 }
 function renderMddr(){
@@ -6827,9 +6826,9 @@ function renderMddr(){
   const monKey = s => { const x = /^(\w{3})-(\d{4})$/.exec(s); return x ? x[2] + String(MD_MON.indexOf(x[1])).padStart(2, '0') : s; };
   const anyF = f.disc !== 'ALL' || f.col || f.q || ['doc', 'desc', 'psp'].some(k => f[k]) || ['pic', 'rev', 'sub', 'rep', 'st', 'mdisc'].some(k => f[k].length);
   const nS = R.filter(d => mdState(d).k === 'S').length, nP = R.filter(d => mdState(d).k === 'P').length, nA = R.filter(d => mdState(d).k === 'AP').length, nX = R.filter(d => mdState(d).k === 'X').length, nO = R.length - nS - nP - nA - nX, nNew = R.filter(d => mdState(d).col === 'S:REV.A').length, act = R.length - nX;
-  const kpi = [['Total procedures', R.length, nX ? act + ' active · ' + nX + ' cancelled' : 'in the register', 'var(--accent)'], ['Submitted to PCSB', act - nNew, ((act - nNew) / (act || 1) * 100).toFixed(1) + '% of active', 'var(--info,var(--accent))'],
+  const kpi = [['Total procedures', R.length, nX ? act + ' active · ' + nX + ' cancel / KIV' : 'in the register', 'var(--accent)'], ['Submitted to PCSB', act - nNew, ((act - nNew) / (act || 1) * 100).toFixed(1) + '% of active', 'var(--info,var(--accent))'],
     ['Pending ZNE', nS, 'not submitted · Code 1/2/3 to resubmit', 'var(--bad)'], ['Pending PCSB review', nP, 'waiting for PCSB reply', 'var(--warn)'], ['Approved', nA, (nA / (act || 1) * 100).toFixed(1) + '% of active', 'var(--ok)']];
-  const segs = [['Pending ZNE', nS, 'var(--bad)'], ['Pending PCSB', nP, 'var(--warn)'], ['Approved', nA, 'var(--ok)']].concat(nX ? [['Cancelled', nX, 'var(--text-faint)']] : [], nO ? [['Other', nO, 'var(--text-faint)']] : []);
+  const segs = [['Pending ZNE', nS, 'var(--bad)'], ['Pending PCSB', nP, 'var(--warn)'], ['Approved', nA, 'var(--ok)']].concat(nX ? [['Cancel / KIV', nX, 'var(--text-faint)']] : [], nO ? [['Other', nO, 'var(--text-faint)']] : []);
   const pill = s => `<span class="md-pill ${s.k === 'AP' ? 'ap' : s.k === 'P' ? 'pcsb' : s.k === 'X' ? 'x' : 'zne'}">${esc(s.txt)}</span>`;
   const legacy = R.some(d => (mdS(d.subDate) && !/^\d{4}-\d{2}-\d{2}$/.test(mdS(d.subDate))) || mdBlocks(d).some(b => (b[1] && !/^\d{4}-\d{2}-\d{2}$/.test(b[1])) || (b[3] && !/^\d{4}-\d{2}-\d{2}$/.test(b[3]))));
   el.innerHTML = MD_CSS + `${importBtn}
@@ -6840,9 +6839,9 @@ function renderMddr(){
   <div class="md-leg">${segs.map(s => `<span><b style="background:${s[2]}"></b>${esc(s[0])} ${s[1]} (${(s[1] / R.length * 100).toFixed(0)}%)</span>`).join('')}</div>
   <div class="md-card"><div class="md-top"><h3>TTAMM — MASTER DELIVERABLE DOCUMENT REGISTER (MDDR)</h3><div class="md-asof">As of : ${esc(asOf)}${R[0].fileName ? ' · ' + esc(R[0].fileName) : ''}</div></div>
   <div class="md-wrap"><table class="md mx"><thead>
-    <tr><th rowspan="2" class="mx-l">DISCIPLINE</th><th rowspan="2" class="mx-h mx-t">📊 TOTAL<br>PROCEDURE</th><th colspan="4" class="mx-h mx-zne">📝 PENDING SUBMISSION FROM ZNE</th><th colspan="${revs.length}" class="mx-h mx-pcsb">⏳ PENDING REVIEWED BY PCSB</th><th rowspan="2" class="mx-h mx-ap">✅ APPROVED</th><th rowspan="2" class="mx-h mx-x">🚫 CANCELLED</th>${hasO ? '<th rowspan="2" class="mx-h">OTHER</th>' : ''}</tr>
+    <tr><th rowspan="2" class="mx-l">DISCIPLINE</th><th rowspan="2" class="mx-h mx-t">📊 TOTAL<br>PROCEDURE</th><th colspan="4" class="mx-h mx-zne">📝 PENDING SUBMISSION FROM ZNE</th><th colspan="${revs.length}" class="mx-h mx-pcsb">⏳ PENDING REVIEWED BY PCSB</th><th rowspan="2" class="mx-h mx-ap">✅ APPROVED</th><th rowspan="2" class="mx-h mx-x">🚫 CANCEL / KIV</th>${hasO ? '<th rowspan="2" class="mx-h">OTHER</th>' : ''}</tr>
     <tr><th class="mx-s zne">REV.A</th><th class="mx-s zne">CODE 1</th><th class="mx-s zne">CODE 2</th><th class="mx-s zne">CODE 3</th>${revs.map(r => `<th class="mx-s pcsb">${esc(r)}</th>`).join('')}</tr></thead>
-    <tbody>${discs.map(d => `<tr>${line(d)}</tr>`).join('')}<tr class="md-tot">${line('ALL')}</tr></tbody></table></div><div class="md-note">– = none · click any number to list those documents · CANCELLED = struck through in the Excel, or marked Cancel (KIV stays in its normal column). PCSB review is counted under the revision last submitted. TOTAL = all columns added up.</div></div>
+    <tbody>${discs.map(d => `<tr>${line(d)}</tr>`).join('')}<tr class="md-tot">${line('ALL')}</tr></tbody></table></div><div class="md-note">– = none · click any number to list those documents · CANCEL / KIV = struck through in the Excel, or marked KIV / Cancel. ALL = REV.A + CODE 1/2/3 + PCSB review + APPROVED + CANCEL / KIV.</div></div>
   ` : `<div class="md-fl" style="margin-top:0"><b>${list.length}</b> of ${R.length} documents${anyF ? ` · <button class="linkish" id="mdClr">✕ Clear all filters</button>` : ''}
     <input id="mdQ" type="search" placeholder="Search doc no, description, PIC…" value="${esc(f.q)}"></div>
   <div class="md-card" style="overflow-x:auto;padding:8px"><table class="md md-list" style="min-width:1000px"><thead><tr><th>#</th><th>Discipline</th><th>Document No.</th><th>Description</th><th>PIC</th><th>PSP No.</th><th>Latest rev.</th><th>Submitted</th><th>PCSB reply</th><th>Where it stands</th>${OPS ? '<th>Mark</th>' : ''}</tr>
@@ -6866,7 +6865,7 @@ function mdWire(el){
   el.querySelectorAll('[data-mdm]').forEach(b => b.onclick = e => { e.stopPropagation(); const w = b.parentElement, was = w.classList.contains('open'); mdMenusClose(); if(!was) w.classList.add('open'); });
   el.querySelectorAll('[data-mdt]').forEach(b => b.onclick = () => { MDDR.tab = b.dataset.mdt; renderMddr(); });
   const imp = el.querySelector('#mdImp'), fi = el.querySelector('#mdFile');
-  if(imp && fi){ imp.onclick = () => hubImportDlg({mod: 'mddr', title: 'Import — MDDR register', types: '.xlsx / .xlsm / .xls', accept: fi.accept, note: 'Choose the <b>MDDR</b> workbook (Master Document Deliverable Register). The sheet <b>MDDR PSP_WO15</b> is read — each document is placed from its revision blocks: <b>Approved</b>, <b>Cancelled</b>, <b>Pending submission</b> or with PCSB for review. The previous data is kept so the import can be undone.', onFile: f => mdImport(f)}); fi.onchange = () => { const x = fi.files[0]; fi.value = ''; if(x) mdImport(x); }; }
+  if(imp && fi){ imp.onclick = () => hubImportDlg({mod: 'mddr', title: 'Import — MDDR register', types: '.xlsx / .xlsm / .xls', accept: fi.accept, note: 'Choose the <b>MDDR</b> workbook (Master Document Deliverable Register). The sheet <b>MDDR PSP_WO15</b> is read — each document is placed from its revision blocks: <b>Approved</b>, <b>Cancel / KIV</b>, <b>Pending submission</b> or with PCSB for review. The previous data is kept so the import can be undone.', onFile: f => mdImport(f)}); fi.onchange = () => { const x = fi.files[0]; fi.value = ''; if(x) mdImport(x); }; }
   el.querySelectorAll('[data-mdd]').forEach(td => td.onclick = () => { const d = td.dataset.mdd, c = td.dataset.mdc, same = MDDR.f.disc === d && MDDR.f.col === c; MDDR.f.disc = same ? 'ALL' : d; MDDR.f.col = same ? '' : c; MDDR.tab = 'docs'; renderMddr(); window.scrollTo(0, 0); });
   const c = el.querySelector('#mdClr'); if(c) c.onclick = () => { MDDR.f = mdF0(); renderMddr(); };
   el.querySelectorAll('select.md-mk').forEach(s => s.onchange = () => mdMark(s.dataset.mdmk, s.value));
