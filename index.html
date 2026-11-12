@@ -6286,7 +6286,7 @@ function mdState(d){
   else { const b = sub[sub.length - 1], st = b[5].toUpperCase().replace(/\s+/g, ' ');
     /* PCSB date / transmittal without a review status yet = still pending PCSB review */
     if(st){ const m = /CODE\s*([123])/.exec(st); s = m ? {k: 'S', code: +m[1], col: 'S:CODE ' + m[1], txt: 'Code ' + m[1] + ' — ZNE to resubmit'} : {k: 'O', col: 'O', txt: 'PCSB replied: ' + (b[5] || 'see register')}; }
-    else s = {k: 'P', rev: b[0] || d.rev || 'REV.A'}; }   // the revision of the latest submission block, not “Latest Revision Reviewed by PCSB”
+    else s = {k: 'P', rev: (/^REV\.IEW$/.test(b[0]) ? '' : b[0]) || d.rev || 'REV.A'}; }   // the revision of the latest submission block, not “Latest Revision Reviewed by PCSB”
   if(s.k === 'P'){ s.col = 'P:' + s.rev; s.txt = 'Pending PCSB review (' + s.rev + ')'; }
   return d._s = s;
 }
@@ -6302,6 +6302,7 @@ async function mdLoad(force){
   if(!recs || (!recs.length && !url)){ try{ const raw = localStorage.getItem(MD_KEY); if(raw) recs = JSON.parse(raw); }catch(e){} }
   MDDR.recs = (recs || []).filter(r => r && r.id && r.id !== '__meta').sort((a, b) => String(a.ord).localeCompare(String(b.ord)));
   MDDR.loaded = true;
+  if(MDDR.recs.some(d => mdBlocks(d).some(b => /^REV\.IEW$/.test(b[0])))){ MDDR.stale = true; try{ toast('⚠ MDDR data was saved by the old version — please Import the Excel again so the REV.A / B / C / D columns are correct.', 12000); }catch(e){} }
 }
 async function mdSaveAll(recs, fileName, line){
   if(!line) FORCE_PW = Date.now() + 10 * 60 * 1000;   // an import always re-confirms the password
