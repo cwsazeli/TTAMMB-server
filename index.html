@@ -2462,14 +2462,14 @@ async function plcNotify(r, w, A){
     if(j.skipped){ toast('⚠ Saved — no e-mail: ' + j.skipped, 9000); return; }
     toast('📧 ' + roleTxt + ' notified by e-mail (' + (j.to || '') + ')', 6000);
   }catch(e){
-    toast(/unknown action/i.test(e.message) ? '⚠ Saved, but no e-mail sent: the Google Sheet runs an older Code.gs. Health & backups → Copy Code.gs → paste in Apps Script → Deploy a new version.' : '⚠ Saved, but the e-mail to ' + roleTxt + ' was not sent: ' + e.message, 12000);
+    toast(/unknown action/i.test(e.message) ? '⚠ Saved, but no e-mail sent: the Google Sheet runs an older Code.gs. paste your latest Code.gs in Apps Script → Deploy a new version.' : '⚠ Saved, but the e-mail to ' + roleTxt + ' was not sent: ' + e.message, 12000);
   }
 }
 async function plcRemindCall(action, extra){
   const url = hubUrl(); if(!url){ toast('Connect the Google Sheet first.'); return null; }
   let A = PLC._auth; if(!A || !A.pw || !/Admin/.test(A.name || '')){ A = await plcAuth(['ADMIN'], [action === 'plcRemindNow' ? 'Send the procurement reminders now' : 'Daily procurement reminders']); if(!A) return null; }
   try{ const j = await gsCall(url, 'wop', null, Object.assign({action, module: 'plc', pw: A.pw, zbUser: A.name}, extra || {})); if(!j || j.error) throw new Error(j ? j.error : 'no answer'); return j; }
-  catch(e){ toast(/unknown action/i.test(e.message) ? '⚠ The Google Sheet runs an older Code.gs — Health & backups → Copy Code.gs → paste in Apps Script → Deploy a new version.' : '⚠ ' + e.message, 10000); return null; }
+  catch(e){ toast(/unknown action/i.test(e.message) ? '⚠ The Google Sheet runs an older Code.gs — paste your latest Code.gs in Apps Script → Deploy a new version.' : '⚠ ' + e.message, 10000); return null; }
 }
 
 /* ======================= LINKS BETWEEN MODULES =======================
@@ -2931,6 +2931,8 @@ function hubModSet(k, moreFn){
   if(!d){ d = document.createElement('dialog'); d.id = 'dlgModSet'; d.className = 'wide'; document.body.appendChild(d); }
   const draw = (busy) => {
     const p = PING, ver = p && !p.error ? (p.version === HUB_EXPECT ? `<span class="ms-ok">✓ up to date (${esc(p.version)})</span>` : `<span class="ms-warn">⚠ out of date (${esc(p.version || 'old')} → ${esc(HUB_EXPECT)})</span>`) : p && p.error ? `<span class="ms-bad">✗ cannot reach it — ${esc(p.error)}</span>` : '<span class="ms-dim">not checked yet</span>';
+    const ml = p && !p.error && typeof p.mailLeft === 'number' && p.mailLeft >= 0 ? p.mailLeft : null;
+    const mq = ml === null ? '' : ml <= (p.mailReserve || 25) ? ` <span class="ms-warn">· ⚠ e-mail quota left today: ${ml} — reminders paused, kept for sign-in codes</span>` : ` <span class="ms-dim">· e-mail quota left today: ${ml}</span>`;
     const meta = msMeta(k);
     d.innerHTML = `<style>
       #dlgModSet{width:min(660px,94vw)}
@@ -2952,7 +2954,7 @@ function hubModSet(k, moreFn){
         <div class="ms-sec"><h4>☁ Google Sheets — shared by all modules</h4>
           <div class="ms-row"><span>Connection</span><b>${url ? '<span class="ms-ok">● Connected</span> · same data on every laptop and phone' : '<span class="ms-warn">⌂ This device only</span> · set the Google Sheets link to share'}</b></div>
           <div class="ms-row"><span>Sheet tab</span><b>${esc(I.tabs)}</b></div>
-          <div class="ms-row"><span>Code.gs</span><b>${busy ? '<span class="ms-dim">checking…</span>' : ver}</b></div>
+          <div class="ms-row"><span>Code.gs</span><b>${busy ? '<span class="ms-dim">checking…</span>' : ver + mq}</b></div>
           ${meta ? `<div class="ms-row"><span>This module</span><b style="font-weight:500">${esc(meta)}</b></div>` : ''}
           <div class="ms-btns"><button class="btn" id="msReload" title="Read this module again from the Google Sheet">🔄 Reload data</button><button class="btn" id="msTest"${url ? '' : ' disabled'} title="Check the link and the Code.gs version">🔌 Test connection</button><button class="btn" id="msSheets" title="The Google Sheets link — same for every module">🔗 Sheets link</button><button class="btn" id="msAdmin" title="Passwords, backups and the weekly e-mail (Health &amp; backups)">🔐 Passwords</button></div></div>
         <div class="ms-sec"><h4>👤 You</h4>
@@ -8999,7 +9001,7 @@ $('#shTest').addEventListener('click', async () => {
   try{
     const j = await gsCall(url, 'hub', {action:'ping'});
     if(j.app !== 'ttamm-hub'){ shStatus('This URL answers, but it is not the unified TTAMM Code.gs. Deploy the Code.gs from this page and use its URL.', 'bad'); return; }
-    shStatus(`Connected. The Sheet holds: ${describeCounts(j.counts)}.${j.hasPassword ? '' : ' <b>The emergency password is still the old default — update Code.gs (password now kept in Script Properties) and redeploy.</b>'}`, j.hasPassword ? 'ok' : 'warn');
+    shStatus(`Connected. The Sheet holds: ${describeCounts(j.counts)}.${typeof j.mailLeft === 'number' && j.mailLeft >= 0 ? ' E-mail quota left today: <b>' + j.mailLeft + '</b>' + (j.mailLeft <= (j.mailReserve || 25) ? ' — reminders paused, kept for sign-in codes.' : '.') : ''}${j.hasPassword ? '' : ' <b>The emergency password is still the old default — update Code.gs (password now kept in Script Properties) and redeploy.</b>'}`, j.hasPassword ? 'ok' : 'warn');
   }catch(e){ shStatus('Could not connect: ' + esc(e.message), 'bad'); }
 });
 $('#shSave').addEventListener('click', () => {
@@ -9832,7 +9834,7 @@ setTimeout(logVisit, 7000);
 setTimeout(() => freshBanner(), 20000);                               // also report a failed first load
 setInterval(() => { if(!$('#freshBar') || $('#freshBar').className === 'bad') freshBanner(); }, 30000);
 /* warn when the deployed Code.gs is older than this page expects (otherwise figures can silently be wrong) */
-const HUB_EXPECT = '2026.11.11-2';
+const HUB_EXPECT = '2026.11.12-1';
 async function checkVersion(){
   const url = hubUrl(); if(!url || $('#verBar')) return;
   const p = PING && !PING.error ? PING : await refreshPing(); if(!p || p.error) return;
