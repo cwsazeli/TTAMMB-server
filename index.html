@@ -6238,7 +6238,8 @@ function mdStrikeRows(wb, sheetName){
   }catch(e){ console.warn('strike-through check failed', e); }
   return out;
 }
-const mdAutoFlag = a => { const t = a.join(' | '); return /\bcancel/i.test(t) ? 'CANCEL' : /(^|[^A-Za-z])KIV([^A-Za-z]|$)/i.test(t) ? 'KIV' : ''; };
+const mdAutoFlag = a => { const t = a.join(' | '); return /\bcancel/i.test(t) ? 'CANCEL' : ''; };   // KIV text alone does not take a document out of the count (same as the Excel summary)
+const mdKivText = a => /(^|[^A-Za-z])KIV([^A-Za-z]|$)/i.test(a.join(' | '));
 function mdParse(X, wb, fileName){
   const T0 = {};
   let best = null; const diag = [];
@@ -6255,7 +6256,7 @@ function mdParse(X, wb, fileName){
   const col = re => hd.findIndex(c => re.test(mdN(c)));
   const cDoc = 2, cDesc = col(/description\s*of\s*doc/), cPsp = col(/^psp\s*no/), cJst = col(/^status$/), cSub = col(/^submission date/), cTgt = col(/^target submission/),
         cRev = col(/^latest revision/), cRem = col(/^remark/), cPic = hd.findIndex(c => mdN(c) === 'pic');
-  const blocks = []; hd.forEach((c, i) => { if(best.isTo(c) && best.isFrom(hd[i + 2] || '')){ const m = /Rev\s*\.?\s*([0-9A-Za-z]+)/i.exec(lab[i] || ''); blocks.push({c: i, rev: m ? 'REV.' + m[1].toUpperCase() : ''}); } });
+  const blocks = []; hd.forEach((c, i) => { if(best.isTo(c) && best.isFrom(hd[i + 2] || '')){ const m = /\bRev\b\s*\.?\s*([0-9A-Za-z]+)/i.exec(lab[i] || '');   /* \b…\b: “ISSUE FOR REVIEW (Rev . B)” must give REV.B, not REV.IEW */ blocks.push({c: i, rev: m ? 'REV.' + m[1].toUpperCase() : ''}); } });
   const r0 = (X.utils.decode_range(wb.Sheets[best.name]['!ref'] || 'A1').s.r) || 0, struck = mdStrikeRows(wb, best.name);
   const recs = []; let parent = '', cur = '', ord = 0;
   for(let r = h + 2; r < rows.length; r++){
@@ -6265,7 +6266,7 @@ function mdParse(X, wb, fileName){
     const bl = []; blocks.forEach(b => { const v = [0, 1, 2, 3, 4].map(i => (i === 0 || i === 2) ? mdD(row[b.c + i]) : mdS(row[b.c + i])); if(v.some(Boolean)) bl.push([b.rev].concat(v)); });
     const psp = mdS(row[cPsp]);
     recs.push({id: 'mddr:' + (psp || C + ':' + r), ord: String(++ord).padStart(4, '0'), disc: cur || 'OTHER', no: A, docNo: C, desc: D, pic: mdS(row[cPic]), psp, jst: mdS(row[cJst]),
-      subDate: mdD(row[cSub]), target: cTgt >= 0 ? mdD(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', flag: struck.has(r + 1 + r0) ? 'CANCEL' : mdAutoFlag([mdS(row[cPic]), cRem >= 0 ? mdS(row[cRem]) : '', D, mdS(row[cJst])]), importedAt: new Date().toISOString(), importedBy: String(hubUser() || '').trim(), fileName});
+      subDate: mdD(row[cSub]), target: cTgt >= 0 ? mdD(row[cTgt]) : '', rev: mdRevN(row[cRev]), blocks: JSON.stringify(bl), remark: cRem >= 0 ? mdS(row[cRem]) : '', flag: struck.has(r + 1 + r0) ? 'CANCEL' : mdAutoFlag([mdS(row[cPic]), cRem >= 0 ? mdS(row[cRem]) : '', D, mdS(row[cJst])]), _kiv: mdKivText([mdS(row[cPic]), cRem >= 0 ? mdS(row[cRem]) : '', D, mdS(row[cJst])]), importedAt: new Date().toISOString(), importedBy: String(hubUser() || '').trim(), fileName});
   }
   if(!recs.length) throw new Error('The register sheet was found but has no document rows.');
   return {recs, sheet: best.name};
@@ -6283,8 +6284,9 @@ function mdState(d){
   if(bl.some(b => /APPROVED/i.test(b[5]))) s = {k: 'AP', col: 'AP', txt: 'Approved'};
   else if(!sub.length){ s = /^submitted$/i.test(d.jst) ? {k: 'P', rev: d.rev || 'REV.A'} : {k: 'S', code: 0, col: 'S:REV.A', txt: 'Not yet submitted'}; }
   else { const b = sub[sub.length - 1], st = b[5].toUpperCase().replace(/\s+/g, ' ');
-    if(b[3] || st){ const m = /CODE\s*([123])/.exec(st); s = m ? {k: 'S', code: +m[1], col: 'S:CODE ' + m[1], txt: 'Code ' + m[1] + ' — ZNE to resubmit'} : {k: 'O', col: 'O', txt: 'PCSB replied: ' + (b[5] || 'see register')}; }
-    else s = {k: 'P', rev: d.rev || b[0] || 'REV.A'}; }
+    /* PCSB date / transmittal without a review status yet = still pending PCSB review */
+    if(st){ const m = /CODE\s*([123])/.exec(st); s = m ? {k: 'S', code: +m[1], col: 'S:CODE ' + m[1], txt: 'Code ' + m[1] + ' — ZNE to resubmit'} : {k: 'O', col: 'O', txt: 'PCSB replied: ' + (b[5] || 'see register')}; }
+    else s = {k: 'P', rev: b[0] || d.rev || 'REV.A'}; }   // the revision of the latest submission block, not “Latest Revision Reviewed by PCSB”
   if(s.k === 'P'){ s.col = 'P:' + s.rev; s.txt = 'Pending PCSB review (' + s.rev + ')'; }
   return d._s = s;
 }
@@ -6358,7 +6360,7 @@ async function mdImport(file){
   try{
     const wb = X.read(new Uint8Array(await file.arrayBuffer()), {type: 'array', cellDates: true, bookFiles: true});
     const out = mdParse(X, wb, file.name);
-    const old = {}; MDDR.recs.forEach(d => { old[d.id] = d; }); out.recs.forEach(d => { if(old[d.id] && old[d.id].flag) d.flag = old[d.id].flag; });   // Cancel / KIV marks survive a new import
+    const old = {}; MDDR.recs.forEach(d => { old[d.id] = d; }); out.recs.forEach(d => { const o = old[d.id]; if(o && o.flag && !(o.flag === 'KIV' && d._kiv && !d.flag)) d.flag = o.flag; delete d._kiv; });   // Cancel / KIV marks survive a new import
     if(MDDR.recs.length){ try{ localStorage.setItem(MD_UND, JSON.stringify({recs: MDDR.recs, at: Date.now(), file: file.name})); }catch(e){} }
     toast('Reading “' + out.sheet + '” — ' + out.recs.length + ' documents…', 3000);
     if(await mdSaveAll(out.recs, file.name)){ MDDR.recs = out.recs; MDDR.loaded = true; MDDR.f = mdF0(); toast('MDDR imported ✓ ' + out.recs.length + ' documents', 5000); renderMddr(); }
