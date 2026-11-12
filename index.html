@@ -1266,7 +1266,7 @@ html body table.md-list .md-mk{width:100%;max-width:100%;min-width:0;box-sizing:
   <nav class="rail" aria-label="Sections">
     <div class="sec">Dashboard</div>
     <button class="nav staff-only" data-view="mywork" title="Everything waiting for your role(s), from every module"><span class="glyph">✓</span>My work</button>
-    <button class="nav ops-only" data-view="exec" title="Executive overview for top management (Admin preview)"><span class="glyph">★</span>Executive</button>
+    
     <button class="nav" data-view="overview"><span class="glyph">▦</span>Overview</button>
     <button class="nav" data-view="w360"><span class="glyph">◎</span>WOP 360° &amp; exceptions</button>
     <button class="nav" data-view="weekly" title="Weekly management summary — print, save as PDF or copy as text"><span class="glyph">▤</span>Weekly Report</button>
@@ -1814,7 +1814,7 @@ function go(v){
   if(VIEW === 'est' && v !== 'est' && typeof LNK !== 'undefined') LNK.studioAt = 0;   // WOP Studio may have changed: read it again
   if(v === 'recon') v = RECON_SUB;
   if(!viewAllowed(v)){ staffLogin(OPS_VIEWS.includes(v) ? 'ops' : 'staff').then(ok => { if(ok && viewAllowed(v)) go(v); }); return; }
-  if(!['overview','w360','links','mto','rdy','proc','clm','weekly','trends','quality','files','activity','admin','mddr','plc','cop','mywork','supp','grn','exec','est','wop','aif','mat'].includes(v)) v = 'overview';
+  if(!['overview','w360','links','mto','rdy','proc','clm','weekly','trends','quality','files','activity','admin','mddr','plc','cop','mywork','supp','grn','est','wop','aif','mat'].includes(v)) v = 'overview';   // Executive removed (same content as Overview / WOP 360°) — old #exec links open Overview
   VIEW = v; if(v === 'links' || v === 'quality'){ RECON_SUB = v; try{ localStorage.setItem('ttammhub_recon', v); }catch(e){} }
   const navV = v === 'links' || v === 'quality' ? 'recon' : v === 'mto' ? 'proc' : v;
   $$('.nav').forEach(b => b.dataset.view === navV ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
