@@ -6458,7 +6458,7 @@ table.md.mx thead th{background:transparent!important;color:var(--text-dim)!impo
 table.md.mx thead th.mx-l{text-align:left;padding-left:12px;vertical-align:bottom}
 table.md.mx thead th.mx-h{border-radius:10px 10px 0 0;font-weight:700}
 table.md.mx thead th.mx-t{color:var(--accent)!important;background:color-mix(in srgb,var(--accent) 9%,transparent)!important}
-table.md.mx thead th.md-zt{cursor:pointer;user-select:none} table.md.mx thead th.md-zt:hover{filter:brightness(.96)} table.md.mx thead th.md-zt .md-zc{display:inline-block;width:1em;font-size:.95em} table.md.mx thead th.mx-zne{color:var(--bad)!important;background:color-mix(in srgb,var(--bad) 9%,transparent)!important}
+#mddr .md-zshow{margin-left:auto;margin-right:10px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--bad);background:color-mix(in srgb,var(--bad) 9%,transparent);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);border-radius:999px;padding:4px 12px} #mddr .md-zshow:hover{background:color-mix(in srgb,var(--bad) 16%,transparent)} table.md.mx thead th.md-zt{cursor:pointer;user-select:none} table.md.mx thead th.md-zt:hover{filter:brightness(.96)} table.md.mx thead th.md-zt .md-zc{display:inline-block;width:1em;font-size:.95em} table.md.mx thead th.mx-zne{color:var(--bad)!important;background:color-mix(in srgb,var(--bad) 9%,transparent)!important}
 table.md.mx thead th.mx-pcsb{color:var(--warn)!important;background:color-mix(in srgb,var(--warn) 10%,transparent)!important}
 table.md.mx thead th.mx-ap{color:var(--ok)!important;background:color-mix(in srgb,var(--ok) 9%,transparent)!important}
 table.md.mx thead th.mx-x{color:var(--text-dim)!important;background:color-mix(in srgb,var(--text-faint) 14%,transparent)!important}
@@ -6508,7 +6508,7 @@ function renderMddr(){
   const discs = []; R.forEach(d => { if(!discs.includes(d.disc)) discs.push(d.disc); });
   const revs = mdRevCols(), hasO = R.some(d => mdState(d).k === 'O');
   if(MDDR.zneOpen === undefined){ try{ MDDR.zneOpen = localStorage.getItem('ttammhub_mddr_zne') !== '0'; }catch(e){ MDDR.zneOpen = true; } }
-  const zOpen = MDDR.zneOpen, zCols = zOpen ? ['S:REV.A', 'S:CODE 1', 'S:CODE 2', 'S:CODE 3'] : ['S'];
+  const zOpen = MDDR.zneOpen, zCols = zOpen ? ['S:REV.A', 'S:CODE 1', 'S:CODE 2', 'S:CODE 3'] : [];
   const cols = zCols.concat(revs.map(r => 'P:' + r), ['AP', 'X'], hasO ? ['O'] : []);
   const cnt = {}; R.forEach(d => { const s = mdState(d), k = d.disc + '|' + s.col; cnt[k] = (cnt[k] || 0) + 1; cnt['ALL|' + s.col] = (cnt['ALL|' + s.col] || 0) + 1;
     if(s.k === 'S'){ cnt[d.disc + '|S'] = (cnt[d.disc + '|S'] || 0) + 1; cnt['ALL|S'] = (cnt['ALL|S'] || 0) + 1; } });
@@ -6540,9 +6540,9 @@ function renderMddr(){
   ${MDDR.tab !== 'docs' ? `<div class="md-kpis">${kpi.map(k => `<div class="md-kpi" style="--kc:${k[3]}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${k[2]}</div></div>`).join('')}</div>
   <div class="md-bar" title="Where the documents are">${segs.map(s => `<i style="width:${s[1] / R.length * 100}%;background:${s[2]}" title="${esc(s[0])}: ${s[1]}"></i>`).join('')}</div>
   <div class="md-leg">${segs.map(s => `<span><b style="background:${s[2]}"></b>${esc(s[0])} ${s[1]} (${(s[1] / R.length * 100).toFixed(0)}%)</span>`).join('')}</div>
-  <div class="md-card"><div class="md-top"><h3>TTAMM — MASTER DELIVERABLE DOCUMENT REGISTER (MDDR)</h3><div class="md-asof">As of : ${esc(asOf)}${R[0].fileName ? ' · ' + esc(R[0].fileName) : ''}</div></div>
+  <div class="md-card"><div class="md-top"><h3>TTAMM — MASTER DELIVERABLE DOCUMENT REGISTER (MDDR)</h3>${zOpen ? '' : '<button type="button" class="md-zshow" id="mdZneS" title="Show the Pending submission from ZNE columns again">▸ Show Pending ZNE</button>'}<div class="md-asof">As of : ${esc(asOf)}${R[0].fileName ? ' · ' + esc(R[0].fileName) : ''}</div></div>
   <div class="md-wrap"><table class="md mx"><thead>
-    <tr><th rowspan="2" class="mx-l">DISCIPLINE</th><th rowspan="2" class="mx-h mx-t">📊 TOTAL<br>PROCEDURE</th>${zOpen ? '<th colspan="4" class="mx-h mx-zne md-zt" id="mdZneT" title="Click to collapse"><span class="md-zc">▾</span> 📝 PENDING SUBMISSION FROM ZNE</th>' : '<th rowspan="2" class="mx-h mx-zne md-zt" id="mdZneT" title="Click to expand REV.A / CODE 1 / 2 / 3"><span class="md-zc">▸</span> 📝 PENDING<br>SUBMISSION<br>FROM ZNE</th>'}<th colspan="${revs.length}" class="mx-h mx-pcsb">⏳ PENDING REVIEWED BY PCSB</th><th rowspan="2" class="mx-h mx-ap">✅ APPROVED</th><th rowspan="2" class="mx-h mx-x">🚫 CANCEL / KIV</th>${hasO ? '<th rowspan="2" class="mx-h">OTHER</th>' : ''}</tr>
+    <tr><th rowspan="2" class="mx-l">DISCIPLINE</th><th rowspan="2" class="mx-h mx-t">📊 TOTAL<br>PROCEDURE</th>${zOpen ? '<th colspan="4" class="mx-h mx-zne md-zt" id="mdZneT" title="Click to collapse"><span class="md-zc">▾</span> 📝 PENDING SUBMISSION FROM ZNE</th>' : ''}<th colspan="${revs.length}" class="mx-h mx-pcsb">⏳ PENDING REVIEWED BY PCSB</th><th rowspan="2" class="mx-h mx-ap">✅ APPROVED</th><th rowspan="2" class="mx-h mx-x">🚫 CANCEL / KIV</th>${hasO ? '<th rowspan="2" class="mx-h">OTHER</th>' : ''}</tr>
     <tr>${zOpen ? '<th class="mx-s zne">REV.A</th><th class="mx-s zne">CODE 1</th><th class="mx-s zne">CODE 2</th><th class="mx-s zne">CODE 3</th>' : ''}${revs.map(r => `<th class="mx-s pcsb">${esc(r)}</th>`).join('')}</tr></thead>
     <tbody>${discs.map(d => `<tr>${line(d)}</tr>`).join('')}<tr class="md-tot">${line('ALL')}</tr></tbody></table></div><div class="md-note">– = none · click any number to list those documents · CANCEL / KIV = struck through in the Excel, or marked KIV / Cancel. ALL = REV.A + CODE 1/2/3 + PCSB review + APPROVED + CANCEL / KIV.</div></div>
   ` : `<div class="md-fl" style="margin-top:0"><b>${list.length}</b> of ${R.length} documents${anyF ? ` · <button class="linkish" id="mdClr">✕ Clear all filters</button>` : ''}
@@ -6567,7 +6567,7 @@ function mdWire(el){
   const sg = el.querySelector('#mdSetGo'); if(sg) sg.onclick = () => go('admin');
   el.querySelectorAll('[data-mdm]').forEach(b => b.onclick = e => { e.stopPropagation(); const w = b.parentElement, was = w.classList.contains('open'); mdMenusClose(); if(!was) w.classList.add('open'); });
   el.querySelectorAll('[data-mdt]').forEach(b => b.onclick = () => { MDDR.tab = b.dataset.mdt; renderMddr(); });
-  const zt = el.querySelector('#mdZneT'); if(zt) zt.onclick = () => { MDDR.zneOpen = !MDDR.zneOpen; try{ localStorage.setItem('ttammhub_mddr_zne', MDDR.zneOpen ? '1' : '0'); }catch(e){} if(!MDDR.zneOpen && /^S:/.test(MDDR.f.col)) MDDR.f.col = 'S'; renderMddr(); };
+  el.querySelectorAll('#mdZneT, #mdZneS').forEach(zt => zt.onclick = () => { MDDR.zneOpen = !MDDR.zneOpen; try{ localStorage.setItem('ttammhub_mddr_zne', MDDR.zneOpen ? '1' : '0'); }catch(e){} renderMddr(); });
   const imp = el.querySelector('#mdImp'), fi = el.querySelector('#mdFile');
   if(imp && fi){ imp.onclick = () => hubImportDlg({mod: 'mddr', title: 'Import — MDDR register', types: '.xlsx / .xlsm / .xls', accept: fi.accept, note: 'Choose the <b>MDDR</b> workbook (Master Document Deliverable Register). The sheet <b>MDDR PSP_WO15</b> is read — each document is placed from its revision blocks: <b>Approved</b>, <b>Cancel / KIV</b>, <b>Pending submission</b> or with PCSB for review. The previous data is kept so the import can be undone.', onFile: f => mdImport(f)}); fi.onchange = () => { const x = fi.files[0]; fi.value = ''; if(x) mdImport(x); }; }
   el.querySelectorAll('[data-mdd]').forEach(td => td.onclick = () => { const d = td.dataset.mdd, c = td.dataset.mdc, same = MDDR.f.disc === d && MDDR.f.col === c; MDDR.f.disc = same ? 'ALL' : d; MDDR.f.col = same ? '' : c; MDDR.tab = 'docs'; renderMddr(); window.scrollTo(0, 0); });
