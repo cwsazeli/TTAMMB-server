@@ -2366,10 +2366,34 @@ async function plcPdfLib(){
 }
 /* rows of text pieces {s, x, w} by line, from a PDF page or an Excel sheet */
 async function plcPsrRowsPdf(buf){
-  const lib = await plcPdfLib(), doc = await lib.getDocument({data: new Uint8Array(buf)}).promise, pg = await doc.getPage(1), vp = pg.getViewport({scale: 1}), tc = await pg.getTextContent();
-  const it = tc.items.filter(i => i.str && i.str.trim() && Math.abs(i.transform[1]) < 0.01).map(i => ({s: i.str.trim(), x: i.transform[4], y: vp.height - i.transform[5], w: i.width}));
-  const rows = []; it.sort((a, b) => a.y - b.y || a.x - b.x).forEach(i => { const r = rows.find(r => Math.abs(r.y - i.y) < 2.2); if(r) r.it.push(i); else rows.push({y: i.y, it: [i]}); });
-  rows.forEach(r => r.it.sort((a, b) => a.x - b.x)); return {rows, tol: 18, near: 8};
+  const lib = await plcPdfLib(), doc = await lib.getDocument({data: new Uint8Array(buf)}).promise;
+  const pageRows = async n => { const pg = await doc.getPage(n), vp = pg.getViewport({scale: 1}), tc = await pg.getTextContent();
+    const it = tc.items.filter(i => i.str && i.str.trim() && Math.abs(i.transform[1]) < 0.01).map(i => ({s: i.str.trim(), x: i.transform[4], y: vp.height - i.transform[5], w: i.width}));
+    const rows = []; it.sort((a, b) => a.y - b.y || a.x - b.x).forEach(i => { const r = rows.find(r => Math.abs(r.y - i.y) < 2.2); if(r) r.it.push(i); else rows.push({y: i.y, it: [i]}); });
+    rows.forEach(r => r.it.sort((a, b) => a.x - b.x)); return rows; };
+  const more = [];   // pages after the form: a supplier quotation is often attached behind the PSR
+  for(let n = 2; n <= Math.min(doc.numPages, 8); n++){ try{ more.push(await pageRows(n)); }catch(e){} }
+  return {rows: await pageRows(1), more, tol: 18, near: 8};
+}
+/* A supplier quotation page (attached behind the PSR): supplier, ref, date, payment terms, priced lines and the grand total. */
+function plcQuoteParse(rows){
+  const txt = rows.map(r => r.it.map(i => i.s).join(' ')), all = txt.join('\n');
+  if(!/\bQUOTATION\b|\bQUOTE\b/i.test(all) || !/GRAND\s*TOTAL|\bTOTAL\b/i.test(all)) return null;
+  const money = s => /^(RM\s*)?\d{1,3}(,\d{3})*(\.\d{2})$|^(RM\s*)?\d+\.\d{2}$/i.test(s) ? Number(s.replace(/RM|,|\s/gi, '')) : null;
+  const after = re => { for(const t of txt){ const m = t.match(re); if(m) return clean(m[1]); } return ''; };
+  const CO = /\b(ENTERPRISE|ENTERPRISES|SDN\.?\s*BHD\.?|BERHAD|BHD|TRADING|RESOURCES|SERVICES|ENGINEERING|INDUSTRIES|SUPPLY|SUPPLIES|PLT|CORPORATION|VENTURES?)\b/i;
+  const qi = txt.findIndex(t => /\bQUOTATION\b/i.test(t)), headTxt = (qi > 0 ? txt.slice(0, qi + 1) : txt.slice(0, 12)).concat(txt.slice(-6));
+  const supplier = (headTxt.flatMap(t => t.split(/\s{2,}|\s\|\s/)).map(clean).find(t => CO.test(t) && !/ZULKIFLI\s+NGAH|ZNESB|MESSRS/i.test(t) && t.length < 70) || '').replace(/\s*(Tel|Email|No\.?)\b.*$/i, '');
+  const ref = after(/^\s*(?:OUR\s+)?REF(?:ERENCE)?\.?\s*(?:NO\.?)?\s*:\s*(.+)$/i) || after(/QUOTATION\s*NO\.?\s*:\s*(.+)$/i);
+  const qdate = after(/^\s*DATE\s*:\s*(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/i);
+  const valid = after(/VALID(?:ITY)?[^:]*:\s*(.+)$/i);
+  let terms = ''; { const k = txt.findIndex(t => /^\s*PAYMENT\s+TERMS?/i.test(t)); if(k >= 0){ const inl = (txt[k].split(':')[1] || '').trim(); const nx = txt.slice(k + 1, k + 4).filter(t => /^\s*[-•*]/.test(t)).map(t => t.replace(/^\s*[-•*]\s*/, '')); terms = clean([inl].concat(nx).filter(Boolean).map(t => /[.;]$/.test(t) ? t : t + ';').join(' ')).replace(/;$/, ''); } }
+  let total = null; const lines = [];
+  rows.forEach(r => { const last = r.it[r.it.length - 1], v = last ? money(last.s) : null; if(v == null) return;
+    const d = clean(r.it.slice(0, -1).map(i => i.s).join(' ')); if(/GRAND\s*TOTAL|^TOTAL|SUB\s*-?TOTAL|\bSST\b|DISCOUNT/i.test(d)){ if(/GRAND|^TOTAL/i.test(d) || total == null) total = v; return; }
+    if(d) lines.push({desc: d, amt: v}); });
+  if(total == null && !lines.length) return null;
+  return {supplier, ref, qdate, valid, terms, total, lines};
 }
 async function plcPsrRowsXlsx(buf){
   const X = await getXLSX(), u8 = new Uint8Array(buf); let bin = ''; for(let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
@@ -2419,6 +2443,8 @@ function plcPsrParse(src){
     /* the description is often printed a few points above or below its number (tall cells): join them; a short capital line on its own is a group heading */
     const numd = lines.filter(o => o.num), txt = lines.filter(o => !o.num && !o.qty && o.desc.length);
     txt.forEach(t => { const n = numd.filter(o => !o.desc.length && Math.abs(o.y - t.y) <= Math.max(near - 3, 4)).sort((a, b) => Math.abs(a.y - t.y) - Math.abs(b.y - t.y))[0]; if(n){ n.desc = t.desc.slice(); t.used = true; } });
+    /* still no words: a tall row prints them up to ~1.5 lines away (e.g. "Manpower" above "3 … 1 LOT") — take the nearest text line that no other number is closer to */
+    numd.filter(o => !o.desc.length).forEach(n => { const t = txt.filter(t => !t.used && Math.abs(t.y - n.y) <= near + 6 && !numd.some(m => m !== n && Math.abs(m.y - t.y) < Math.abs(n.y - t.y))).sort((a, b) => Math.abs(a.y - n.y) - Math.abs(b.y - n.y))[0]; if(t){ n.desc = t.desc.slice(); t.used = true; } });
     let head = '', prev = null, tail = [];
     lines.forEach(o => {
       const item = o.num || o.qty || o.type || o.uom;   // a numbered line, or a line with its own qty / UOM / type tick (sub-lines of services PSRs have no number)
@@ -2437,7 +2463,7 @@ function plcPsrParse(src){
     rows.slice(sr + 1, sr + 8).forEach(r => { const lab = r.it.find(i => /^(NAME|POSITION|DATE)$/i.test(up(i.s))); if(!lab) return;
       cols.forEach((c, n) => { const nx = cols[n + 1] ? cols[n + 1].x : 1e9; const v = r.it.filter(i => i.x > c.x - 2 && i.x < nx - 2 && !/^(NAME|POSITION|DATE)$/i.test(up(i.s)) && i.s !== ':').map(i => i.s).join(' ').trim();
         (sig[c.k] = sig[c.k] || {})[up(lab.s).toLowerCase()] = v; }); }); }
-  return {f, items, heads, sig, notes};
+  return {f, items, heads, sig, notes, more: src.more || []};
 }
 function plcPsrCatIdx(head){ const u = String(head || '').toUpperCase(); return /PIPE/.test(u) && !/SUPPORT/.test(u) ? 0 : /FITTING/.test(u) ? 1 : /FLANGE/.test(u) ? 2 : /VALVE/.test(u) ? 3 : /GASKET/.test(u) ? 4 : /BOLT|NUT/.test(u) ? 5 : /STRUCT/.test(u) ? 6 : null; }
 async function plcImportFile(file){
@@ -2460,9 +2486,18 @@ async function plcImportFile(file){
   if(!r.items.length) r.items = [{desc: '', qty: '', unit: 'EA', type: 'P', dur: '', rem: ''}];
   if((P.notes || []).length && r.items.length && clean(r.items[0].desc)){ const lg = r.items[r.items.length - 1].grp; P.notes.map(clean).filter(Boolean).forEach(n => { const it = {desc: n, qty: '', unit: '', type: '', dur: '', rem: ''}; if(lg) it.grp = lg; if(numd) it.no = ''; r.items.push(it); }); }   // e.g. "Required Date : 10/11/2026 - 12/11/26" under the lines stays a line, as on the form
   r.title = form.purpose || form.projTitle; r.desc = form.projTitle && form.purpose ? form.projTitle : ''; r.charge = form.projCode; r.site = form.delivery; r.needBy = form.expDate; r.reqBy = form.pic;
-  r.psr.src = {file: file.name, at: new Date().toISOString(), by: hubUser()};
+  /* a supplier quotation behind the form becomes quotation 1 of the RFQ: supplier, ref, date, terms and the price of each matching line */
+  const Q = isPdf && P.more ? P.more.map(plcQuoteParse).filter(Boolean) : [];
+  const key = s => clean(s).toUpperCase().replace(/^\s*(\(?[ivx]+\)|\(?[a-z]\)|\d+[.)])\s*/i, '').replace(/\(\s*\d+(\.\d+)?\s*[A-Z]*\s*\)/g, '').replace(/[^A-Z0-9]+/g, ' ').trim();
+  const sim = (a, b) => { const A = new Set(key(a).split(' ').filter(w => w.length > 1)), B = new Set(key(b).split(' ').filter(w => w.length > 1)); if(!A.size || !B.size) return 0; let n = 0; A.forEach(w => { if(B.has(w)) n++; }); return n / Math.min(A.size, B.size); };
+  Q.forEach((q, k) => { const b = plcBidNew(k); Object.assign(b, {supplier: q.supplier, ref: q.ref, qdate: plcPsrDate(q.qdate) || q.qdate, terms: q.terms, valid: q.valid, amount: q.total != null ? String(q.total) : ''});
+    let priced = 0; r.items.forEach((it, i) => { if(!clean(it.desc)) return; const m = q.lines.map(l => ({l, s: sim(it.desc, l.desc)})).sort((a, b) => b.s - a.s)[0]; if(m && m.s >= 0.6){ const qn = num(it.qty) || 1; b.lines[i] = {rate: String(Math.round(m.l.amt / qn * 100) / 100)}; m.l.used = true; priced++; } });
+    if(priced && q.total != null){ const rest = Math.round((q.total - q.lines.filter(l => l.used).reduce((a, l) => a + l.amt, 0)) * 100) / 100; if(Math.abs(rest) >= 0.01) b.other = {d: 'Other items in the quotation', amt: String(rest)}; }
+    r.rfq.bids.push(b); q.priced = priced; });
+  if(Q.length){ r.rfq.sel = 0; if(Q[0].total != null && !num(form.estVal)) form.estVal = String(Q[0].total); }   // the budget check uses the quoted price
+  r.psr.src = {file: file.name, at: new Date().toISOString(), by: hubUser(), quotes: Q.map(q => ({supplier: q.supplier, ref: q.ref, total: q.total}))};
   PLC.draft = r; PLC.sel = '__new'; PLC.tab = 0; renderPlc(); const p = $('#p-plc'); if(p) p.scrollTop = 0;
-  toast('📥 ' + file.name + ' → new PSR with ' + P.items.length + ' line(s)' + (F.cat && F.cat.length ? ' · ' + F.cat.join(', ') : '') + (notes.length ? ' · not filled: ' + notes.join(', ') : '') + ' — check it, then save.', 9000);
+  toast('📥 ' + file.name + ' → new PSR with ' + P.items.length + ' line(s)' + (F.cat && F.cat.length ? ' · ' + F.cat.join(', ') : '') + (Q.length ? ' · quotation from ' + Q.map(q => (q.supplier || 'supplier') + (q.total != null ? ' RM ' + q.total.toLocaleString('en-MY', {minimumFractionDigits: 2}) : '')).join(', ') + ' saved as quotation 1 for the RFQ stage' : '') + (notes.length ? ' · not filled: ' + notes.join(', ') : '') + ' — check it, then save.', 11000);
 }
 function plcImportPick(){
   if(!PLC_ED()){ toast('Only Admin can import a PSR.'); return; }
@@ -4905,7 +4940,7 @@ function plcReadPsr(r){
   if(!document.querySelector('#plc [data-pv="pf_projTitle"]')) return r;
   const g = k => { const e = document.querySelector('#plc [data-pv="pf_' + k + '"]'); return e ? clean(e.value) : ''; };
   const f = plcPsrForm(r);
-  Object.assign(f, {projTitle: g('projTitle'), projCode: g('projCode'), purpose: g('purpose'), delivery: g('delivery'), expDate: g('expDate'), pic: g('pic'), contact: g('contact'),
+  Object.assign(f, {projTitle: g('projTitle'), projCode: g('projCode'), estVal: g('estVal'), purpose: g('purpose'), delivery: g('delivery'), expDate: g('expDate'), pic: g('pic'), contact: g('contact'),
     cat: $$('#plc [data-pcat]').filter(e => e.checked).map(e => e.dataset.pcat)});
   if(document.querySelector('#plc [data-pv="pf_apName"]')) f.appr = {name: g('apName'), pos: g('apPos'), date: g('apDate')};
   r.psr.form = f;
