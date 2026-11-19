@@ -2469,6 +2469,7 @@ function plcPsrCatIdx(head){ const u = String(head || '').toUpperCase(); return 
 async function plcImportFile(file){
   if(!PLC_ED()){ toast('Only Admin can import a PSR.'); return; }
   const buf = await file.arrayBuffer(), isPdf = /\.pdf$/i.test(file.name) || (new Uint8Array(buf.slice(0, 4)).join(',') === '37,80,68,70');
+  if(!isPdf){ try{ if(await plcMrfImport(buf, file)) return; }catch(e){ toast('Could not read ' + file.name + ': ' + e.message, 7000); return; } }
   let P; try{ P = plcPsrParse(isPdf ? await plcPsrRowsPdf(buf) : await plcPsrRowsXlsx(buf)); }catch(e){ toast('Could not read ' + file.name + ': ' + e.message, 7000); return; }
   if(!P.items.length && !P.f.purpose && !P.f.projTitle){ toast(file.name + ' does not look like a PSR form (no "Description / Size / Brand" table found)' + (isPdf ? ' — a scanned PDF has no text to read.' : '.'), 8000); return; }
   if(PLC.sel === '__new' && plcDirty() && !confirm('Replace the PSR you are typing with the one from ' + file.name + '?')) return;
@@ -4735,24 +4736,202 @@ const plcVal = k => { const e = document.querySelector('#plc [data-pv="' + k + '
 /* 1 — MRF */
 function plcS0(r, ed){
   if(r.direct) return plcS2(r, ed || (PLC_ED() && PLC.sel === '__new'), true);
-  ed = ed || (PLC_ED() && PLC.sel === '__new');
-  return plcSH(0, 'What is needed, where, and charged to which code. Submitting sends it to the store for a stock check.') + `
-  <div class="pl-form">${plcF('title', 'Job package / title', r.title, ed, {req: 1, wide: 1, ph: 'e.g. Fabricate fence around office cabin'})}
-    ${plcF('desc', 'Scope / description', r.desc, ed, {area: 1, wide: 1, ph: 'Size, specification, what is included (manpower, tools…)'})}
-    ${plcF('wopNo', 'WOP no (optional)', r.wopNo, ed, {list: 'plWops', ph: 'pick to fill charge code and site'})}${plcF('charge', 'Charge code', r.charge, ed)}
-    ${plcF('site', 'Site / location', r.site, ed, {ph: 'e.g. Kerteh — Terengganu'})}${plcF('reqBy', 'Requested by', r.reqBy, ed, {req: 1})}
-    ${plcF('reqDate', 'Request date', r.reqDate, ed, {type: 'date'})}${plcF('needBy', 'Required on site by', r.needBy, ed, {type: 'date'})}
-    ${plcF('priority', 'Priority', r.priority || 'Normal', ed, {opts: ['Normal', 'Urgent', 'Critical']})}</div>
-  <h4 class="pl-h4">Materials / services</h4>
-  <div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Qty</th><th>Unit</th><th>Remarks</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
-    ${r.items.map((it, i) => `<tr data-pi="${i}"><td>${i + 1}</td><td><input data-ik="desc" value="${esc(it.desc)}"${plcRO(ed)}></td><td><input data-ik="qty" type="number" min="0" step="any" class="n" value="${esc(it.qty)}"${plcRO(ed)}></td>
-      <td><input data-ik="unit" value="${esc(it.unit)}" class="sh"${plcRO(ed)}></td><td><input data-ik="rem" value="${esc(it.rem)}"${plcRO(ed)}></td>${ed ? `<td><button class="pl-x" data-pdel="${i}" title="Remove line">✕</button></td>` : ''}</tr>`).join('')}</tbody></table></div>
-  ${ed ? `<div class="pl-btns"><button class="btn sm" data-pa="addItem">＋ Add line</button><span class="sp"></span><button class="btn" data-pa="saveMrf">Save draft</button><button class="btn primary" data-pa="submitMrf">Submit MRF →</button></div>` : plcWait(r, 0)}`;
+  return plcS0Mrf(r, ed || (PLC_ED() && PLC.sel === '__new'));
+}
+/* ---------- MRF — the company MATERIAL REQUISITION FORM (fill in here, import the Excel form, print A4 landscape) ----------
+   Header: Project Code No. · Project Title · Project Location · Date Required · Delivery To · Inspection Date · MRF No. · Priority P1–P4.
+   Lines : Item No. · Description · Part No. · Brand / Model · Qty Required · Qty Available · Qty To Order (= required − available) · UOM · Remarks.
+   Sign  : Requested by Project Material Coordinator · Reviewed by Immediate Superior · Checked by OSAM · Approved by Project Manager.
+   The extra MRF fields are kept in r.psr.mrf (no new Sheet column needed); Qty Available goes to the store check as the surplus figure. */
+const PLC_MRF_PRIO = [['P1', '2 days'], ['P2', '5 days'], ['P3', '2 weeks'], ['P4', '4 weeks']];
+const PLC_MRF_SG = [['req', 'Requested By Project Material Coordinator', 'MATERIAL COORDINATOR'], ['rev', 'Reviewed by Immediate Superior', 'PROJECT ENGINEER'], ['chk', 'Checked by OSAM', 'OSAM'], ['apv', 'Approved by Project Manager', 'PROJECT MANAGER']];
+const plcMrfF = r => { const M = (r.psr && r.psr.mrf && typeof r.psr.mrf === 'object') ? r.psr.mrf : {}; M.sig = M.sig && typeof M.sig === 'object' ? M.sig : {}; return M; };
+const plcMrfAvail = (r, it) => r.store && r.store.at ? num(it.stock) : num(it.avail);
+const plcMrfOrder = (r, it) => Math.max(0, num(it.qty) - plcMrfAvail(r, it));
+const plcMrfPrio = p => ({P1: 'Critical', P2: 'Urgent'})[p] || 'Normal';
+function plcS0Mrf(r, ed){
+  const M = plcMrfF(r), mi = (k, v, x) => `<input data-pm="${k}" type="${x && x.type || 'text'}" value="${esc(v || '')}"${x && x.ph ? ` placeholder="${esc(x.ph)}"` : ''}${plcRO(ed)}>`;
+  const lab = (l, h, req, w) => `<label class="pl-fl${w ? ' w' : ''}"><span>${l}${req ? ' <i>*</i>' : ''}</span>${h}</label>`;
+  const prio = M.prio || ({Critical: 'P1', Urgent: 'P2'})[r.priority] || 'P3';
+  const qn = v => { const n = num(v); return n ? +n.toFixed(3) : 0; };
+  return `<div class="pl-sh"><h3>1. MRF Submission</h3><p>${'The company Material Requisition Form. Fill it in (or Import the Excel MRF), print it for signing, then submit — the store checks what is available; the balance (Qty To Order) goes on to the PSR review.'}</p></div>` + `
+  <div class="pl-form mrf-hd">
+    ${lab('Project Code No.', `<input data-pv="charge" value="${esc(r.charge || '')}" placeholder="e.g. TBA / charge code"${plcRO(ed)}>`)}
+    ${lab('Project Title', `<input data-pv="title" value="${esc(r.title || '')}" placeholder="e.g. OSC MSD TRAIN C DEC 26"${plcRO(ed)}>`, 1)}
+    ${lab('Project Location', `<input data-pv="site" value="${esc(r.site || '')}" placeholder="e.g. OSC"${plcRO(ed)}>`)}
+    ${lab('Date Required', `<input data-pv="needBy" type="date" value="${esc(r.needBy || '')}"${plcRO(ed)}>`)}
+    ${lab('Delivery To', mi('delivery', M.delivery, {ph: 'e.g. TGAST'}))}
+    ${lab('Inspection Date', mi('inspDate', M.inspDate, {type: 'date'}))}
+    ${lab('MRF No.', `<input data-pv="mrfNo" value="${esc(r.mrfNo || '')}" placeholder="${ed ? esc(plcNext('mrf')) + ' (auto if blank)' : ''}"${plcRO(ed)}>`)}
+    ${lab('Priority', `<select data-pm="prio"${plcRO(ed)}>${PLC_MRF_PRIO.map(([p, t]) => `<option value="${p}"${p === prio ? ' selected' : ''}>${p} — delivery ${t}</option>`).join('')}</select>`)}
+    ${lab('WOP No (optional)', `<input data-pv="wopNo" list="plWops" value="${esc(r.wopNo || '')}" placeholder="pick to fill the code and site"${plcRO(ed)}>`)}
+  </div>
+  <h4 class="pl-h4">Materials</h4>
+  <div class="pl-tw"><table class="pl-t pl-it mrf-it"><thead><tr><th>Item</th><th>Description</th><th>Part No.</th><th>Brand / Model</th><th class="n">Qty required</th><th class="n" title="Filled in by the requester if known; the store (Matco) confirms it in step 2">Qty available</th><th class="n">Qty to order</th><th>UOM</th><th>Remarks</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
+    ${r.items.map((it, i) => `<tr data-pi="${i}"><td>${i + 1}</td><td><input data-ik="desc" value="${esc(it.desc || '')}"${plcRO(ed)}></td><td><input data-ik="part" value="${esc(it.part || '')}" class="sh"${plcRO(ed)}></td><td><input data-ik="brand" value="${esc(it.brand || '')}"${plcRO(ed)}></td>
+      <td><input data-ik="qty" type="number" min="0" step="any" class="n" value="${esc(it.qty || '')}"${plcRO(ed)}></td><td><input data-ik="avail" type="number" min="0" step="any" class="n" value="${esc(r.store && r.store.at ? it.stock || '' : it.avail || '')}"${plcRO(ed)}></td>
+      <td class="n" data-mord="${i}"><b>${qn(plcMrfOrder(r, it)) || ''}</b></td><td><input data-ik="unit" value="${esc(it.unit || '')}" class="sh"${plcRO(ed)}></td><td><input data-ik="rem" value="${esc(it.rem || '')}"${plcRO(ed)}></td>${ed ? `<td><button class="pl-x" data-pdel="${i}" title="Remove line">✕</button></td>` : ''}</tr>`).join('')}</tbody></table></div>
+  <h4 class="pl-h4">Signatures (as on the paper form)</h4>
+  <div class="mrf-sg">${PLC_MRF_SG.map(([k, l, p]) => { const g = M.sig[k] || {}; return `<div class="mrf-sgc"><b>${l}</b>
+    <label><span>Name</span><input data-mg="${k}.name" value="${esc(g.name || (k === 'req' && !g.name ? r.reqBy || '' : ''))}"${plcRO(ed)}></label>
+    <label><span>Designation</span><input data-mg="${k}.pos" value="${esc(g.pos || '')}" placeholder="${esc(p)}"${plcRO(ed)}></label>
+    <label><span>Date</span><input data-mg="${k}.date" type="date" value="${esc(g.date || '')}"${plcRO(ed)}></label></div>`; }).join('')}</div>
+  ${ed ? `<div class="pl-btns"><button class="btn sm" data-pa="addItem">＋ Add line</button><button class="btn" data-pmrfp="1">🖨 Print MRF form</button><span class="sp"></span><button class="btn" data-pa="saveMrf">Save draft</button><button class="btn primary" data-pa="submitMrf">Submit MRF →</button></div>`
+    : `<div class="pl-btns"><button class="btn" data-pmrfp="1">🖨 Print MRF form</button></div>${plcWait(r, 0)}`}
+  <style>#plc .mrf-it input{min-width:0}#plc .mrf-it td:nth-child(2) input{min-width:220px}#plc .mrf-it td:nth-child(3) input{width:100px}#plc .mrf-it td:nth-child(5) input,#plc .mrf-it td:nth-child(6) input{width:78px}#plc .mrf-it td:nth-child(8) input{width:66px}
+    #plc .mrf-sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}#plc .mrf-sgc{border:1px solid var(--border);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;background:var(--panel2)}
+    #plc .mrf-sgc>b{font-size:12px;color:var(--text-dim)}#plc .mrf-sgc label{display:grid;grid-template-columns:82px 1fr;align-items:center;gap:6px;font-size:11.5px;color:var(--text-dim)}#plc .mrf-sgc label input{width:100%;min-width:0;box-sizing:border-box;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:6px 8px;font:inherit;font-size:12.5px}#plc .mrf-sgc label input[readonly]{background:transparent;border-color:transparent}#plc .mrf-it td:nth-child(2) input{min-width:300px}</style>`;
 }
 function plcReadMrf(r){
-  ['title', 'desc', 'wopNo', 'charge', 'site', 'reqBy', 'reqDate', 'needBy', 'priority'].forEach(k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); if(e) r[k] = k === 'desc' ? e.value.trim() : clean(e.value); });
-  r.items = $$('#plc tr[data-pi]').map(tr => { const o = {}; tr.querySelectorAll('[data-ik]').forEach(e => { o[e.dataset.ik] = clean(e.value); }); return o; });
+  ['title', 'desc', 'wopNo', 'charge', 'site', 'reqBy', 'reqDate', 'needBy', 'priority', 'mrfNo'].forEach(k => { const e = document.querySelector('#plc [data-pv="' + k + '"]'); if(e) r[k] = k === 'desc' ? e.value.trim() : clean(e.value); });
+  r.items = $$('#plc tr[data-pi]').map((tr, i) => { const o = Object.assign({}, r.items[i] || {}); tr.querySelectorAll('[data-ik]').forEach(e => { o[e.dataset.ik] = clean(e.value); }); return o; });
+  if(document.querySelector('#plc [data-pm]')){
+    r.psr = r.psr || {t: {}}; const M = Object.assign({}, plcMrfF(r)); M.sig = Object.assign({}, M.sig);
+    $$('#plc [data-pm]').forEach(e => { M[e.dataset.pm] = clean(e.value); });
+    $$('#plc [data-mg]').forEach(e => { const [k, f] = e.dataset.mg.split('.'); M.sig[k] = Object.assign({}, M.sig[k] || {}, {[f]: clean(e.value)}); });
+    r.psr.mrf = M; r.priority = plcMrfPrio(M.prio);
+    if(M.sig.req && M.sig.req.name) r.reqBy = M.sig.req.name;
+    if(r.store && r.store.at) r.items.forEach(it => { if('avail' in it) it.stock = it.avail; });   // after the store check the store figure is shown and edited here
+  }
   return r;
+}
+function plcMrfHtml(r){
+  if(r.direct) return plcMrfHtmlM(r);
+  const M = plcMrfF(r), logo = (document.querySelector('.brand .logo img') || {}).src || '';
+  const d = s => s ? (/^\d{4}-\d{2}-\d{2}/.test(s) ? String(s).slice(8, 10) + '/' + String(s).slice(5, 7) + '/' + String(s).slice(0, 4) : esc(s)) : '';
+  const q = v => { const n = num(v); return n ? String(+n.toFixed(3)) : ''; }, U = v => esc(String(v || '').toUpperCase());
+  const its = r.items.filter(it => clean(it.desc) || num(it.qty)), rows = [];
+  const E7 = '<td></td>'.repeat(7);
+  let pg = null; its.forEach(it => { const g = clean(it.grp || ''); if(g && g !== pg) rows.push(`<tr class="mg"><td></td><td colspan="3"><b>${U(g)}</b></td>${E7}</tr>`); pg = g; rows.push(it); });
+  const n = Math.max(24, rows.length), rh = Math.min(16, 400 / n), fz = rh >= 15 ? 10.5 : Math.max(7.5, +(rh * 0.68).toFixed(1));
+  let k = 0; const body = Array.from({length: n}, (_, i) => { const x = rows[i]; if(typeof x === 'string') return x; if(!x) return `<tr><td></td><td colspan="3"></td>${E7}</tr>`;
+    const it = x, av = plcMrfAvail(r, it); k++;
+    return `<tr><td class="c">${esc(it.no || k)}</td><td colspan="3">${U(it.desc)}</td><td class="c">${U(it.part)}</td><td class="c">${U(it.brand)}</td><td class="c">${q(it.qty)}</td><td class="c">${av ? q(av) : ''}</td><td class="c">${q(plcMrfOrder(r, it))}</td><td class="c">${U(it.unit)}</td><td>${U(it.rem)}</td></tr>`; }).join('');
+  const prio = M.prio || ({Critical: 'P1', Urgent: 'P2'})[r.priority] || '';
+  const sg = ([k, l]) => { const g = M.sig[k] || {}; return `<td><div class="ml">${l} :</div><div class="ms"></div><div class="mr"><span>Name</span><b>${U(g.name || (k === 'req' ? r.reqBy : ''))}</b></div><div class="mr"><span>Designation</span><b>${U(g.pos)}</b></div><div class="mr"><span>Date</span><b>${d(g.date)}</b></div></td>`; };
+  return `<style>@page{size:A4 landscape;margin:7mm}</style><style>
+    .mrf-doc{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;width:1120px;padding:6px 8px;box-sizing:border-box}
+    .mrf-doc table{border-collapse:collapse;width:100%}.mrf-doc td,.mrf-doc th{border:1px solid #000;padding:2px 5px;font-size:10.5px;vertical-align:middle}
+    .mrf-doc .mh{display:flex;align-items:center;gap:16px;border:1px solid #000;border-bottom:0;padding:6px 10px}.mrf-doc .mh img{height:54px}.mrf-doc .mh div{flex:1;text-align:center}
+    .mrf-doc .mh h2{margin:0;font-size:15px;letter-spacing:.04em}.mrf-doc .mh h1{margin:4px 0 0;font-size:18px;letter-spacing:.08em}
+    .mrf-doc .mi th{background:#e8e8e8;text-align:left;width:12%;white-space:nowrap}.mrf-doc .mi td{font-weight:700}
+    .mrf-doc .pp{display:inline-block;min-width:34px;text-align:center;border:1px solid #000;margin-right:4px;padding:1px 0}.mrf-doc .pp.on{background:#ff0;font-weight:700}
+    .mrf-doc .mt th{background:#e8e8e8;font-size:10px}.mrf-doc .mt td{height:var(--rh);font-size:var(--fz)}.mrf-doc .c{text-align:center}.mrf-doc .mg td{background:#f3f3f3}
+    .mrf-doc .msg td{width:25%;vertical-align:top;padding:4px 6px;height:118px}.mrf-doc .ml{font-weight:700;font-size:10.5px}.mrf-doc .ms{height:46px}
+    .mrf-doc .mr{display:grid;grid-template-columns:76px 1fr;font-size:10px;margin-top:2px}.mrf-doc .mr b{border-bottom:1px solid #000;min-height:13px}
+  </style><div class="psr-doc mrf-doc">
+    <div class="mh">${logo ? `<img src="${logo}" alt="">` : ''}<div><h2>ZULKIFLI NGAH ENGINEERING SDN. BHD.</h2><h1>MATERIAL REQUISITION FORM</h1></div>${logo ? '<span style="width:120px"></span>' : ''}</div>
+    <table class="mi">
+      <tr><th>PROJECT CODE NO.</th><td>${U(r.charge)}</td><th>DATE REQUIRED</th><td>${d(r.needBy)}</td><th>MRF NO.</th><td>${U(r.mrfNo || '')}</td></tr>
+      <tr><th>PROJECT TITLE</th><td>${U(r.title)}</td><th>DELIVERY TO</th><td>${U(M.delivery)}</td><th>PRIORITY</th><td>${PLC_MRF_PRIO.map(([p]) => `<span class="pp${p === prio ? ' on' : ''}">${p}</span>`).join('')}</td></tr>
+      <tr><th>PROJECT LOCATION</th><td>${U(r.site)}</td><th>INSPECTION DATE</th><td>${d(M.inspDate)}</td><td colspan="2" style="font-weight:400;font-size:9.5px">DELIVERY : ${PLC_MRF_PRIO.map(([p, t]) => p + ' - ' + t.replace(/\b\w/g, c => c.toUpperCase())).join(' / ')}</td></tr>
+      <tr><th>PAGE</th><td colspan="5">1 OF 1</td></tr></table>
+    <table class="mt" style="--rh:${rh}px;--fz:${fz}px;margin-top:6px"><colgroup><col style="width:5%"><col style="width:12%"><col style="width:12%"><col style="width:9%"><col style="width:10%"><col style="width:10%"><col style="width:7.5%"><col style="width:7.5%"><col style="width:7.5%"><col style="width:6%"><col></colgroup>
+      <thead><tr><th>ITEM NO.</th><th colspan="3">DESCRIPTION</th><th>PART NO.</th><th>BRAND / MODEL</th><th>QTY REQUIRED</th><th>QTY AVAILABLE</th><th>QTY TO ORDER</th><th>UOM</th><th>REMARKS</th></tr></thead>
+      <tbody>${body}</tbody></table>
+    <table class="msg" style="margin-top:6px"><tr>${PLC_MRF_SG.map(sg).join('')}</tr></table>
+  </div>`;
+}
+async function plcMrfShow(){
+  const r0 = plcCur(); if(!r0) return;
+  const r = plcClone(r0); if(r.stage === 0 && !r.direct) plcReadMrf(r); else if(r.direct) plcReadMrfM(r);
+  const d = $('#dlgPlc');
+  $('#plDlgT').textContent = '📄 Material Requisition Form ' + (r.mrfNo || '');
+  $('#plDlgB').innerHTML = PLC_CSS + `<div class="po-wrap psr-wrap">${plcMrfHtml(r).replace(/<style>@page[^<]*<\/style>/, '')}</div>`;
+  $('#plDlgF').innerHTML = `<span class="faint" style="font-size:12px;margin-right:auto">Prints on A4 landscape, in the layout of the company MRF. Empty lines are left for writing by hand.</span><button class="btn" id="plDlgX">Close</button><button class="btn primary" id="plDlgP">🖨 Print / Save as PDF</button>`;
+  $('#plDlgX').onclick = () => d.close();
+  $('#plDlgP').onclick = () => { d.close(); plcPrint(plcMrfHtml(r)); };
+  PLC.pvFull = false; d.classList.add('pv'); if(!d.open) d.showModal(); requestAnimationFrame(plcFit);
+}
+/* M — the company MRF for the items the store has (PE raises it after the Matco check, beside the PSR review). Same layout as
+   the paper form; QTY REQUIRED = requested, QTY AVAILABLE = what Matco found, QTY TO ORDER = the balance that goes on in the PSR. */
+function plcMrfMHead(r){ const M = plcMrfF(r), F = (r.psr && r.psr.form) || {};
+  return {code: M.projCode ?? (F.projCode || r.charge || ''), title: M.title ?? (F.projTitle || r.title || ''), loc: M.loc ?? (r.site || ''), need: M.need ?? (F.expDate || r.needBy || ''), deliv: M.delivery ?? (F.delivery || ''), insp: M.inspDate || '', prio: M.prio || ({Critical: 'P1', Urgent: 'P2'})[r.priority] || 'P3', sig: M.sig}; }
+function plcSMForm(r, S, ed){
+  const H = plcMrfMHead(r), mi = (k, v, x) => `<input data-pm="${k}" type="${x && x.type || 'text'}" value="${esc(v || '')}"${x && x.ph ? ` placeholder="${esc(x.ph)}"` : ''}${plcRO(ed)}>`;
+  const lab = (l, h, req) => `<label class="pl-fl"><span>${l}${req ? ' <i>*</i>' : ''}</span>${h}</label>`, qn = v => { const n = num(v); return n ? String(+n.toFixed(3)) : ''; };
+  return `<div class="pl-form mrf-hd">
+    ${lab('Project Code No.', mi('projCode', H.code))}${lab('Project Title', mi('title', H.title))}${lab('Project Location', mi('loc', H.loc))}${lab('Date Required', mi('need', H.need, {type: 'date'}))}
+    ${lab('Delivery To', mi('delivery', H.deliv))}${lab('Inspection Date', mi('inspDate', H.insp, {type: 'date'}))}
+    ${plcF('mrfNo', 'MRF No.', r.mrfNo || '', ed, {ph: ed ? plcNext('mrf') + ' (auto if blank)' : ''})}
+    ${lab('Priority', `<select data-pm="prio"${plcRO(ed)}>${PLC_MRF_PRIO.map(([p, t]) => `<option value="${p}"${p === H.prio ? ' selected' : ''}>${p} — delivery ${t}</option>`).join('')}</select>`)}</div>
+  <div class="pl-tw"><table class="pl-t pl-it mrf-it"><thead><tr><th>Item</th><th>Description</th><th>Part No.</th><th>Brand / Model</th><th class="n">Qty required</th><th class="n">Qty available</th><th class="n">Qty to order</th><th>UOM</th><th>Remarks</th></tr></thead><tbody>
+    ${S.map(({it, i}, k) => `<tr><td>${k + 1}</td><td>${esc(it.desc)}${it.sp && it.sp.length ? `<span class="pl-sub" style="color:var(--accent)">${esc(plcSpTxt(it))}</span>` : ''}</td>
+      <td><input data-ml="${i}.part" value="${esc(it.part || '')}" class="sh"${plcRO(ed)}></td><td><input data-ml="${i}.brand" value="${esc(it.brand || '')}"${plcRO(ed)}></td>
+      <td class="n">${qn(it.qty)}</td><td class="n"><b>${qn(Math.min(num(it.stock), num(it.qty)) || it.stock)}</b></td><td class="n">${qn(plcNet(it)) || '0'}</td><td>${esc(it.unit || '')}</td>
+      <td><input data-ml="${i}.mrem" value="${esc(it.mrem ?? it.srem ?? '')}"${plcRO(ed)}></td></tr>`).join('')}</tbody></table></div>
+  <h4 class="pl-h4">Signatures (as on the paper form)</h4>
+  <div class="mrf-sg">${PLC_MRF_SG.map(([k, l, p]) => { const g = H.sig[k] || {}; return `<div class="mrf-sgc"><b>${l}</b>
+    <label><span>Name</span><input data-mg="${k}.name" value="${esc(g.name || '')}"${plcRO(ed)}></label>
+    <label><span>Designation</span><input data-mg="${k}.pos" value="${esc(g.pos || '')}" placeholder="${esc(p)}"${plcRO(ed)}></label>
+    <label><span>Date</span><input data-mg="${k}.date" type="date" value="${esc(g.date || '')}"${plcRO(ed)}></label></div>`; }).join('')}</div>
+  <style>#plc .mrf-it input{min-width:0}#plc .mrf-it td:nth-child(3) input{width:100px}#plc .mrf-sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}#plc .mrf-sgc{border:1px solid var(--border);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;background:var(--panel2)}
+    #plc .mrf-sgc>b{font-size:12px;color:var(--text-dim)}#plc .mrf-sgc label{display:grid;grid-template-columns:82px 1fr;align-items:center;gap:6px;font-size:11.5px;color:var(--text-dim)}
+    #plc .mrf-sgc label input{width:100%;min-width:0;box-sizing:border-box;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:6px 8px;font:inherit;font-size:12.5px}#plc .mrf-sgc label input[readonly]{background:transparent;border-color:transparent}</style>`;
+}
+function plcReadMrfM(r){
+  if(!document.querySelector('#plc [data-ml], #plc [data-mg]')) return r;
+  r.psr = r.psr || {t: {}}; const M = Object.assign({}, plcMrfF(r)); M.sig = Object.assign({}, M.sig);
+  $$('#plc [data-pm]').forEach(e => { M[e.dataset.pm] = clean(e.value); });
+  $$('#plc [data-mg]').forEach(e => { const [k, f] = e.dataset.mg.split('.'); M.sig[k] = Object.assign({}, M.sig[k] || {}, {[f]: clean(e.value)}); });
+  $$('#plc [data-ml]').forEach(e => { const [i, f] = e.dataset.ml.split('.'); if(r.items[+i]) r.items[+i][f] = clean(e.value); });
+  const no = document.querySelector('#plc [data-pv="mrfNo"]'); if(no && clean(no.value)) r.mrfNo = clean(no.value);
+  r.psr.mrf = M; return r;
+}
+
+function plcMrfHtmlM(r){
+  const H = plcMrfMHead(r), S = r.items.filter(it => clean(it.desc) && num(it.stock) > 0);
+  const v = plcClone(r); v.direct = false; v.charge = H.code; v.title = H.title; v.site = H.loc; v.needBy = H.need; v.store = {at: 'x'};
+  v.psr = Object.assign({}, v.psr, {mrf: {delivery: H.deliv, inspDate: H.insp, prio: H.prio, sig: H.sig}});
+  v.items = S.map(it => Object.assign({}, it, {stock: Math.min(num(it.stock), num(it.qty)) || it.stock, rem: it.mrem ?? it.srem ?? '', grp: ''}));
+  return plcMrfHtml(v);
+}
+/* Import the company MRF workbook (Excel). Returns false when the file is not an MRF, so the PSR import takes over. */
+async function plcMrfImport(buf, file){
+  const X = await getXLSX(), u8 = new Uint8Array(buf); let bin = ''; for(let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  const wb = X.read(bin, {type: 'binary', cellDates: false, cellStyles: true});
+  const name = wb.SheetNames.find(n => /MATERIAL\s+REQUISITION/i.test(X.utils.sheet_to_csv(wb.Sheets[n]).slice(0, 3000)));
+  if(!name) return false;
+  const ws = wb.Sheets[name], A = X.utils.sheet_to_json(ws, {header: 1, raw: true, defval: ''}), T = v => String(v == null ? '' : v).replace(/\s+/g, ' ').trim(), U = v => T(v).toUpperCase();
+  const iso = v => { if(typeof v === 'number' && v > 20000 && v < 80000){ const dt = new Date(Math.round((v - 25569) * 864e5)); return dt.toISOString().slice(0, 10); } return plcPsrDate(T(v)) || ''; };
+  const after = (re, alsoDate) => { for(let y = 0; y < Math.min(A.length, 14); y++){ const row = A[y]; for(let x = 0; x < row.length; x++) if(re.test(U(row[x]))){ for(let z = x + 1; z < row.length; z++){ const v = row[z]; if(T(v) && !/^(DATE REQUIRED|MRF NO\.?|PRIORITY|DELIVERY TO|DELIVERY :|INSPECTION DATE|PROJECT (CODE|TITLE|LOCATION)|PAGE)\b/.test(U(v))) return alsoDate ? iso(v) : T(v); if(T(v)) return ''; } } } return ''; };
+  const f = {code: after(/^PROJECT CODE/), title: after(/^PROJECT TITLE/), loc: after(/^PROJECT LOCATION/), need: after(/^DATE REQUIRED/, 1), deliv: after(/^DELIVERY TO/), insp: after(/^INSPECTION DATE/, 1), no: after(/^MRF NO/)};
+  /* priority: the P1…P4 cell that is shaded (or ticked) */
+  let prio = ''; { const y = A.findIndex(r => r.some(v => /^PRIORITY$/.test(U(v))));
+    if(y >= 0) A[y].forEach((v, x) => { if(!/^P[1-4]$/.test(U(v))) return; const c = ws[X.utils.encode_cell({r: y, c: x})] || {}, s = c.s || {}, fg = (s.fgColor || {}).rgb || (s.fill && s.fill.fgColor && s.fill.fgColor.rgb) || '';
+      if(!prio && fg && !/^(FFFFFFFF|FFFFFF|00000000)$/i.test(fg) && (s.patternType || 'solid') !== 'none') prio = U(v); }); }
+  /* the line table */
+  const hy = A.findIndex(r => r.some(v => /^ITEM NO/.test(U(v))) && r.some(v => /QTY REQUIRED/.test(U(v)))); if(hy < 0) return false;
+  const H = A[hy].map(U), col = re => H.findIndex(h => re.test(h)), cI = col(/^ITEM NO/), cP = col(/^PART NO/), cB = col(/^BRAND/), cQ = col(/QTY REQUIRED/), cA = col(/QTY AVAILABLE/), cO = col(/QTY TO ORDER/), cU = col(/^UOM/), cR = col(/^REMARK/);
+  const cD = (() => { for(let x = cI + 1; x < H.length; x++) if(x !== cP) return x; return cI + 1; })();
+  const items = [], warn = []; let grp = '', y = hy + 1;
+  for(; y < A.length; y++){ const row = A[y], line = row.map(U).join(' '); if(/REQUESTED BY|REVIEWED BY|APPROVED BY/.test(line)) break;
+    const desc = T(row.slice(cD, cP > cD ? cP : cD + 1).filter(v => T(v)).join(' ')), qty = row[cQ], no = T(row[cI]);
+    if(!desc && !T(qty)) continue;
+    if(desc && !T(qty) && !no){ grp = desc; continue; }   // a heading such as "MATERIAL"
+    const n = v => { const x = typeof v === 'number' ? v : parseFloat(String(v).replace(/,/g, '')); return isFinite(x) ? String(+x.toFixed(4)) : ''; };
+    items.push({no, desc, part: cP >= 0 ? T(row[cP]) : '', brand: cB >= 0 ? T(row[cB]) : '', qty: n(qty), avail: cA >= 0 ? n(row[cA]) : '', unit: cU >= 0 ? U(row[cU]) : '', rem: cR >= 0 ? T(row.slice(cR).filter(v => T(v)).join(' ')) : '', grp}); }
+  /* signatures: the Name / Designation / Date rows under the four signing blocks */
+  const sig = {}, ky = ['req', 'rev', 'chk', 'apv'], lab = re => { for(let z = y; z < A.length; z++){ const row = A[z]; const xs = []; row.forEach((v, x) => { if(re.test(U(v))) xs.push(x); }); if(xs.length) return {z, xs}; } return null; };
+  [['name', /^NAME$/], ['pos', /^DESIGNATION$/], ['date', /^DATE$/]].forEach(([f2, re]) => { const L = lab(re); if(!L) return; L.xs.forEach((x, k) => { const row = A[L.z]; let v = ''; for(let z = x + 1; z < (L.xs[k + 1] ?? row.length); z++) if(T(row[z])){ v = row[z]; break; } if(k < 4 && T(v)){ sig[ky[k]] = sig[ky[k]] || {}; sig[ky[k]][f2] = f2 === 'date' ? iso(v) : T(v); } }); });
+  /* repeated lines (same description, qty and UOM) — kept, but flagged */
+  const seen = new Map(); items.forEach((it, i) => { const kx = U(it.desc) + '|' + it.qty + '|' + it.unit; if(seen.has(kx)) warn.push('line ' + (i + 1) + ' (item ' + (it.no || '—') + ') repeats line ' + (seen.get(kx) + 1)); else seen.set(kx, i); });
+  if(!items.length && !f.title){ toast(file.name + ' looks like an MRF but no lines were found.', 7000); return true; }
+  { const cur = plcCur();
+    if(!cur || !cur.direct || !plcMrfPending(cur)){ toast('An MRF is raised for a PSR, after the Matco check: open that PSR at the “MRF Submission” step, then Import the MRF Excel to fill its form.', 9000); return true; }
+    const T = x => clean(x).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim(), M = Object.assign({}, plcMrfF(cur));
+    Object.assign(M, {projCode: f.code, title: f.title, loc: f.loc, need: f.need, delivery: f.deliv, inspDate: f.insp, prio: prio || M.prio || 'P3', sig, src: {file: file.name, at: new Date().toISOString(), by: hubUser()}});
+    cur.psr = Object.assign({}, cur.psr, {mrf: M}); if(f.no) cur.mrfNo = f.no;
+    let hit = 0; cur.items.forEach(it => { if(!(num(it.stock) > 0)) return; const m = items.find(x => !x._u && (T(x.desc) === T(it.desc) || (T(x.desc).length > 6 && (T(it.desc).includes(T(x.desc)) || T(x.desc).includes(T(it.desc)))))); if(m){ m._u = 1; hit++; if(m.part) it.part = m.part; if(m.brand) it.brand = m.brand; if(m.rem) it.mrem = m.rem; } });
+    PLC.tab = 6; renderPlc();
+    toast('📥 ' + file.name + ' → MRF form filled' + (f.no ? ' (' + f.no + ')' : '') + ' · ' + hit + ' of ' + cur.items.filter(it => num(it.stock) > 0).length + ' stock line(s) matched by description' + (warn.length ? ' · ⚠ ' + warn.length + ' repeated line(s) in the file' : '') + ' — check it, then Raise MRF.', 11000);
+    return true; }
+  const r = plcBlank(); Object.assign(r, {title: f.title, charge: f.code, site: f.loc, needBy: f.need, mrfNo: f.no, priority: plcMrfPrio(prio), reqBy: (sig.req && sig.req.name) || r.reqBy, reqDate: (sig.req && sig.req.date) || r.reqDate,
+    items: items.length ? items : [{desc: '', qty: '', unit: '', rem: ''}]});
+  r.psr.mrf = {delivery: f.deliv, inspDate: f.insp, prio: prio || 'P3', sig, src: {file: file.name, at: new Date().toISOString(), by: hubUser()}};
+  PLC.draft = r; PLC.sel = '__new'; PLC.tab = 0; renderPlc();
+  toast('📥 ' + file.name + ' → new MRF' + (f.no ? ' ' + f.no : '') + ' with ' + items.length + ' line(s)' + (prio ? ' · priority ' + prio : '') + (warn.length ? ' · ⚠ ' + warn.slice(0, 4).join('; ') + (warn.length > 4 ? '…' : '') : '') + ' — check it, then Save or Submit.', 12000);
+  return true;
 }
 /* 2 — Store */
 function plcS1(r, ed){
@@ -4767,18 +4946,17 @@ function plcS1(r, ed){
 }
 /* M — MRF for the surplus items, raised by PE after the Matco check (runs beside the PSR review) */
 function plcSM(r, ed){
-  const sh = `<div class="pl-sh"><h3>MRF Submission — surplus items</h3><p>After Matco confirms the surplus, PE raises an MRF so these items are issued from store instead of bought. The rest of the PSR continues to the PSR review.</p></div>`;
+  const sh = `<div class="pl-sh"><h3>MRF Submission — items in stock</h3><p>Matco has checked the PSR: the items below are in stock. PE raises the company MRF for them (fill in, print for signing, then <b>Raise MRF</b>) so they are issued from store; only the balance (Qty To Order) is bought through the PSR.</p></div>`;
   if(!r.direct) return sh + '<div class="note">This package started with an MRF under the old flow — see step 1.</div>';
   if(r.status === 'cancelled' && !plcMrfDone(r)) return sh + '<div class="note">This PSR was cancelled.</div>';
   if(!r.store.at) return sh + '<div class="note">Waiting for the Matco surplus check (step 2) first.</div>';
   const S = r.items.map((it, i) => ({it, i})).filter(x => clean(x.it.desc) && num(x.it.stock) > 0), M = r.store.mrf || {};
   if(!S.length) return sh + '<div class="note">No surplus found by Matco — no MRF needed. Everything goes through the PSR review.</div>';
-  return sh + `<div class="pl-tw"><table class="pl-t pl-it"><thead><tr><th>#</th><th>Description</th><th class="n">Requested</th><th class="n">From surplus</th><th>Unit</th><th class="n">Still to buy</th><th>Matco remark</th></tr></thead><tbody>
-    ${S.map(({it, i}) => `<tr><td>${i + 1}</td><td>${esc(it.desc)}</td><td class="n">${esc(it.qty)}</td><td class="n"><b>${esc(Math.min(num(it.stock), num(it.qty)) || it.stock)}</b></td><td>${esc(it.unit)}</td><td class="n">${plcNet(it)}</td><td>${esc(it.srem || '')}${it.sp && it.sp.length ? `<span class="pl-sub" style="color:var(--accent)">${esc(plcSpTxt(it))}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
-  <div class="pl-form">${plcF('mrfNo', 'MRF no', r.mrfNo || '', ed, {ph: ed ? plcNext('mrf') + ' (auto if blank)' : ''})}${plcF('mBy', 'Raised by (PE)', M.by || (ed ? hubUser() : ''), ed, {req: 1})}
-    ${plcF('mDate', 'MRF date', M.date || (ed ? todayISO() : ''), ed, {type: 'date'})}${plcF('mNote', 'Remarks', M.note || '', ed, {wide: 1})}</div>
-  ${ed ? `<div class="pl-btns"><span class="sp"></span><button class="btn primary" data-pa="smrfOk">Raise MRF for ${S.length} surplus line${S.length === 1 ? '' : 's'} →</button></div>`
-    : plcMrfDone(r) ? `<p class="pl-done">✓ MRF <b>${esc(r.mrfNo || '')}</b> raised by <b>${esc(M.by || '')}</b> on ${plcDT(M.at)} — surplus items to be issued from store${r.items.some(it => it.sp && it.sp.length) ? '; the linked ledger stock is now <b>issued</b> in the Surplus Ledger' : ''}.</p>` : `<div class="note">Waiting for PE to raise the MRF.${r.items.some(it => it.sp && it.sp.length) ? ' The linked ledger stock stays <b>reserved</b> for this PSR until then.' : ''}</div>`}`;
+  const dn = plcMrfDone(r);
+  return sh + plcSMForm(r, S, ed && !dn) + `
+  ${ed && !dn ? `<div class="pl-form">${plcF('mBy', 'Raised by (PE)', M.by || hubUser(), ed, {req: 1})}${plcF('mNote', 'Note to the store (optional)', M.note || '', ed, {wide: 1})}</div>
+    <div class="pl-btns"><button class="btn" data-pmrfp="1">🖨 Print MRF form</button><span class="sp"></span><button class="btn primary" data-pa="smrfOk">Raise MRF for ${S.length} line${S.length === 1 ? '' : 's'} from stock →</button></div>`
+    : dn ? `<div class="pl-btns"><button class="btn" data-pmrfp="1">🖨 Print MRF form</button></div><p class="pl-done">✓ MRF <b>${esc(r.mrfNo || '')}</b> raised by <b>${esc(M.by || '')}</b> on ${plcDT(M.at)} — these items are issued from store${r.items.some(it => it.sp && it.sp.length) ? '; the linked ledger stock is now <b>issued</b> in the Surplus Ledger' : ''}.</p>` : `<div class="pl-btns"><button class="btn" data-pmrfp="1">🖨 Print MRF form</button></div><div class="note">Waiting for PE to raise the MRF.${r.items.some(it => it.sp && it.sp.length) ? ' The linked ledger stock stays <b>reserved</b> for this PSR until then.' : ''}</div>`}`;
 }
 /* 3 — PSR 3-tier */
 /* 3 — PSR 3-tier, with the company PURCHASE/SERVICE REQUISITION form (fill in here, print A4 landscape) */
@@ -5382,6 +5560,7 @@ async function plcClick(e){
   if(d.ppo){ e.stopPropagation(); plcPoShow(d.ppo, false, d.pbid); return; }
   if(d.ppou){ e.stopPropagation(); plcPoShow(d.ppou, true, d.pbid); return; }
   if(d.ppsr){ plcPsrShow(); return; }
+  if(d.pmrfp){ plcMrfShow(); return; }
   if(d.psig){ const inp = document.querySelector('#plc input[data-psigf="' + d.psig + '"]'); if(inp) inp.click(); return; }
   if(d.psigx){ const [, kind] = d.psigx.split(':'); if(PLC.pend) delete PLC.pend[kind]; plcKeepTier(); renderPlc(); return; }
   if(d.psigu){ const r1 = plcCur(), id = (r1 && r1.id) || '__new', [tk, kind] = d.psigu.split(':'); if(!PLC.pend || PLC.pend.id !== id || PLC.pend.k !== tk) PLC.pend = {id, k: tk}; plcKeepTier(); plcSigClean(plcSigSaved(hubUser(), kind), kind).then(u => { PLC.pend[kind] = u; renderPlc(); }); return; }
@@ -5420,7 +5599,7 @@ async function plcClick(e){
   if(a === 'new'){ PLC.draft = plcBlank(); PLC.sel = '__new'; PLC.tab = 0; renderPlc(); return; }
   if(a === 'newPsr'){ if(!PLC_ED()) return; PLC.draft = plcBlankPsr(); PLC.sel = '__new'; PLC.tab = 0; renderPlc(); $('#p-plc').scrollTop = 0; return; }
   if(a === 'addPsrItem'){ plcReadPsr(r0); r0.items.push({desc: '', qty: '', unit: 'EA', type: 'P', dur: '', rem: ''}); renderPlc(); const ins = $$('#plc tr[data-pidx] [data-pk="desc"]'); if(ins.length) ins[ins.length - 1].focus(); return; }
-  if(a === 'addItem'){ plcReadMrf(r0); r0.items.push({desc: '', qty: '', unit: 'lot', rem: ''}); renderPlc(); const ins = $$('#plc tr[data-pi] [data-ik="desc"]'); if(ins.length) ins[ins.length - 1].focus(); return; }
+  if(a === 'addItem'){ plcReadMrf(r0); r0.items.push({desc: '', qty: '', unit: 'EA', rem: ''}); renderPlc(); const ins = $$('#plc tr[data-pi] [data-ik="desc"]'); if(ins.length) ins[ins.length - 1].focus(); return; }
   if(a === 'addBid'){ plcReadRfq(r0); r0.rfq.bids.push(plcBidNew(r0.rfq.bids.length)); r0.rfq.sel = r0.rfq.bids.length - 1; renderPlc(); return; }
   if(!PLC_ED()){ toast('Only ZNESB staff can change procurement records.'); return; }
   const r = plcClone(r0), tag = () => plcRef(r) + ' — ';
@@ -5433,7 +5612,8 @@ async function plcClick(e){
     if(a === 'submitMrf'){
       if(!r.items.length){ toast('Add at least one material / service line.'); return; }
       const bad = r.items.find(it => !it.desc || !(num(it.qty) > 0)); if(bad){ toast('Each line needs a description and a quantity above 0.'); return; }
-      if(!r.reqBy){ toast('Enter who is requesting.'); return; }
+      if(!r.reqBy){ toast('Enter who is requesting (Requested By — Name).'); return; }
+      r.items.forEach(it => { if(num(it.avail) > 0 && !num(it.stock)) it.stock = it.avail; });   // Qty Available on the MRF → the store check starts from it
       step(1);
     } else if(!r.id) r.status = r.status || 'draft';
     if(!r.items.length) r.items = [{desc: '', qty: '', unit: 'lot', rem: ''}];
@@ -5474,8 +5654,8 @@ async function plcClick(e){
   if(a === 'smrfOk'){
     if(!plcMrfPending(r0)){ toast('No MRF to raise for this package.'); return; }
     const by = plcVal('mBy'); if(!by){ toast('Enter the name of the PE raising the MRF.'); return; }
-    const no = plcVal('mrfNo'); if(no) r.mrfNo = no;
-    r.store = Object.assign({}, r.store, {mrf: {by, date: plcVal('mDate') || todayISO(), note: plcVal('mNote'), at: plcNow()}});
+    plcReadMrfM(r); const no = plcVal('mrfNo'); if(no) r.mrfNo = no;
+    r.store = Object.assign({}, r.store, {mrf: {by, date: todayISO(), note: plcVal('mNote'), at: plcNow()}});
     await save(tag() + 'MRF raised by ' + by + ' for ' + plcSurItems(r).length + ' surplus line(s)' + (r.items.some(it => it.sp && it.sp.length) ? ' — linked stock issued in the Surplus Ledger' : ''), (nx, recs) => { if(!nx.mrfNo || recs.some(x => x.id !== nx.id && x.mrfNo === nx.mrfNo)) nx.mrfNo = plcNext('mrf', recs); });
     PLC.tab = 6; renderPlc(); return;
   }
