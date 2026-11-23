@@ -1242,6 +1242,15 @@ html body table td,html body table th{word-break:normal!important;overflow-wrap:
 html body table td.zb-nw,html body table th.zb-nw{white-space:nowrap!important}
 html body table :is(td,th) :not(svg):not(svg *){word-break:normal!important;overflow-wrap:break-word!important}
 
+
+/* WOP 360° lists: the reference (WOP / PO / SRSC / notification no.) is shown whole on its own line, the title and status below it — nothing cut or covered */
+html body .w3-row,html body .w3-grid .w3-row{grid-template-columns:minmax(0,1fr) auto!important;row-gap:3px;align-items:start}
+html body .w3-row .ref{grid-column:1/-1;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;overflow-wrap:break-word;word-break:normal}
+html body .w3-row .t{min-width:0;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;overflow-wrap:break-word!important;word-break:normal!important}
+html body .w3-row .st{text-align:right}
+
+html body .head:has(> .w3-pick){flex-wrap:wrap!important;}html body .head > .w3-pick{flex:1 1 100%!important;min-width:0;}
+html body .w3-pick input{flex:1 1 100%!important;max-width:none!important;min-width:0!important;width:100%;}   /* the chosen WOP no. — title is shown whole, on its own line under the page title */
 </style><script>/* a cell holding one token (a date, PO / document no., code or single word) stays on one line in tables that size to their content */
 (function(){var RX=/^\S{1,34}$/;
 function run(){var cs=document.querySelectorAll('td,th'),L=new Map();for(var i=0;i<cs.length;i++){var c=cs[i],t=(c.textContent||'').replace(/\s+/g,' ').trim(),tb=c.closest('table');if(!tb)continue;var lay=L.get(tb);if(lay===undefined){lay=getComputedStyle(tb).tableLayout;L.set(tb,lay);}
@@ -3312,6 +3321,20 @@ const copCur = () => COP.sel === '__new' ? COP.draft : COP.recs.find(r => r.id =
 const COP_PE = () => { try{ const z = typeof zidGet === 'function' ? zidGet() : null; return !!z && (z.roles || []).includes('PE'); }catch(e){ return false; } };
 const COP_CAN = () => typeof OPS !== 'undefined' ? (OPS || COP_PE()) : true;
 /* save one COP: read the Sheet first, put this record in, write all back (Admin password) */
+/* Delete a COP from the register (the Google Sheet keeps every other COP as it is) */
+async function copRemove(id){
+  const r0 = COP.recs.find(r => r.id === id); if(!r0) return;
+  const nm = r0.copNo || 'this draft COP', sent = r0.status && r0.status !== 'draft';
+  if(sent){ const t = prompt(nm + ' is ' + ((COP_ST[r0.status] || [r0.status])[0]) + '.\nDeleting removes it from the COP Register for everyone.\n\nType ' + nm + ' to confirm:'); if(t === null) return; if(t.trim().toUpperCase() !== nm.toUpperCase()){ toast('Not deleted — the COP no. did not match.'); return; } }
+  else if(!confirm('Delete ' + nm + (r0.subject ? ' — ' + r0.subject : '') + '?')) return;
+  const A = await plcAuth(['ADMIN', 'PE'], [nm + ' — deleted']); if(!A) return;
+  const url = hubUrl(); let recs = COP.recs.slice();
+  if(url){ try{ const j = await gsCall(url, 'wop', {action: 'list', module: 'cop', pw: A.pw}); if(j && Array.isArray(j.records)) recs = j.records.filter(r => r && r.id).map(copParse); }catch(e){ toast('⚠ Not deleted — could not reach the Google Sheet: ' + e.message, 9000); return; } }
+  recs = recs.filter(r => r.id !== id);
+  if(url){ try{ await gsCall(url, 'wop', null, {action: 'replaceAll', module: 'cop', fields: COP_FIELDS, records: recs.map(copSer), pw: A.pw, zbUser: A.name, zbChanges: [nm + ' — deleted'], zbChangeCount: 1}); }
+    catch(e){ toast('⚠ Not deleted: ' + e.message, 9000); return; } }
+  COP.recs = recs; copCache(); if(COP.sel === id) COP.sel = null; if(COP.last === id) COP.last = null; renderCop(); toast('🗑 ' + nm + ' deleted');
+}
 async function copCommit(nx, line){
   const A = await plcAuth(['ADMIN', 'PE'], [(nx.copNo || 'New COP') + ' — ' + line]); if(!A) return false;
   const url = hubUrl(); let recs = COP.recs.slice();
@@ -3378,7 +3401,7 @@ function copOverall(S, R){
   L.sort(COP.sortGap ? (a, b) => ((b.x ? b.x.amt : 0) - (a.x ? a.x.amt : 0)) : (a, b) => copWopCmp(wn(a), wn(b)));
   const groups = {}; L.forEach(o => (groups[areaOf(o)] = groups[areaOf(o)] || []).push(o));
   const gaps = L.filter(o => o.x), cops = L.flatMap(o => o.cops), noCop = L.filter(isGap);
-  const head = `<div class="head"><div><div class="kicker">All change orders</div><h2>COP Register</h2><p>Every WOP whose PO is below its WOP value (the gap a COP should cover) and every Change Order Proposal, grouped by area (TCOT / TGAST / OSC / OGT — from the WOP location). Filter by gap not yet raised / with COP or area. The buttons on each row act on that WOP or COP: ＋ Raise COP, Open (its cost tables), ✎ Cover. Totals, running number and one COP at a time: Dashboard › COP.</p></div>
+  const head = `<div class="head"><div><div class="kicker">All change orders</div><h2>COP Register</h2><p>Every WOP whose PO is below its WOP value (the gap a COP should cover) and every Change Order Proposal, grouped by area (TCOT / TGAST / OSC / OGT — from the WOP location). Filter by gap not yet raised / with COP or area. The buttons on each row act on that WOP or COP: ＋ Raise COP, Open (its cost tables), ✎ Cover, Delete, ⧉ New revision. Totals, running number and one COP at a time: Dashboard › COP.</p></div>
     <div class="acts"><button class="btn" data-ca="help" title="How Change Orders work">❓ Help</button><button class="btn" data-ca="xlsx"${R.length ? '' : ' disabled'} title="All COPs to Excel">📊 Excel</button>${COP_CAN() ? '<button class="btn" data-ca="import" title="Read a COP from its PDF or Excel form">📥 Import</button><button class="btn primary" data-ca="new">＋ New COP</button>' : ''}</div></div>`;
   const locs = [...new Set(LC.map(areaOf))];
   const filt = `<div class="dash-filters">
@@ -3401,13 +3424,14 @@ function copOverall(S, R){
       <td class="n mono">${x ? `<b style="color:var(--bad)">${rm(x.amt)}</b><div class="faint" style="font-size:11px">${x.pct}%</div>` : '<span class="faint">—</span>'}</td>
       <td>${o.cops.length ? o.cops.map(c => `<div class="coitem"><button class="linkish mono" data-copen="${c.id}" ${sb.replace('color:inherit', 'color:var(--accent)')}>${esc(c.copNo || 'draft')}</button><div>${copChip(c.status)}</div></div>`).join('') : '<span class="faint">—</span>'}</td>
       <td class="n mono">${o.cops.length ? o.cops.map(c => `<div class="coitem">${rm(copTotal(c))}</div>`).join('') : ''}</td>
-      <td class="racts-td"><div class="racts" style="grid-template-columns:auto auto">${!open && x && COP_CAN() ? `<button class="btn sm primary" data-craise="${esc(w.wopNo)}" style="grid-column:1/-1">＋ Raise COP</button>` : ''}${last ? `<button class="btn sm" data-catt="${last.id}" title="Open the cost tables of ${esc(last.copNo || 'this COP')}">Open</button><button class="btn sm" data-copen="${last.id}" title="Edit the cover of ${esc(last.copNo || 'this COP')}">✎ Cover</button>` : ''}</div></td></tr>`; };
+      <td class="racts-td">${!open && x && COP_CAN() ? `<div class="racts" style="grid-template-columns:auto auto${o.cops.length ? ';margin-bottom:6px' : ''}"><button class="btn sm primary" data-craise="${esc(w.wopNo)}" style="grid-column:1/-1">＋ Raise COP</button></div>` : ''}${o.cops.map(c => { const nm = esc(c.copNo || 'this COP');
+        return `<div class="coitem coacts"><div class="racts" style="grid-template-columns:auto auto"><button class="btn sm" data-catt="${c.id}" title="Open the cost tables of ${nm}">Open</button>${COP_CAN() ? `<button class="btn sm danger" data-cdelrec="${c.id}" title="Delete ${nm}">Delete</button>` : ''}<button class="btn sm" data-copen="${c.id}" title="Edit the cover of ${nm}">✎ Cover</button>${COP_CAN() ? `<button class="btn sm" data-crev="${c.id}" title="${c.status === 'draft' ? nm + ' is still a draft — change it and Save; a new revision is for a COP already sent to PCSB' : 'Start Rev ' + ((parseInt(c.rev, 10) || 0) + 1) + ' of ' + nm}"${c.status === 'draft' ? ' disabled' : ''}>⧉ New revision</button>` : ''}</div></div>`; }).join('')}</td></tr>`; };
   const nc = 8, ord = g => ((AR.indexOf(g) + 1) || 99);
   const body = Object.keys(groups).sort((a, b) => ord(a) - ord(b) || a.localeCompare(b)).map(g => { const shut = COP.shut.has(g), G = groups[g];
     return `<tr class="locg${shut ? ' shut' : ''}" data-cotog="${esc(g)}" title="Click to ${shut ? 'show' : 'hide'} ${esc(g)}"><td colspan="${nc}"><span class="tg">${shut ? '▸' : '▾'}</span> 📍 ${esc(g)} <span class="faint">· ${G.length} WOP(s) · gap ${plcRM(sum(G.filter(o => o.x), o => o.x.amt))} · ${G.flatMap(o => o.cops).length} COP · ${plcRM(sum(G.flatMap(o => o.cops), copTotal))}</span></td></tr>${shut ? '' : G.map(row).join('')}`; }).join('')
     || `<tr><td colspan="${nc}" class="empty">${rows.size ? 'Nothing matches the filter.' : DATA.wop ? 'No WOP has a PO below its WOP value, and no COP yet. ✓' : 'Open the Commercial Tracker once so its WOPs and POs are read.'}</td></tr>`;
   const box = `<div class="box"><div class="box-h"><div><h3>All change orders by area</h3><p>${L.length} WOP(s) · gap ${plcRM(sum(gaps, o => o.x.amt))} · ${cops.length} COP · ${plcRM(sum(cops, copTotal))}${f !== 'all' ? ' · ' + (f === 'gap' ? 'gap not yet raised' : 'with COP') : ''}${oa !== 'all' ? ' · ' + esc(oa) : ''}</p></div><div class="ctl"><button class="btn sm" data-coall="shut" title="Collapse every area">▸ Collapse all</button><button class="btn sm" data-coall="open" title="Expand every area">▾ Expand all</button></div></div>
-    <style>#cop table.copov{table-layout:auto!important;width:100%;min-width:100%!important}#cop table.copov :is(th,td){overflow:visible!important;text-overflow:clip!important;white-space:nowrap}#cop table.copov td.cottl{white-space:normal!important;min-width:140px}#cop table.copov .coitem{min-height:44px;padding:2px 0;display:flex;flex-direction:column;justify-content:center}#cop table.copov td.n .coitem{align-items:flex-end}#cop table.copov .coitem+.coitem{border-top:1px dashed var(--border,rgba(127,127,127,.25))}#cop table.copov td{vertical-align:middle}</style><div class="tw" style="overflow-x:auto"><table class="grid pft full copov">
+    <style>#cop table.copov{table-layout:auto!important;width:100%;min-width:100%!important}#cop table.copov :is(th,td){overflow:visible!important;text-overflow:clip!important;white-space:nowrap}#cop table.copov td.cottl{white-space:normal!important;min-width:140px}#cop table.copov .coitem{min-height:84px;padding:4px 0;display:flex;flex-direction:column;justify-content:center;box-sizing:border-box}#cop table.copov .coacts .racts{margin:0}#cop table.copov .btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 55%,transparent)}#cop table.copov .btn.danger:hover{background:color-mix(in srgb,var(--bad) 10%,transparent)}#cop table.copov td.n .coitem{align-items:flex-end}#cop table.copov .coitem+.coitem{border-top:1px dashed var(--border,rgba(127,127,127,.25))}#cop table.copov td{vertical-align:middle}</style><div class="tw" style="overflow-x:auto"><table class="grid pft full copov">
     <thead><tr><th><button data-csort="0" ${sb} title="Sort by WOP number">WOP no. ${COP.sortGap ? '⇅' : '▲'}</button></th><th>Title</th><th class="n">WOP value</th><th class="n">PO value</th><th class="n"><button data-csort="1" ${sb} title="Sort by ${COP.sortGap ? 'WOP number' : 'gap (largest first)'}">Gap ${COP.sortGap ? '▼' : '⇅'}</button></th><th>COP</th><th class="n">COP value</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>`;
   return head + filt + stats + box;
 }
@@ -3648,6 +3672,8 @@ function copWire(el){
       if(ds.cotog){ S0.has(ds.cotog) ? S0.delete(ds.cotog) : S0.add(ds.cotog); }
       else if(ds.coall === 'open') S0.clear(); else el.querySelectorAll('[data-cotog]').forEach(t => S0.add(t.dataset.cotog));
       try{ localStorage.setItem('cop_areaShut', JSON.stringify([...S0])); }catch(x){} renderCop(); return; }
+    if(ds.cdelrec){ copRemove(ds.cdelrec); return; }
+    if(ds.crev){ const c = COP.recs.find(r => r.id === ds.crev); if(!c) return; COP.last = c.id; COP.sel = c.id; COP.draft = null; copAct('rev', {}); copTop(); return; }
     if(ds.catt){ COP.last = ds.catt; try{ el.ownerDocument.defaultView.__copAttOpen(window.__hubCopRec(ds.catt), 'table', ''); }catch(err){ toast('Open this in WOP Studio › Change Orders.'); } return; }
     if(ds.ctab === 'overall' || ds.ctab === 'short' || ds.ctab === 'reg'){ if(COP.sel === '__new' && !confirm('Leave the new COP without saving it?')) return; COP.of = ds.ctab === 'short' ? 'gap' : ds.ctab === 'reg' ? 'cop' : COP.of; COP.tab = copInStudio() ? 'overall' : ds.ctab; COP.sel = null; renderCop(); return; }
     if(ds.ctab === 'form'){ if(COP.sel) return; const l = COP.last && COP.recs.find(r => r.id === COP.last); if(l){ COP.sel = l.id; COP.draft = null; renderCop(); copTop(); } else toast('Open a COP from the COP Register (or press ＋ New COP) — its form opens here.'); return; }
@@ -7619,7 +7645,6 @@ function wopExceptions(r, ctx){
   }
   if(!noPo(r) && po > 0 && pg >= 50 && claim <= 0) add('info', 'Claim not started', `${Math.round(pg)}% progress but no claim recorded`);
   if(blank(r.chargeCode)) add('info', 'Missing charge code', 'Charge code is blank');
-  if(blank(r.finishDate) && st === 'ONGOING') add('info', 'Missing finish date', 'Ongoing but no finish date — cannot track lateness');
   const COMMERCIAL = ['No PO yet', 'Claim above PO value', 'Actual cost above budget', 'No progress after PO', 'Claim not started', 'Missing charge code', 'Missing finish date'];   // PCSB sees progress & schedule only — no commercial or data-housekeeping items
   return (STAFF ? out : out.filter(x => !COMMERCIAL.includes(x.rule))).sort((a, b) => X_SEV[b.sev] - X_SEV[a.sev]);
 }
