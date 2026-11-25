@@ -3153,10 +3153,10 @@ function zdlgOpen(id, html){
   d.innerHTML = ZDLG_CSS + html; if(!d.open) d.showModal(); return d;
 }
 const zdTitle = (t, pre) => esc(String(t || '').replace(/^[^A-Za-z0-9]+/, '').replace(/^(Import|Help(\s*\/\s*Legend|\s*&\s*Legend)?|How this works)\s*[—–-]?\s*/i, '').trim());
-/* o: {mod, title, note (html), types, accept, extras: [[label, fn]], onFile(file)} */
+/* o: {mod, title, note (html), types, accept, extras: [[label, fn]], onFile(file), head (default '📥 Import')} */
 function hubImportDlg(o){
   const what = zdTitle(o.title) || (MS_INFO[o.mod] || {}).l || '';
-  const d = zdlgOpen('dlgZImp', `<div class="dh"><h3>📥 Import — ${what}</h3></div>
+  const d = zdlgOpen('dlgZImp', `<div class="dh"><h3>${o.head || '📥 Import'} — ${what}</h3></div>
     <div class="db">${o.note ? `<div class="zd-note">${o.note}</div>` : ''}
       ${(o.extras || []).length ? `<div class="zd-btns">${o.extras.map((x, i) => `<button class="btn" data-zx="${i}">${esc(x[0])}</button>`).join('')}</div>` : ''}
       <div class="zd-drop" id="zdDrop" tabindex="0">📂<div><b>Click to choose a file</b> or drop it here</div><small>${esc(o.types || '')}</small></div>
@@ -8299,7 +8299,7 @@ function renderMto(){
   const el = $('#mto'); if(!el) return;
   if(!MTO_LOADED) mtoLoad();
   const head = `<div class="head"><div><h2>Material Reconciliation</h2><p>Compares the MTO taken from the survey drawings (quantity needed per AIF notification) with what Materials Tracking says was ordered and received, package by package. Pipe and structural steel in metres are rounded up to 6 m lengths before comparing.</p></div>
-    <div class="row-btns"><label class="btn primary" style="cursor:pointer">⬆ Import MTO Excel<input type="file" id="mtoFile" accept=".xlsx,.xls,.xlsm" hidden></label>${MTO ? `<button class="btn" id="mtoXls">⬇ Download comparison</button>` : ''}${MTO && MTO_DIRTY ? `<button class="btn primary" id="mtoSave">Save to Sheet</button>` : ''}</div></div>`;
+    <div class="row-btns"><button class="btn primary" id="mtoImp" type="button">📥 Import MTO</button>${MTO ? `<button class="btn" id="mtoXls">⬇ Download comparison</button>` : ''}${MTO && MTO_DIRTY ? `<button class="btn primary" id="mtoSave">Save to Sheet</button>` : ''}</div></div>`;
   if(!MTO){ el.innerHTML = head + `<div class="box"><div class="note">No MTO loaded yet. Import the MTO Excel (e.g. <span class="mono">ZNE_MTO_SURVEY_TGAST_AND_OSC.xlsx</span>) — one sheet per package, with the columns <b>Item · Descriptions · Units</b>, one column per notification and a <b>SUM</b> column.</div>${MTO_ERR ? `<div class="note warn">${esc(MTO_ERR)}</div>` : ''}</div>`; mtoWire(el); return; }
   if(!DATA.mat){ el.innerHTML = head + `<div class="box"><div class="note">Loading Materials data…</div></div>`; mtoWire(el); return; }
   const pk = DATA.mat.packages;
@@ -8375,7 +8375,9 @@ function renderMto(){
   el.innerHTML = html; mtoWire(el);
 }
 function mtoWire(el){
-  const f = el.querySelector('#mtoFile'); if(f) f.onchange = () => { if(f.files[0]) mtoImport(f.files[0]); f.value = ''; };
+  const mi = el.querySelector('#mtoImp'); if(mi) mi.onclick = () => hubImportDlg({mod: 'mto', title: 'MTO (Material Take-Off)', types: '.xlsx / .xlsm / .xls', accept: '.xlsx,.xls,.xlsm',
+    note: 'Choose the <b>MTO</b> workbook taken from the survey drawings. Every sheet with an <b>Item | Descriptions | Units</b> header is read — the quantity needed per AIF notification. The package links, manual matches and remarks already added here are kept.',
+    onFile: f => mtoImport(f)});
   const s = el.querySelector('#mtoSave'); if(s) s.onclick = mtoSave;
   const x = el.querySelector('#mtoXls'); if(x) x.onclick = mtoExport;
   el.querySelectorAll('tr[data-msh]').forEach(tr => tr.onclick = () => { MTO_SHEET = tr.dataset.msh; MTO_EDIT = null; renderMto(); });
@@ -9412,7 +9414,9 @@ $('#btnBackup').addEventListener('click', () => {
   toast(`Backup saved (${n} stored items from all modules).`);
 });
 let PENDING_RESTORE = null;
-$('#btnRestore').addEventListener('click', () => $('#restoreFile').click());
+$('#btnRestore').addEventListener('click', () => hubImportDlg({head: '⤒ Restore', title: 'Backup file', types: '.json — a backup saved with ⤓ Backup', accept: '.json,application/json',
+  note: 'Choose a backup file saved with <b>⤓ Backup</b>. What it holds (WOP, AIF, Materials, WOP Studio) is shown first, and nothing is replaced until you confirm.',
+  onFile: f => { const inp = $('#restoreFile'), dt = new DataTransfer(); dt.items.add(f); inp.files = dt.files; inp.dispatchEvent(new Event('change', {bubbles: true})); }}));
 $('#restoreFile').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = ''; if(!f) return;
   try{
