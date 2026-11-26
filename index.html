@@ -3617,7 +3617,9 @@ async function copAct(a, ds){
   if(a === 'fromstudio'){ keepLocal(); copFromStudio(r); return; }
   if(a === 'studio'){ hubOpenStudio(r.studio.id); return; }
   if(a === 'print'){ keepLocal(); copPreview(r); return; }
-  if(a === 'save'){ if(!r.lines.length || !copTotal(r)){ if(!confirm('This COP has no cost yet. Save it anyway?')) return; } if(await copCommit(r, r.copNo ? 'saved' : 'created — ' + plcRM(copTotal(r)))) renderCop(); else { keepLocal(); } return; }
+  if(a === 'save'){ if(!r.lines.length || !copTotal(r)){ if(!confirm('This COP has no cost yet. Save it anyway?')) return; }
+    const ir = COP.impRev && COP.impRev.id === r.id ? COP.impRev.note : '';
+    if(await copCommit(r, ir || (r.copNo ? 'saved' : 'created — ' + plcRM(copTotal(r))))){ if(ir) COP.impRev = null; renderCop(); } else { keepLocal(); } return; }
   if(a === 'submit'){ if(!copTotal(r)){ toast('Enter the cost of the change first.'); return; }
     const d = prompt('Date submitted to PCSB (YYYY-MM-DD):', r.submittedAt || todayISO()); if(d == null) return; r.submittedAt = clean(d) || todayISO(); const wasRev = r.status === 'revise'; r.status = 'submitted'; r.resp = {};
     if(await copCommit(r, (wasRev ? 'resubmitted' : 'submitted') + ' to PCSB — ' + plcRM(copTotal(r)))) renderCop(); else keepLocal(); return; }
@@ -4451,23 +4453,43 @@ async function copImport(file){
   catch(e){ toast('⚠ Could not read ' + file.name + ': ' + e.message, 9000); return; }
   const P = copImpParse(L);
   if(!P.copNo && !P.lines.length && !P.subject){ toast('⚠ ' + file.name + ' does not look like a Change Order Proposal (no Doc. No., subject or summary of CO/COP found).', 9000); return; }
+  /* the same COP no. already in the register: a higher Rev in the file is a NEW REVISION of that COP (same record, same no.), never a new COP */
   const dup = P.copNo && COP.recs.find(x => U_(x.copNo) === P.copNo);
-  if(dup && !confirm(P.copNo + ' is already in the COP Register (' + COP_ST[dup.status][0] + ').\n\nOK = import it as a separate copy to check · Cancel = open the one in the register')){ COP.sel = dup.id; COP.draft = null; renderCop(); return; }
-  const o = copBlank(null, 0);
+  const openDup = () => { COP.sel = dup.id; COP.last = dup.id; COP.draft = null; COP.tab = copInStudio() ? COP.tab : 'reg'; renderCop(); copTop(); };
+  let asRev = false;
+  if(dup){
+    const fr = parseInt(P.rev, 10) || 0, cr = parseInt(dup.rev, 10) || 0, stTxt = (COP_ST[dup.status] || [dup.status])[0];
+    if(fr > cr){
+      if(!confirm(P.copNo + ' is in the COP Register as Rev ' + cr + ' (' + stTxt + ').\nThe file is Rev ' + fr + '.\n\nOK = update ' + P.copNo + ' to Rev ' + fr + ' with the content of the file (the same COP — no new number)\nCancel = only open ' + P.copNo + ' in the register')){ openDup(); return; }
+      asRev = true;
+    } else if(fr === cr){
+      if(!confirm(P.copNo + ' Rev ' + cr + ' is already in the COP Register (' + stTxt + ').\n\nOK = replace its content with the file (stays Rev ' + cr + ')\nCancel = only open it')){ openDup(); return; }
+      asRev = true;
+    } else { toast('⚠ ' + file.name + ' is Rev ' + fr + ' — older than ' + P.copNo + ' Rev ' + cr + ' in the register. Not imported; the register one is opened.', 10000); openDup(); return; }
+  }
+  const o = asRev ? Object.assign(copNorm(JSON.parse(JSON.stringify(dup))), {resp: {}}) : copBlank(null, 0);
+  if(asRev) o._base = String(dup.updatedAt || '');
   ['copNo', 'rev', 'date', 'project', 'contractNo', 'contractTitle', 'contractor', 'attention', 'subject', 'scope', 'change', 'reason', 'deviation', 'impact', 'sched', 'days', 'other', 'initiator', 'attachTxt', 'attached'].forEach(k => { if(P[k] != null && P[k] !== '') o[k] = P[k]; });
-  if(dup) o.copNo = '';
+  if(asRev){ o.copNo = dup.copNo; o.rev = String(parseInt(P.rev, 10) || 0); }
   if(P.crfi && P.crfi.length) o.crfi = P.crfi.concat([{}, {}]).slice(0, 2);
   if(P.attach) o.attach = P.attach;
   if(P.prop && (P.prop.name || P.prop.date)) o.prop = {name: P.prop.name || o.prop.name, date: P.prop.date || o.prop.date};
   o.lines = P.lines.map(l => Object.assign({desc: l.desc, cost: l.cost === '' ? '' : Math.round(num(l.cost) * 100) / 100, rem: l.rem || ''}, l.tbl ? {tbl: l.tbl, mh: l.mh, md: l.md} : {}));
-  const W = copImpWop(P, L.map(l => l.t).join('\n')); if(W){ o.wopNo = W.w.wopNo; o.charge = W.w.chargeCode || ''; o.worNo = W.w.worNo || ''; }
+  const W = asRev && o.wopNo ? null : copImpWop(P, L.map(l => l.t).join('\n')); if(W){ o.wopNo = W.w.wopNo; o.charge = W.w.chargeCode || ''; o.worNo = W.w.worNo || ''; }
   o.importedFrom = {file: file.name, at: plcNow()};
   /* the workbook's other sheets (Sum, Milestone, 1.0 MP …) become the COP's attachment in WOP Studio */
   let A = null; if(ext !== 'pdf' && buf0){ try{ const sw = ESTF && ESTF.contentWindow; if(sw && sw.__copAttImport) A = await sw.__copAttImport({id: o.id, copNo: o.copNo, rev: o.rev, project: o.project, subject: o.subject, wopNo: o.wopNo, contractNo: o.contractNo, contractTitle: o.contractTitle, date: o.date}, buf0.slice ? buf0.slice(0) : buf0); }catch(e){ A = null; }
     if(A && A.id){ o.studio = {id: A.id, wopNo: o.copNo, rev: o.rev, total: A.total, att: true}; if(!o.lines.length || !copTotal(o)){ /* no summary on the cover: take it from the attachment */ } } }
   const sum = copTotal(o), chk = P.total ? Math.abs(sum - P.total) <= 0.01 : true;
   if(confirm('Read from ' + file.name + ':\n\n' + (o.copNo || '(no number)') + ' · Rev ' + (o.rev || '0') + ' · ' + (o.date ? copD(o.date) : 'no date') + '\n' + (o.subject || '') + '\n' + o.lines.length + ' line(s) · ' + plcRM(sum) + (P.total ? (chk ? ' ✓ same as the TOTAL COST on the form' : ' ⚠ the form says TOTAL COST ' + plcRM(P.total)) : '') + '\nWOP: ' + (W ? o.wopNo + (W.how === 'title' ? ' (matched by title — check it)' : '') : 'not found — choose it in the form') + (A && A.id ? '\nAttachment: ' + A.tables.join(' · ') + ' = ' + plcRM(A.total) + (Math.abs(A.total - sum) < 0.5 ? ' ✓ same as the COP' : ' ⚠ the COP says ' + plcRM(sum))  : '') + '\n\nHas this COP already been submitted to PCSB?\nOK = yes (it goes into the register as Submitted, dated ' + (o.date ? copD(o.date) : 'today') + ') · Cancel = no, keep it as a Draft')){
-    o.status = 'submitted'; o.submittedAt = o.date || todayISO(); }
+    o.status = 'submitted'; o.submittedAt = o.date || todayISO(); } else if(asRev){ o.status = 'draft'; o.submittedAt = ''; }
+  if(asRev){   /* the revision goes into the same record — press 💾 Save to keep it */
+    const i = COP.recs.findIndex(x => x.id === dup.id); COP.recs[i] = Object.assign(o, {_dirty: true});
+    COP.impRev = {id: dup.id, note: 'Rev ' + o.rev + ' imported from ' + file.name + ' — ' + plcRM(sum)};
+    COP.tab = copInStudio() ? 'overall' : 'reg'; COP.sel = dup.id; COP.last = dup.id; COP.draft = null; renderCop(); copTop();
+    toast('✓ ' + o.copNo + ' Rev ' + o.rev + ' read from ' + file.name + ' — check the fields, then press 💾 Save.' + (chk ? '' : ' ⚠ The lines do not add up to the TOTAL COST on the form.'), 9000);
+    return;
+  }
   COP.tab = copInStudio() ? 'overall' : 'reg'; COP.sel = '__new'; COP.draft = o; renderCop(); copTop();
   toast('✓ ' + (o.copNo || 'COP') + ' read from ' + file.name + ' — check the fields, then press 💾 Save.' + (chk ? '' : ' ⚠ The lines do not add up to the TOTAL COST on the form.'), 9000);
 }
