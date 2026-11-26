@@ -3265,12 +3265,14 @@ const copDays = s => { const t = Date.parse(s); return isNaN(t) ? 0 : Math.max(0
 const copD = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || '')); return m ? m[3] + '/' + m[2] + '/' + m[1] : String(s || ''); };
 function copNorm(o){
   o = Object.assign({status: 'draft', rev: '0', lines: [], crfi: [{}, {}], attach: [], hist: [], prop: {}, resp: {}, po: {}, comp: 'Lump Sum', impact: 'Addition', sched: 'No Change', days: '', deviation: 'Not applicable', attached: 'YES'}, o || {});
-  if(!Array.isArray(o.lines)) o.lines = []; if(!Array.isArray(o.attach)) o.attach = []; if(!Array.isArray(o.hist)) o.hist = [];
+  if(!Array.isArray(o.lines)) o.lines = []; if(!Array.isArray(o.attach)) o.attach = []; if(!Array.isArray(o.hist)) o.hist = []; if(!Array.isArray(o.revs)) o.revs = [];
   if(!Array.isArray(o.crfi)) o.crfi = [{}, {}]; while(o.crfi.length < 2) o.crfi.push({});
   ['prop', 'resp', 'po'].forEach(k => { if(!o[k] || typeof o[k] !== 'object') o[k] = {}; });
   if(o.attachTxt == null) o.attachTxt = o.attach.join('\n');
   return o;
 }
+/* a copy of one revision as it stood — kept in r.revs when a new Rev replaces it (never lost) */
+function copSnap(r, why){ const o = JSON.parse(JSON.stringify(r)); ['hist', 'revs', '_base', '_dirty'].forEach(k => delete o[k]); o.keptAt = plcNow(); o.keptWhy = why || ''; return o; }
 function copParse(r){ let o = {}; try{ o = JSON.parse(r.json || '{}'); }catch(e){} o.id = r.id; if(r.updatedAt) o.updatedAt = r.updatedAt; if(r.updatedBy) o.updatedBy = r.updatedBy; return copNorm(o); }
 function copSer(o){ return {id: o.id, copNo: o.copNo || '', wopNo: o.wopNo || '', status: o.status || 'draft', value: copTotal(o), subject: o.subject || '', json: JSON.stringify(o), updatedAt: o.updatedAt || '', updatedBy: o.updatedBy || ''}; }
 function copCache(){ try{ localStorage.setItem(COP_LS, JSON.stringify(COP.recs.map(copSer))); }catch(e){} }
@@ -3583,6 +3585,7 @@ function copEditor(r){
     <div class="cp-card"><h4>PCSB &amp; PO</h4><div class="cp-g">
       ${F('submittedAt', 'Submitted to PCSB on', {type: 'date'})}${F('resp.at', 'PCSB response on', {type: 'date'})}${F('resp.value', 'Approved value (RM)', {ph: 'if different from the COP value'})}${F('resp.by', 'PCSB representative')}
       ${F('resp.note', 'PCSB response / remarks', {w: 1})}${F('po.no', 'Revised PO no')}${F('po.amount', 'Revised PO amount (RM)')}${F('po.date', 'Revised PO date', {type: 'date'})}</div></div>
+    ${r.revs && r.revs.length ? `<div class="cp-card"><h4>Previous revisions</h4><table class="cp-revs" style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr><th style="text-align:left;padding:0 6px 4px 0">Rev</th><th style="text-align:left;padding:0 6px 4px">Date</th><th style="text-align:left;padding:0 6px 4px">Status then</th><th style="text-align:right;padding:0 6px 4px">Total (RM)</th><th style="text-align:left;padding:0 6px 4px 14px">Why kept</th><th></th></tr></thead><tbody>${r.revs.map((v, i) => ({v, i})).reverse().map(({v, i}) => `<tr style="border-top:1px solid var(--border)"><td style="padding:5px 6px 5px 0;vertical-align:top"><b>Rev ${esc(String(v.rev == null ? '0' : v.rev))}</b></td><td style="padding:5px 6px;vertical-align:top;white-space:nowrap">${esc(v.date || '')}</td><td style="padding:5px 6px;vertical-align:top">${esc((COP_ST[v.status] || [v.status || ''])[0])}${v.submittedAt ? ' · ' + esc(v.submittedAt) : ''}</td><td style="padding:5px 6px;vertical-align:top;text-align:right;white-space:nowrap">${plcRM(copTotal(v)).replace(/^RM\s*/, '')}</td><td style="padding:5px 6px 5px 14px;vertical-align:top" class="faint">${esc(v.keptWhy || '')}${v.keptAt ? ' · ' + esc(plcDT(v.keptAt)) : ''}</td><td style="padding:5px 0 5px 6px;vertical-align:top;text-align:right;white-space:nowrap"><button class="btn sm" data-crevpv="${i}">🖨 View</button></td></tr>`).join('')}</tbody></table></div>` : ''}
     ${r.hist.length ? `<div class="cp-card"><h4>History</h4><ul class="cp-h">${r.hist.slice().reverse().map(h => `<li><b>${esc(plcDT(h.at))}</b> · ${esc(h.by || '')} — ${esc(h.t)}</li>`).join('')}</ul></div>` : ''}
     <datalist id="cpWops">${((DATA.wop && DATA.wop.records) || []).map(x => `<option value="${esc(x.wopNo)}">${esc(String(x.wopTitle || '').slice(0, 70))}</option>`).join('')}</datalist>`;
 }
@@ -3628,7 +3631,7 @@ async function copAct(a, ds){
     r.po.no = clean(no); r.po.amount = clean(am).replace(/[^\d.]/g, ''); r.po.date = r.po.date || todayISO(); r.status = 'po';
     if(await copCommit(r, 'PO revised — ' + r.po.no + ' ' + plcRM(r.po.amount))) renderCop(); else keepLocal(); return; }
   if(a === 'close'){ r.status = 'closed'; if(await copCommit(r, 'closed')) renderCop(); return; }
-  if(a === 'rev'){ r.rev = String((parseInt(r.rev, 10) || 0) + 1); r.status = 'draft'; r.date = todayISO(); r.resp = {}; r.submittedAt = ''; keepLocal(); toast('Rev ' + r.rev + ' — change what PCSB asked for, then Submit again.'); renderCop(); return; }
+  if(a === 'rev'){ r.revs = (r.revs || []).concat([copSnap(r, 'replaced by Rev ' + ((parseInt(r.rev, 10) || 0) + 1))]); r.rev = String((parseInt(r.rev, 10) || 0) + 1); r.status = 'draft'; r.date = todayISO(); r.resp = {}; r.submittedAt = ''; keepLocal(); toast('Rev ' + r.rev + ' — change what PCSB asked for, then Submit again.'); renderCop(); return; }
 }
 function copRespDlg(r){
   let d = document.getElementById('dlgCopResp');
@@ -3693,6 +3696,7 @@ function copWire(el){
     if(ds.csort != null){ COP.sortGap = ds.csort === '1' ? !COP.sortGap : false; renderCop(); return; }
     if(ds.copen){ COP.last = ds.copen; COP.sel = ds.copen; COP.draft = null; renderCop(); copTop(); return; }
     if(ds.craise){ const w = hubWopFind(ds.craise), x = copShortfall().find(s => s.r === w); COP.draft = copBlank(w, x ? x.amt : 0); COP.sel = '__new'; renderCop(); copTop(); return; }
+    if(ds.crevpv != null){ const c = copCur(), v = c && c.revs && c.revs[+ds.crevpv]; if(v) copPreview(copNorm(JSON.parse(JSON.stringify(Object.assign({}, v, {id: c.id}))))); return; }
     if(ds.cw){ hubOpenW360(ds.cw); return; }
     if(ds.cdel !== undefined){ copAct('del', ds); return; }
     if(ds.ca){ copAct(ds.ca, ds); return; }
@@ -4468,7 +4472,8 @@ async function copImport(file){
     } else { toast('⚠ ' + file.name + ' is Rev ' + fr + ' — older than ' + P.copNo + ' Rev ' + cr + ' in the register. Not imported; the register one is opened.', 10000); openDup(); return; }
   }
   const o = asRev ? Object.assign(copNorm(JSON.parse(JSON.stringify(dup))), {resp: {}}) : copBlank(null, 0);
-  if(asRev) o._base = String(dup.updatedAt || '');
+  if(asRev){ o._base = String(dup.updatedAt || ''); const fr = parseInt(P.rev, 10) || 0, cr = parseInt(dup.rev, 10) || 0;
+    o.revs = (dup.revs || []).concat([copSnap(dup, fr > cr ? 'replaced by Rev ' + fr + ' (' + file.name + ')' : 'content replaced by re-import of ' + file.name)]); }
   ['copNo', 'rev', 'date', 'project', 'contractNo', 'contractTitle', 'contractor', 'attention', 'subject', 'scope', 'change', 'reason', 'deviation', 'impact', 'sched', 'days', 'other', 'initiator', 'attachTxt', 'attached'].forEach(k => { if(P[k] != null && P[k] !== '') o[k] = P[k]; });
   if(asRev){ o.copNo = dup.copNo; o.rev = String(parseInt(P.rev, 10) || 0); }
   if(P.crfi && P.crfi.length) o.crfi = P.crfi.concat([{}, {}]).slice(0, 2);
